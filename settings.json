@@ -1,0 +1,10 @@
+{
+    "channels": {
+        "-1001234567890": "femininity"
+    },
+    "activation_codes": {
+        "роза": "femininity:v1",
+        "фиалка": "femininity:v2",
+        "лепесток": "femininity:v3"
+    }
+}
