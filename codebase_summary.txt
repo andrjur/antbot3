@@ -1,0 +1,125 @@
+📄 C:\Mentor\3ant\all_defs.py [импортов: 1, функций: 4]
+    import os
+
+    def is_excluded_directory(path, exclude_dirs=None):
+
+    def extract_file_metadata(file_path):
+
+    def get_codebase_summary(path, exclude_dirs=None):
+
+    def main():
+
+
+
+📄 C:\Mentor\3ant\main.py [импортов: 11, функций: 8]
+    import asyncio,  logging, json, random, string, os, re
+    import functools
+    from logging.handlers import RotatingFileHandler
+    from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+    from datetime import datetime, timedelta
+    from aiogram import Bot, Dispatcher, types, F
+    from aiogram.filters import Command, CommandStart
+    from aiogram.filters.callback_data import CallbackData
+    from aiogram.types import (
+    import aiosqlite
+    from dotenv import load_dotenv
+
+    def setup_logging():
+
+    def db_exception_handler(func):
+
+    async def wrapper(*args, **kwargs):
+
+    def load_settings():
+
+    def save_settings(settings):
+
+    async def init_db():
+
+    async def old_init_test_data():
+
+    def escape_md(text):
+
+    async def log_user_activity(user_id, action, details=""):
+
+    async def resolve_user_id(user_identifier):
+
+    async def send_lesson_to_user(user_id, course_id, lesson_num):
+
+    async def finalize_lesson_delivery(user_id, course_id, lesson_num):
+
+    async def check_and_schedule_lessons():
+
+    async def activate_course(user_id, course_id, course_type, price_rub):
+
+    async def cmd_start(message: Message):
+
+    async def cmd_help(message: Message):
+
+    async def select_course(message: Message):
+
+    async def cmd_support(message: Message):
+
+    async def process_support_request(message: Message):
+
+    async def adm_message_user(message: Message):
+
+    async def cmd_activate(message: Message):
+
+    async def process_activation_code(message: Message):
+
+    async def cmd_mycourses(message: Message):
+
+    async def approve_course(message: Message):
+
+    async def cmd_lesson(message: Message):
+
+    async def cmd_progress(message: Message):
+
+    def generate_progress_bar(percent, length=10):
+
+    async def start_lesson_callback(callback_query: CallbackQuery):
+
+    async def complete_lesson_callback(callback_query: CallbackQuery, course_id, lesson_num):
+
+    async def process_rejection_reason(message: Message):
+
+    async def handle_homework_decision(callback_query: CallbackQuery):
+
+    async def cmd_mycourses(message: Message):
+
+    async def cmd_completed_courses(message: Message):
+
+    async def view_completed_course(callback_query: CallbackQuery):
+
+    async def view_completed_lesson(callback_query: CallbackQuery):
+
+    async def show_full_lesson(callback_query: CallbackQuery):
+
+    async def review_course_callback(callback_query: CallbackQuery):
+
+    async def review_lesson_callback(callback_query: CallbackQuery):
+
+    async def review_navigation_callback(callback_query: CallbackQuery):
+
+    async def submit_homework_callback(callback_query: CallbackQuery, course_id, lesson_num):
+
+    async def process_homework_submission(message: Message):
+
+    async def set_activation_code(message: Message):
+
+    def get_main_menu_keyboard():
+
+    def get_main_menu_inline_keyboard():
+
+    async def process_current_lesson(callback: CallbackQuery):
+
+    async def main():
+
+
+
+📄 C:\Mentor\3ant\qwen_buf.py [импортов: 0, функций: 1]
+
+    def get_main_menu_inline_keyboard():
+
+
