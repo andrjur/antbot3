@@ -19,7 +19,7 @@ def extract_file_metadata(file_path):
                 stripped = line.strip()
                 if stripped.startswith(("import ", "from ")):
                     imports.append(stripped)
-                elif stripped.startswith("def "):
+                elif stripped.startswith("def ", "async def "):
                     functions.append(stripped.split("def ")[1].split("(")[0])
     except Exception:
         return 0, 0
@@ -48,12 +48,17 @@ def get_codebase_summary(path, exclude_dirs=None):
             output.append(file_header)
 
             with open(full_path, "r", encoding="utf-8") as f:
+                line2=''
                 for line in f:
                     stripped = line.strip()
                     if stripped.startswith(("import ", "from ")):
                         output.append("    " + stripped)
                     if stripped.startswith(("def ", "async def ")):
-                        output.append("\n    " + stripped)
+                        output.append("\n" + line3)
+                        output.append(line2)
+                        output.append(stripped)
+                    line3 = line2
+                    line2 = line.strip()
 
             output.append("\n" * 2)
 

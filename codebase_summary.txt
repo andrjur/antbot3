@@ -1,125 +1,180 @@
-📄 C:\Mentor\3ant\all_defs.py [импортов: 1, функций: 4]
-    import os
 
-    def is_excluded_directory(path, exclude_dirs=None):
+# декоратор для обработки ошибок в БД
+def db_exception_handler(func):
 
-    def extract_file_metadata(file_path):
+def db_exception_handler(func):
+@functools.wraps(func)
+async def wrapper(*args, **kwargs):
 
-    def get_codebase_summary(path, exclude_dirs=None):
+def load_settings():
 
-    def main():
+# 05-04
+async def import_settings_to_db():
 
+def save_settings(settings):
 
+# Database initialization
+@db_exception_handler
+async def init_db():
 
-📄 C:\Mentor\3ant\main.py [импортов: 11, функций: 8]
-    import asyncio,  logging, json, random, string, os, re
-    import functools
-    from logging.handlers import RotatingFileHandler
-    from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-    from datetime import datetime, timedelta
-    from aiogram import Bot, Dispatcher, types, F
-    from aiogram.filters import Command, CommandStart
-    from aiogram.filters.callback_data import CallbackData
-    from aiogram.types import (
-    import aiosqlite
-    from dotenv import load_dotenv
+# функция для инициализации тестовых данных в БД
+@db_exception_handler
+async def old_init_test_data():
 
-    def setup_logging():
+def escape_md(text):
 
-    def db_exception_handler(func):
+# логирование действий пользователя
+@db_exception_handler
+async def log_user_activity(user_id, action, details=""):
 
-    async def wrapper(*args, **kwargs):
+# функция для разрешения ID пользователя по алиасу или ID
+@db_exception_handler
+async def resolve_user_id(user_identifier):
 
-    def load_settings():
+# Отправка урока пользователю
+@db_exception_handler
+async def send_lesson_to_user(user_id, course_id, lesson_num):
 
-    def save_settings(settings):
+# фоновая задача для проверки и отправки уведомлений о новых уроках.
+@db_exception_handler
+async def check_and_schedule_lessons():
 
-    async def init_db():
+async def adm_message_user(message: Message):
 
-    async def old_init_test_data():
+# функция для активации курса
+@db_exception_handler
+async def activate_course(user_id, course_id, course_type, price_rub):
 
-    def escape_md(text):
+async def get_courses_list():
 
-    async def log_user_activity(user_id, action, details=""):
+#"Показывает статус курса с маппингом тарифов
+async def show_course_status(message: types.Message, course_data: tuple, keyboard: types.InlineKeyboardMarkup):
 
-    async def resolve_user_id(user_identifier):
+@dp.message(CommandStart())
+@db_exception_handler
+async def cmd_start(message: types.Message):
 
-    async def send_lesson_to_user(user_id, course_id, lesson_num):
+#help
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
 
-    async def finalize_lesson_delivery(user_id, course_id, lesson_num):
+@dp.message(Command("select_course"))
+@db_exception_handler
+async def select_course(message: Message):
 
-    async def check_and_schedule_lessons():
+# Создает тикет в службу поддержки # Пересылает сообщение администраторам
+@dp.message(Command("support"))
+async def cmd_support(message: Message):
 
-    async def activate_course(user_id, course_id, course_type, price_rub):
+# Admin command to reply to user
+@dp.message(Command("adm_message_user"), F.chat.id == ADMIN_GROUP_ID)
+async def adm_message_user(message: Message):
 
-    async def cmd_start(message: Message):
+# Активация курса по кодовому слову. Записывает пользователя на курс
+@dp.message(Command("activate"))
+async def cmd_activate(message: Message):
 
-    async def cmd_help(message: Message):
+@dp.message(F.text)
+@db_exception_handler
+async def process_activation_code(message: Message):
 
-    async def select_course(message: Message):
+@dp.message(Command("mycourses")) # Предоставляет кнопки для продолжения или повторного просмотра
+@db_exception_handler
+async def cmd_mycourses(message: Message):
 
-    async def cmd_support(message: Message):
+@dp.message(Command("adm_approve_course"), F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def approve_course(message: Message):
 
-    async def process_support_request(message: Message):
+@dp.message(Command("lesson"))
+@db_exception_handler
+async def cmd_lesson(message: Message):
 
-    async def adm_message_user(message: Message):
+@dp.message(Command("progress"))
+@db_exception_handler
+async def cmd_progress(message: Message):
 
-    async def cmd_activate(message: Message):
+def generate_progress_bar(percent, length=10):
 
-    async def process_activation_code(message: Message):
+@dp.callback_query(lambda c: c.data.startswith("start_lesson:"))
+@db_exception_handler
+async def start_lesson_callback(callback_query: CallbackQuery):
 
-    async def cmd_mycourses(message: Message):
+@dp.callback_query(lambda c: c.data.startswith("lesson_complete:"))
+@db_exception_handler
+async def complete_lesson_callback(callback_query: CallbackQuery, course_id, lesson_num):
 
-    async def approve_course(message: Message):
+@dp.message(F.text, F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def process_rejection_reason(message: Message):
 
-    async def cmd_lesson(message: Message):
+@dp.callback_query(lambda c: c.data.startswith("approve_hw:") or c.data.startswith("reject_hw:"))
+@db_exception_handler
+async def handle_homework_decision(callback_query: CallbackQuery):
 
-    async def cmd_progress(message: Message):
+@dp.message(Command("mycourses"))
+@db_exception_handler
+async def cmd_mycourses(message: Message):
 
-    def generate_progress_bar(percent, length=10):
+@dp.message(Command("completed_courses"))
+@db_exception_handler # Позволяет просматривать уроки с сниппетами
+async def cmd_completed_courses(message: Message):
 
-    async def start_lesson_callback(callback_query: CallbackQuery):
+@dp.callback_query(lambda c: c.data.startswith("view_completed_course:"))
+@db_exception_handler
+async def view_completed_course(callback_query: CallbackQuery):
 
-    async def complete_lesson_callback(callback_query: CallbackQuery, course_id, lesson_num):
+@dp.callback_query(lambda c: c.data.startswith("view_completed_lesson:"))
+@db_exception_handler
+async def view_completed_lesson(callback_query: CallbackQuery):
 
-    async def process_rejection_reason(message: Message):
+@dp.callback_query(lambda c: c.data.startswith("show_full_lesson:"))
+@db_exception_handler
+async def show_full_lesson(callback_query: CallbackQuery):
 
-    async def handle_homework_decision(callback_query: CallbackQuery):
+@dp.callback_query(lambda c: c.data.startswith("review_course:"))
+@db_exception_handler
+async def review_course_callback(callback_query: CallbackQuery):
 
-    async def cmd_mycourses(message: Message):
+@dp.callback_query(lambda c: c.data.startswith("review_lesson:"))
+@db_exception_handler
+async def review_lesson_callback(callback_query: CallbackQuery):
 
-    async def cmd_completed_courses(message: Message):
+@dp.callback_query(lambda c: c.data.startswith("review_prev:") or c.data.startswith("review_next:"))
+@db_exception_handler
+async def review_navigation_callback(callback_query: CallbackQuery):
 
-    async def view_completed_course(callback_query: CallbackQuery):
+@dp.callback_query(lambda c: c.data.startswith("submit_homework:"))
+@db_exception_handler
+async def submit_homework_callback(callback_query: CallbackQuery, course_id, lesson_num):
 
-    async def view_completed_lesson(callback_query: CallbackQuery):
+# обработка содержимого ДЗ
+@db_exception_handler
+async def process_homework_submission(message: Message):
 
-    async def show_full_lesson(callback_query: CallbackQuery):
+@dp.message(Command("set_code"), F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def set_activation_code(message: Message):
 
-    async def review_course_callback(callback_query: CallbackQuery):
+def get_main_menu_keyboard():
 
-    async def review_lesson_callback(callback_query: CallbackQuery):
+def get_main_menu_inline_keyboard():
 
-    async def review_navigation_callback(callback_query: CallbackQuery):
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
 
-    async def submit_homework_callback(callback_query: CallbackQuery, course_id, lesson_num):
+@dp.message(F.text)  # Обработчик текстовых сообщений
+async def check_activation_code(message: types.Message):
 
-    async def process_homework_submission(message: Message):
+async def send_startup_message(bot: Bot, admin_group_id: int):
 
-    async def set_activation_code(message: Message):
+@dp.callback_query(F.data == "menu_current_lesson")
+@db_exception_handler
+async def process_current_lesson(callback: CallbackQuery):
 
-    def get_main_menu_keyboard():
+# Обработчик последний - чтобы не мешал другим обработчикам работать. Порядок имеет значение
+@dp.message(F.text)  # Фильтр только для текстовых сообщений
+async def process_message(message: types.Message):
 
-    def get_main_menu_inline_keyboard():
-
-    async def process_current_lesson(callback: CallbackQuery):
-
-    async def main():
-
-
-
-📄 C:\Mentor\3ant\qwen_buf.py [импортов: 0, функций: 1]
-
-    def get_main_menu_inline_keyboard():
-
-
+# Запуск бота
+async def main():
