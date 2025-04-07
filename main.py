@@ -9,7 +9,7 @@ from logging.handlers import RotatingFileHandler
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, BaseFilter
 from aiogram.filters.callback_data import CallbackData
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup,
@@ -119,18 +119,18 @@ def load_settings():
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 settings = json.load(f)
-                logger.info(f"Настройки успешно загружены. {settings=}")
+                logger.info(f"Настройки успешно загружены. {settings['groups']=}")
                 return settings
         except json.JSONDecodeError:
             logger.error("Ошибка при декодировании JSON.")
-            return {"channels": {}, "activation_codes": {}}
+            return {"groups": {}, "activation_codes": {}}
     else:
         logger.warning("Файл настроек не найден, используются настройки по умолчанию.")
-        return {"channels": {}, "activation_codes": {}}
+        return {"groups": {}, "activation_codes": {}}
 
-settings = load_settings()  # Загрузка настроек при запуске
+settings=dict() # делаем глобальный пустой словарь
 
-COURSE_GROUPS = list(map(int, settings.get("groups", {}).keys()))  # load to value too
+COURSE_GROUPS = []
 
 def save_settings(settings):
     """Сохраняет настройки в файл settings.json."""
@@ -141,24 +141,59 @@ def save_settings(settings):
     except Exception as e:
         logger.error(f"Ошибка при сохранении настроек: {e}")
 
+@db_exception_handler
+async def process_add_course_to_db(course_id, channel_id, code1, code2, code3):
+    """Добавляет информацию о курсе и кодах активации в базу данных."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Insert or replace into courses table
+            await conn.execute("""
+                INSERT OR REPLACE INTO courses (course_id, title, description)
+                VALUES (?, ?, ?)
+            """, (course_id, f"{course_id} basic", f"Описание для {course_id}"))
 
-async def import_settings_to_db(settings):
-    """Импортирует настройки (каналы и коды активации) из dict в базу данных."""
-    logger.info(f"import_settings_to_db with settings from code")
+            # Insert or replace into course_versions table
+            await conn.execute("""
+                INSERT OR REPLACE INTO course_versions (course_id, version_id, title, price, description)
+                VALUES (?, ?, ?, ?, ?)
+            """, (course_id, "v1", f"{course_id} basic", 0, f"Описание basic версии для {course_id}"))
 
-    for channel_id, course_id in settings.get("channels", {}).items():
-        # Извлекаем коды для каждой версии курса
-        code1 = next((code for code, info in settings["activation_codes"].items() if info == f"{course_id}:v1"), None)
-        code2 = next((code for code, info in settings["activation_codes"].items() if info == f"{course_id}:v2"), None)
-        code3 = next((code for code, info in settings["activation_codes"].items() if info == f"{course_id}:v3"), None)
+            await conn.execute("""
+                INSERT OR REPLACE INTO course_versions (course_id, version_id, title, price, description)
+                VALUES (?, ?, ?, ?, ?)
+            """, (course_id, "v2", f"{course_id} group", 1000, f"Описание group версии для {course_id}"))
 
-        # Вызываем process_add_course_to_db
-        await process_add_course_to_db(course_id, channel_id, code1, code2, code3)
+            await conn.execute("""
+                INSERT OR REPLACE INTO course_versions (course_id, version_id, title, price, description)
+                VALUES (?, ?, ?, ?, ?)
+            """, (course_id, "v3", f"{course_id} vip", 5000, f"Описание vip версии для {course_id}"))
+
+            # Insert or ignore into course_activation_codes table
+            await conn.execute("""
+                INSERT OR IGNORE INTO course_activation_codes (code_word, course_id, course_type, price_rub)
+                VALUES (?, ?, ?, ?)
+            """, (code1, course_id, "v1", 0))
+
+            await conn.execute("""
+                INSERT OR IGNORE INTO course_activation_codes (code_word, course_id, course_type, price_rub)
+                VALUES (?, ?, ?, ?)
+            """, (code2, course_id, "v2", 1000))
+
+            await conn.execute("""
+                INSERT OR IGNORE INTO course_activation_codes (code_word, course_id, course_type, price_rub)
+                VALUES (?, ?, ?, ?)
+            """, (code3, course_id, "v3", 5000))
+
+            await conn.commit()
+            logger.info(f"Курс {course_id} успешно добавлен в базу данных.")
+
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении курса {course_id} в базу данных: {e}")
 
 
 # Database initialization
 @db_exception_handler
-async def init_db():
+async def old_init_db():
     """Initialize the database with required tables"""
     logger.info(f"init_db ")
     try:
@@ -234,7 +269,7 @@ async def init_db():
                 version_id TEXT,
                 title TEXT NOT NULL COLLATE NOCASE,
                 price REAL DEFAULT 0,
-                activation_code TEXT,
+                activation_code TEXT, --activation_code
                 homework_check_type TEXT DEFAULT 'admin', -- 'admin' или 'self'
                 PRIMARY KEY (course_id, version_id),
                 FOREIGN KEY (course_id) REFERENCES courses(course_id)
@@ -365,82 +400,105 @@ async def init_db():
 
 
 @db_exception_handler
-async def new_init_db():
+async def init_db():
     """Initialize the database with required tables"""
-    logger.info(f"init_db ")
+    logger.info(f"Initializing database...")
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Users table
+            # Создаем таблицу users
             await conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT COLLATE NOCASE,
-                first_name TEXT COLLATE NOCASE,
-                last_name TEXT COLLATE NOCASE,
-                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            
-            CREATE TABLE IF NOT EXISTS courses (
-                course_id TEXT PRIMARY KEY,
-                title TEXT NOT NULL COLLATE NOCASE,
-                description TEXT COLLATE NOCASE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            
-            CREATE TABLE IF NOT EXISTS course_versions (
-                course_id TEXT,
-                version_id TEXT,
-                title TEXT NOT NULL COLLATE NOCASE,
-                price REAL DEFAULT 0,
-                description TEXT COLLATE NOCASE,
-                PRIMARY KEY (course_id, version_id),
-                FOREIGN KEY (course_id) REFERENCES courses(course_id)
-            );
-            
-            CREATE TABLE IF NOT EXISTS user_courses (
-                user_id INTEGER,
-                course_id TEXT,
-                version_id TEXT,
-                current_lesson INTEGER DEFAULT 1,
-                is_completed INTEGER DEFAULT 0,
-                activation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, course_id, version_id),
-                FOREIGN KEY (user_id) REFERENCES users(user_id),
-                FOREIGN KEY (course_id, version_id) REFERENCES course_versions(course_id, version_id)
-            );
-            
-            CREATE TABLE IF NOT EXISTS group_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                group_id TEXT NOT NULL,
-                message_id INTEGER NOT NULL,
-                content_type TEXT NOT NULL,
-                text TEXT,
-                file_id TEXT,
-                is_forwarded BOOLEAN DEFAULT FALSE,
-                forwarded_from_chat_id INTEGER,
-                forwarded_message_id INTEGER,
-                level integer DEFAULT 1,
-                lesson_num integer,
-                course_id TEXT,                
-                snippet TEXT COLLATE NOCASE, -- Сниппет урока todo: 
-                is_bouns BOOLEAN DEFAULT FALSE,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (course_id) REFERENCES courses(course_id) -- NEW
-            );
-            
-            CREATE TABLE IF NOT EXISTS activation_codes (
-                code_word TEXT PRIMARY KEY,
-                course_id TEXT NOT NULL,
-                version_id TEXT NOT NULL,
-                FOREIGN KEY (course_id) REFERENCES courses(course_id),
-                FOREIGN KEY (course_id, version_id) REFERENCES course_versions(course_id, version_id)
-            );
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT COLLATE NOCASE,
+                    first_name TEXT COLLATE NOCASE,
+                    last_name TEXT COLLATE NOCASE,
+                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
             ''')
             await conn.commit()
+
+            # Создаем таблицу courses
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS courses (
+                    course_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL COLLATE NOCASE,
+                    description TEXT COLLATE NOCASE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            await conn.commit()
+
+            # для хранения информации о версиях курсов (тарифы).
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS course_versions (
+                    course_id TEXT,
+                    version_id TEXT,
+                    title TEXT NOT NULL COLLATE NOCASE,
+                    price REAL DEFAULT 0,
+                    activation_code TEXT, 
+                    description TEXT COLLATE NOCASE,
+                    PRIMARY KEY (course_id, version_id),
+                    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+                )
+            ''')
+            await conn.commit()
+
+            # для связывания пользователей с курсами и хранения их прогресса.
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_courses (
+                    user_id INTEGER,
+                    course_id TEXT,
+                    version_id TEXT,
+                    current_lesson INTEGER DEFAULT 1,
+                    is_completed INTEGER DEFAULT 0,
+                    activation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, course_id, version_id),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id),
+                    FOREIGN KEY (course_id, version_id) REFERENCES course_versions(course_id, version_id)
+                )
+            ''')
+            await conn.commit()
+
+            # Создаем таблицу group_messages
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS group_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    content_type TEXT NOT NULL,
+                    text TEXT,
+                    file_id TEXT,
+                    is_forwarded BOOLEAN DEFAULT FALSE,
+                    forwarded_from_chat_id INTEGER,
+                    forwarded_message_id INTEGER,
+                    level integer DEFAULT 1,
+                    lesson_num integer,
+                    course_id TEXT,                
+                    snippet TEXT COLLATE NOCASE, -- Сниппет урока todo: 
+                    is_bouns BOOLEAN DEFAULT FALSE,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+                )
+            ''')
+            await conn.commit()
+
+            # Создаем таблицу activation_codes
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS course_activation_codes (
+                    code_word TEXT PRIMARY KEY,
+                    course_id TEXT NOT NULL,
+                    version_id TEXT NOT NULL,
+                    FOREIGN KEY (course_id) REFERENCES courses(course_id),
+                    FOREIGN KEY (course_id, version_id) REFERENCES course_versions(course_id, version_id)
+                )
+            ''')
+            await conn.commit()
+
             logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise  # Allows bot to exit on startup if database cannot be initialized
+
 
 
 # Функция для экранирования спецсимволов в тексте для использования в MarkdownV2
@@ -557,19 +615,25 @@ async def send_lesson_to_user(user_id, course_id, lesson_num):
 @lru_cache(maxsize=100)
 async def get_course_status(user_id: int) -> tuple | None:
     """Кэшируем статус курса на 5 минут"""
-    async with aiosqlite.connect(DB_FILE) as conn:
-        cursor = await conn.execute("""
-            SELECT uc.course_id, c.title, uc.version_id, uc.current_lesson 
-            FROM user_courses uc
-            JOIN courses c ON uc.course_id = c.course_id
-            WHERE uc.user_id = ? AND uc.status = 'active'
-        """, (user_id,))
-        return await cursor.fetchone()
+    logger.info(f"кэш get_course_status {user_id=}")
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("""
+                SELECT uc.course_id, c.title, uc.version_id, uc.current_lesson 
+                FROM user_courses uc
+                JOIN courses c ON uc.course_id = c.course_id
+                WHERE uc.user_id = ?
+            """, (user_id,))
+            return await cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Error getting course status for user {user_id}: {e}")
+        return None
+
 
 
 # фоновая задача для проверки и отправки уведомлений о новых уроках.
 @db_exception_handler
-async def check_and_schedule_lessons():
+async def old_check_and_schedule_lessons():
     """Background task to check and send scheduled lessons"""
     logger.info("Starting check_and_schedule_lessons...")
     while True:
@@ -631,34 +695,6 @@ async def check_and_schedule_lessons():
         # Check every minute
         await asyncio.sleep(60)
 
-
-async def process_add_course_to_db(course_id: str, channel_id: str, code1: str, code2: str, code3: str):
-    """  Добавляет информацию о курсе и кодах активации в базу данных. homework_check_type  в таблице course_versions должен быть "self" для первого кодового слова, v1 которое    """
-    async with aiosqlite.connect(DB_FILE) as conn:
-        await conn.execute("""
-            INSERT OR REPLACE INTO courses
-            (course_id, title, channel_id)
-            VALUES (?, ?, ?)
-        """, (course_id, course_id, channel_id))
-
-        # add activation codes to course_versions table
-        await conn.execute("""
-            INSERT OR REPLACE INTO course_versions
-            (course_id, version_id, title, activation_code, homework_check_type)
-            VALUES (?, ?, ?, ?, ?)
-        """, (course_id, "v1", f"{course_id} basic", code1, "self"))  # homework_check_type = self
-        await conn.execute("""
-            INSERT OR REPLACE INTO course_versions
-            (course_id, version_id, title, activation_code, homework_check_type)
-            VALUES (?, ?, ?, ?, ?)
-        """, (course_id, "v2", f"{course_id} group", code2, "admin"))
-        await conn.execute("""
-            INSERT OR REPLACE INTO course_versions
-            (course_id, version_id, title, activation_code, homework_check_type)
-            VALUES (?, ?, ?, ?, ?)
-        """, (course_id, "v3", f"{course_id} vip", code3, "admin"))
-
-        await conn.commit()
 
 
 # функция для активации курса
@@ -876,14 +912,15 @@ def get_main_menu_inline_keyboard():
     return keyboard
 
 
-
-
-async def send_startup_message(bot: Bot, admin_group_id: int):
+# todo убрали send_startup_message
+async def old_send_startup_message(bot: Bot, admin_group_id: int):
     """Отправка админ-сообщения без MarkdownV2"""
     logger.info(f"Sending startup message to admin group: {admin_group_id}")
     try:
         group_reports = []
-        for raw_id, group_name in settings["groups"].items():
+        kolhoz=settings["groups"].items()
+        logger.info(f"kolhoz={kolhoz}")
+        for raw_id, group_name in kolhoz:
             logger.info(f"14 check_groups_access  raw_id={raw_id}  gr.name={group_name}")
             report = await check_group_access(bot, raw_id, group_name)
             group_reports.append(report)  # не экранируем report
@@ -902,9 +939,12 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
         logger.error(f"Ошибка в send_startup_message: {e}")  # строка 2142
 
 
+
+
 # проверим канал на доступ todo: сделать паузу если каналов много чтоб не банили. или запускать на оч тормозном компе
 async def check_group_access(bot: Bot, raw_id: str, course_name: str):
     """Проверка доступа с корректным экранированием"""
+    logger.info(f"check_group_access {raw_id=} {course_name=}")
     try:
         group_id = int(raw_id)
         chat = await bot.get_chat(group_id)
@@ -922,11 +962,6 @@ async def check_group_access(bot: Bot, raw_id: str, course_name: str):
 
 
 # ============= для взаимодействия с группами уроков. работает при добавлении материала в группу ===========
-
-#=================================================================================================================
-#      ADMIN_GROUP_ID=-1002373429764
-# LESSONS_CHANNEL_IDS=-1002014225295   CHANNEL1_ID=-1002549199868
-
 # Функция для сохранения сообщений в базу данных
 async def save_message_to_db(channel_id: int, message: Message):
     async with aiosqlite.connect(DB_FILE) as conn:
@@ -967,24 +1002,164 @@ async def save_message_to_db(channel_id: int, message: Message):
                 is_forwarded, forwarded_from_chat_id, forwarded_message_id
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            channel_id, message.message_id, content_type, text, file_id,
+        """, (channel_id, message.message_id, content_type, text, file_id,
             is_forwarded, forwarded_from_chat_id, forwarded_message_id
         ))
         await conn.commit()
         logger.info(f"Message saved to DB: channel_id={channel_id}, message_id={message.message_id}")
 
+        # Добавляем запись в другие таблицы по условию
+        if text:
+            # course_id
+            group_id_str = str(channel_id)
 
-# Обработчик новых сообщений в канале
-#@channel_router.message(lambda message: message.chat.id in CHANNEL_IDS)
+            if group_id_str in settings["groups"]:
+                course_id = settings["groups"][group_id_str]
 
-# @dp.message( F.chat.id == -1002464769024) 1002464769024 #@dp.message(F.text)
-#@dp.message(F.text, F.chat.id == CHANNEL1_ID)
+                # Ищем метку START_LESSON
+                start_lesson_match = re.search(r"\*START_LESSON (\d+)", text)
+                if start_lesson_match:
+                    lesson_num = int(start_lesson_match.group(1))
+                    await conn.execute(
+                        """
+                        INSERT OR IGNORE INTO lesson_content_map (
+                            course_id, lesson_num, start_message_id
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (course_id, lesson_num, message.message_id),
+                    )
+                    await conn.commit()
+                    logger.info(
+                        f"Добавлена запись в lesson_content_map: course_id={course_id}, lesson_num={lesson_num}, start_message_id={message.message_id}"
+                    )
 
-# https://t.me/+F5p7pEhkMS01ZTc6
-#@dp.message(lambda message: message.chat.id in COURSE_GROUPS[::-1])
-@dp.message(F.chat.id.in_(COURSE_GROUPS))
-@db_exception_handler
+                # Ищем метку END_LESSON
+                end_lesson_match = re.search(r"\*END_LESSON (\d+)", text)
+                if end_lesson_match:
+                    lesson_num = int(end_lesson_match.group(1))
+                    await conn.execute(
+                        """
+                        UPDATE lesson_content_map
+                        SET end_message_id = ?
+                        WHERE course_id = ? AND lesson_num = ?
+                        """,
+                        (message.message_id, course_id, lesson_num),
+                    )
+                    await conn.commit()
+                    logger.info(
+                        f"Обновлена запись в lesson_content_map: course_id={course_id}, lesson_num={lesson_num}, end_message_id={message.message_id}"
+                    )
+
+
+
+async def import_settings_to_db():
+    """    Импортирует настройки (каналы и коды активации) из dict в базу данных, если их там нет.    """
+    logger.info("import_settings_to_db with settings from code")
+
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            for channel_id, course_id in settings.get("groups", {}).items():
+                for version in ["v1", "v2", "v3"]:
+                    # Находим кодовое слово для текущей версии курса
+                    code = next(
+                        (
+                            code
+                            for code, info in settings["activation_codes"].items()
+                            if info == f"{course_id}:{version}"
+                        ),
+                        None,
+                    )
+
+                    if code:
+                        # Проверяем, есть ли уже этот код в базе
+                        cursor = await conn.execute(
+                            "SELECT 1 FROM course_activation_codes WHERE code_word = ?", (code,)
+                        )
+                        existing_code = await cursor.fetchone()
+
+                        if not existing_code:
+                            # Получаем цену курса для этой версии
+                            price = 0  # По умолчанию
+                            if version == "v2":
+                                price = 1000
+                            elif version == "v3":
+                                price = 5000
+
+                            # Добавляем код активации в базу
+                            await conn.execute(
+                                """
+                                INSERT INTO course_activation_codes (code_word, course_id, version_id, price_rub)
+                                VALUES (?, ?, ?, ?)
+                                """,
+                                (code, course_id, version, price),
+                            )
+                            logger.info(
+                                f"Добавлен код активации {code} для курса {course_id}, версия {version}"
+                            )
+                        else:
+                            logger.info(
+                                f"Код активации {code} для курса {course_id}, версия {version} уже существует в базе"
+                            )
+                await conn.commit()  # Не забудьте сделать commit для сохранения изменений
+            logger.info("Импорт настроек в базу данных завершен")
+
+    except Exception as e:
+        logger.error(f"Ошибка при импорте настроек в базу данных: {e}")
+
+
+async def check_groups_access(bot: Bot, raw_id: str, gr_name: str):
+    """Проверка доступа с корректным экранированием"""
+    logger.info("Внутри функции check_groups_access")
+    try:
+        group_id = int(raw_id)
+        chat = await bot.get_chat(group_id)
+        escaped_title = chat.title  # убрали экранирование
+        if chat.username:
+            link = f"[{escaped_title}](t.me/{chat.username})"
+        else:
+            link = f"[{escaped_title}](t.me/c/{str(chat.id).replace('-100', '')})"
+        logger.info(f" {group_id} OK {link} ")
+        return f"{group_id} OK {link} "
+
+    except TelegramBadRequest as e:
+        logger.warning(f"Ошибка: {gr_name} | ID: {raw_id}\n   Подробнее: {str(e)}")
+        return f"Ошибка: {gr_name} | ID: {raw_id}\n   Подробнее: {str(e)}"
+
+
+async def send_startup_message(bot: Bot, admin_group_id: int):
+    """Отправляет сообщение админам о запуске бота и статусе каналов."""
+    global settings
+    logger.info(f"222 {settings=}")
+    channel_reports = []
+    kanalz=settings.get("groups", {}).items()
+    logger.info(f"Внутри функции send_startup_message {kanalz=}")
+    for raw_id, gr_name in kanalz:
+        logger.info(f"Внутри функции send_startup_message")
+        report = await check_groups_access(bot, raw_id, gr_name)
+        channel_reports.append(report)
+    # Формирование текста сообщения для администраторов
+    message_text = escape_md("Бот запущен\n\nСтатус групп курсов:\n" + "\n".join(channel_reports) + \
+                   "\nможно: /add_course <channel_id> <course_id> <code1> <code2> <code3>")
+
+    # Отправка сообщения в группу администраторов
+    try:
+        await bot.send_message(admin_group_id, message_text, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке стартового сообщения в группу администраторов: {e}")
+    logger.info("Стартовое сообщение отправлено администраторам")
+
+
+# Пользовательский фильтр для проверки ID группы
+class IsCourseGroupFilter(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        return message.chat.id in COURSE_GROUPS
+
+#=================================================   обработчики сообщений   ====================================================
+
+
+#@dp.message(F.chat.id.in_(COURSE_GROUPS))
+@dp.message(IsCourseGroupFilter())
+@db_exception_handler # Обработчик новых сообщений в группах курсов
 async def handle_group_message(message: Message):
     logger.info(f"COURSE_GROUPS ПРИШЛО в {message.chat.id}, mes_id={message.message_id} {COURSE_GROUPS}")
 
@@ -1012,6 +1187,51 @@ async def handle_group_message(message: Message):
 # Админские команды
 #=======================================================================================================================
 # Admin command to reply to user
+
+@dp.message(Command("edit_code"), F.chat.id == ADMIN_GROUP_ID)
+async def edit_code(message: types.Message):
+    """Изменяет кодовое слово для активации курса."""
+    try:
+        parts = message.text.split()
+        if len(parts) != 4:
+            await message.answer("Используйте: /edit_code <курс> <версия> <новый_код>")
+            return
+
+        course_id = parts[1]
+        version = parts[2]
+        new_code = parts[3]
+
+        # Проверяем, что курс и версия существуют
+        if course_id not in settings["groups"].values():
+            await message.answer("Курс не найден.")
+            return
+        if version not in ["v1", "v2", "v3"]:
+            await message.answer("Неверная версия курса.")
+            return
+
+        # Ищем старый код и удаляем его
+        old_code = next(
+            (
+                code
+                for code, info in settings["activation_codes"].items()
+                if info == f"{course_id}:{version}"
+            ),
+            None,
+        )
+        if old_code:
+            del settings["activation_codes"][old_code]
+
+        # Добавляем новый код
+        settings["activation_codes"][new_code] = f"{course_id}:{version}"
+        save_settings(settings)
+
+        await message.answer(f"Код для курса {course_id} ({version}) изменен на {new_code}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при изменении кода активации: {e}")
+        await message.answer("Произошла ошибка при изменении кода активации.")
+
+
 
 @dp.message(Command("adm_message_user"), F.chat.id == ADMIN_GROUP_ID)
 async def adm_message_user(message: Message):
@@ -1212,7 +1432,6 @@ async def handle_homework_decision(callback_query: CallbackQuery):
 @dp.message(CommandStart())
 @db_exception_handler  # /start - начало общения пользователя и бота
 async def cmd_start(message: types.Message):
-    """Обработчик команды /start с улучшенной логикой"""
     user = message.from_user
     user_id = user.id
 
@@ -1223,7 +1442,6 @@ async def cmd_start(message: types.Message):
             "Добро пожаловать в бот обучающих курсов!\n\n"
         )
 
-        # Логирование события
         logger.info(f"Обработка /start для пользователя {user_id}")
 
         # Регистрация/проверка пользователя
@@ -1237,11 +1455,7 @@ async def cmd_start(message: types.Message):
                 await conn.execute("""
                     INSERT INTO users (user_id, first_name, last_name, username, registered_at)
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (
-                    user_id,
-                    user.first_name,
-                    user.last_name or "",
-                    user.username or ""
+                """, (user_id, user.first_name, user.last_name or "", user.username or ""
                 ))
                 await conn.commit()
                 await log_user_activity(user_id, "REGISTRATION", "New user registered")
@@ -1271,7 +1485,7 @@ async def cmd_start(message: types.Message):
 
     except Exception as e:
         logger.error(f"Ошибка в cmd_start: {e}")
-        await message.answer("Произошла ошибка. Пожалуйста, попробуйте позже.")
+        await message.answer(":-(")
 
 
 # help
@@ -2298,62 +2512,51 @@ async def review_course_callback(callback_query: CallbackQuery):
 
 @dp.message(F.text)
 @db_exception_handler
-async def process_activation_code(message: Message):
+async def process_activation_code(message: types.Message):
     """Processes the activation code and activates the course if valid."""
+    logger.info(f"{COURSE_GROUPS=}")
     user_id = message.from_user.id
     activation_code = message.text.strip().lower()
-    logger.info(f"Попытка активации курса для пользователя {user_id} с кодом: '{activation_code}' ")
+    logger.info(f"Попытка активации {user_id} с кодом: '{activation_code}' {message=}")
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute("""
                 SELECT course_id, version_id
-                FROM course_versions
-                WHERE activation_code = ?
+                FROM course_activation_codes
+                WHERE code_word = ?
             """, (activation_code,))
             result = await cursor.fetchone()
-        logger.info(f"вроде {result=}")
-        if result:
-            course_id, version_id = result
-            logger.info(f"ура {course_id=} {version_id=}")
-            # Упростим активацию - не используем "тип" курса, а версию
-            try:
-                async with aiosqlite.connect(DB_FILE) as conn:
-                    # Удаляем старую запись, если она есть
-                    await conn.execute("""
-                        DELETE FROM user_courses
-                        WHERE user_id = ? AND course_id = ?
-                    """, (user_id, course_id))
 
-                    # Вставляем новую запись со статусом 'active'
-                    await conn.execute("""
-                        INSERT INTO user_courses
-                        (user_id, course_id, version_id, status, activation_date, current_lesson)
-                        VALUES (?, ?, ?, 'active', datetime('now'), 1)
-                    """, (user_id, course_id, version_id))
-
+            if result:
+                course_id, version_id = result
+                # Check if the user is already enrolled in this course
+                cursor_check = await conn.execute(
+                    "SELECT 1 FROM user_courses WHERE user_id = ? AND course_id = ? AND version_id = ?",
+                    (user_id, course_id, version_id)
+                )
+                if await cursor_check.fetchone() is None:
+                    # User is not enrolled, enroll them
+                    await conn.execute(
+                        """
+                        INSERT INTO user_courses (user_id, course_id, version_id)
+                        VALUES (?, ?, ?)
+                        """,
+                        (user_id, course_id, version_id)
+                    )
                     await conn.commit()
-                    logger.info(f"записали методом INSERT INTO user_courses {user_id=} {course_id=} {version_id=}")
-            except Exception as e:
-                logger.error(f"Ошибка при вставке user_courses для {user_id=}: {e}")
-                await message.answer("Ошибка при активации курса.")
-                return
-
-            logger.info(f"process_activation_code")
-            logger.info(f"ща активируем всё тут")
-            await log_user_activity(user_id, "COURSE_ACTIVATION", f"Course: {course_id}, Version: {version_id}")
-            msg = f"Курс успешно активирован!\n📚 {course_id}\n📋 Версия: {version_id}\nИспользуйте команду /lesson, чтобы начать обучение"
-            # убрал escape_md
-            await message.answer(escape_md(msg), parse_mode='MarkdownV2')
-
-        else:
-            await message.answer("❌ Неверный код активации.")
-            logger.warning(f"Неверный код активации введен пользователем {user_id}: {activation_code}")
+                    logger.info(
+                        f"Пользователь {user_id} успешно активировал курс {course_id} (версия {version_id})"
+                    )
+                    await message.reply(f"Курс успешно активирован!")
+                else:
+                    await message.reply(f"Этот курс уже активирован.")
+            else:
+                await message.reply(f"Неверный код активации.")
 
     except Exception as e:
         logger.error(f"Ошибка в process_activation_code: {e}")
-        await message.answer("Произошла ошибка при активации курса.")
-
+        await message.reply("Произошла ошибка при активации курса.")
 
 @dp.message(F.text)  # Обработчик текстовых сообщений
 async def check_activation_code(message: types.Message):
@@ -2459,17 +2662,18 @@ async def process_message(message: types.Message):
 
 # Запуск бота
 async def main():
-
+    global settings, COURSE_GROUPS
     # Инициализация базы данных
     await init_db()
-    await send_startup_message(bot, ADMIN_GROUP_ID)  # Отправка сообщения в группу администраторов
+    settings = load_settings()  # Загрузка настроек при запуске
+    logger.info(f"444 load_settings {len(settings['groups'])=}")
 
-
-    logger.info(f"555 Settings loaded {settings=} ")
+    COURSE_GROUPS = list(map(int, settings.get("groups", {}).keys()))  # load to value too
     logger.info(f"555  {COURSE_GROUPS=}")
-    await import_settings_to_db(settings)
-
-    asyncio.create_task(check_and_schedule_lessons())
+    await import_settings_to_db()
+    await asyncio.sleep(0.2) # Небольшая задержка перед отправкой сообщения
+    await send_startup_message(bot, ADMIN_GROUP_ID)  # Отправка сообщения в группу администраторов
+    # asyncio.create_task(check_and_schedule_lessons())
 
     # Запуск бота
     logger.info(f"Бот успешно запущен.")

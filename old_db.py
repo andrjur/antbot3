@@ -192,3 +192,17 @@ CREATE TABLE IF NOT EXISTS user_activity (
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 )
 ''')
+
+# Course versions (different tiers/packages)
+await conn.execute('''
+CREATE TABLE IF NOT EXISTS course_versions (
+    course_id TEXT,
+    version_id TEXT,
+    title TEXT NOT NULL COLLATE NOCASE,
+    price REAL DEFAULT 0,
+    activation_code TEXT, --activation_code
+    homework_check_type TEXT DEFAULT 'admin', -- 'admin' или 'self'
+    PRIMARY KEY (course_id, version_id),
+    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+)
+''')
