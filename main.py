@@ -1,4 +1,4 @@
-import asyncio, logging, json, random, string, os, re, aiosqlite, datetime, shutil
+import asyncio, logging, json, random, string, os, re, aiosqlite, datetime, shutil, sys
 import functools
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
@@ -12,6 +12,11 @@ from aiogram.types import (InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyb
                            KeyboardButton, Message, CallbackQuery, ChatFullInfo)
 from dotenv import load_dotenv
 
+# Фикс для консоли Windows
+if sys.stdout.encoding != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
 
 # Загрузка переменных из .env
 load_dotenv()
@@ -21,9 +26,8 @@ LOG_BACKUP_COUNT = 3
 
 
 def setup_logging():
-    """Setup logging with rotation"""
+    """Настройка логирования с ротацией и UTF-8"""
     log_file = 'bot.log'
-    # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(name)s %(lineno)d - %(message)s  %(levelname)s',
@@ -32,12 +36,12 @@ def setup_logging():
             RotatingFileHandler(
                 log_file,
                 maxBytes=MAX_LOG_SIZE,
-                backupCount=LOG_BACKUP_COUNT
+                backupCount=LOG_BACKUP_COUNT,
+                encoding='utf-8'  # Фикс кодировки для Windows
             ),
             logging.StreamHandler()
         ]
     )
-
 
 logger = logging.getLogger(__name__)  # Создание логгера для текущего модуля
 
@@ -756,7 +760,7 @@ async def save_message_to_db(group_id: int, message: Message):
     text = message.text or ""
     user_id = message.from_user.id if message.from_user else None
     file_id = message.photo[-1].file_id if message.photo else (message.document.file_id if message.document else None)
-
+    logger.info(f"777!!! это {user_id=} {file_id=} {course_id=}")
     # Extract lesson markers
     start_lesson_match = re.search(r"\*START_LESSON (\d+)", text)
     end_lesson_match = re.search(r"\*END_LESSON (\d+)", text)
@@ -785,7 +789,6 @@ async def save_message_to_db(group_id: int, message: Message):
                         f"Mismatched END_LESSON tag for group {group_id}. Expected {lesson_stack[group_id][-1]}, got {lesson_num}.")
             else:
                 logger.warning(f"Unexpected END_LESSON tag for group {group_id}. Stack is empty.")
-
         elif hw_start_match:
             # Homework always belongs to the current lesson
             if group_id in lesson_stack and lesson_stack[group_id]:
@@ -820,18 +823,22 @@ async def save_message_to_db(group_id: int, message: Message):
                 WHERE course_id = ?
             """, (course_title, course_snippet, group_id))
             await conn.commit()
-            logger.info(f"Updated course title and snippet for course {group_id}")
+            logger.info(f"Upd {group_id} type {message.content_type}")
 
-            # Определите тип контента
-            if message.content_type == "photo":
-                file_id = message.photo[-1].file_id
-            elif message.content_type == "video":
-                file_id = message.video.file_id
-            elif message.content_type == "document":
-                file_id = message.document.file_id
-            else:
-                file_id = None
-
+        # Определите тип контента
+        if message.content_type == "photo":
+            file_id = message.photo[-1].file_id
+            text = message.caption  # Подпись к фото
+        elif message.content_type == "video":
+            file_id = message.video.file_id
+            text = message.caption  # Подпись к видео
+        elif message.content_type == "document":
+            file_id = message.document.file_id
+            text = message.caption  # Подпись к документу
+        else:
+            file_id = None
+            text = message.text  # Обычный текст
+        logger.info(f"13 {file_id=}")
         # Save the message to the database
         await conn.execute("""
             INSERT INTO group_messages (
@@ -1952,16 +1959,14 @@ async def cmd_completed_courses(message: Message):
 
 @dp.callback_query(lambda c: c.data.startswith("menu_current_lesson"))
 async def show_lesson_content(callback_query: types.CallbackQuery):
-    """Отображает текущий урок для пользователя."""
+    """Отображает текущий урок с основным меню."""
     try:
-        # Извлекаем course_id из callback_data
+        # Извлекаем данные из callback
         course_id = callback_query.data.split(":")[1]
-
-        # Извлекаем user_id из callback_query
         user_id = callback_query.from_user.id
 
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Получаем текущий урок пользователя
+            # Получаем номер урока
             cursor = await conn.execute("""
                 SELECT current_lesson FROM user_courses 
                 WHERE user_id = ? AND course_id = ?
@@ -1969,66 +1974,84 @@ async def show_lesson_content(callback_query: types.CallbackQuery):
             lesson_record = await cursor.fetchone()
 
             if not lesson_record:
-                await callback_query.answer("Текущий урок не найден.")
+                await callback_query.answer("❌ Урок не найден")
                 return
 
             lesson_num = lesson_record[0]
             logger.info(f"lesson_num={lesson_num}")
 
-            # Получаем group_id для курса
-            cursor = await conn.execute("""
-                SELECT group_id FROM courses 
-                WHERE course_id = ?
-            """, (course_id,))
-            group_record = await cursor.fetchone()
-
-            if not group_record:
-                await callback_query.answer("Группа для курса не найдена.")
-                return
-
-            group_id = group_record[0]
-            logger.info(f"group_id для курса {course_id}: {group_id}")
-
             # Получаем содержимое урока
             cursor = await conn.execute("""
-                SELECT text FROM group_messages 
-                WHERE course_id = ? AND (lesson_num = ? OR lesson_num IS NULL)
+                SELECT text, content_type, file_id 
+                FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ?
                 ORDER BY id ASC
             """, (course_id, lesson_num))
+
             lesson_content = await cursor.fetchall()
-            logger.info(f"588 Содержимое {len(lesson_content)} урока для курса {course_id=} и урока {lesson_num=}: {lesson_content=}")
+            logger.info(f"588 материалов {len(lesson_content)} для {course_id=} урока {lesson_num=}")
 
             if not lesson_content:
-                logger.error(f"Содержимое урока не найдено для курса {course_id} и урока {lesson_num}")
-                await callback_query.answer("Содержимое урока не найдено.")
+                logger.error(f"Пустой урок: {course_id} урок {lesson_num}")
+                await callback_query.answer("📭 Урок пуст")
                 return
 
-            # Отображаем содержимое урока без меток
+            # Обрабатываем каждый элемент урока
             for row in lesson_content:
-                text = row[0].replace("*START_LESSON", "").replace("*END_LESSON", "").replace("*HW_START", "").replace(
-                    "*HW_END", "")
-                await bot.send_message(user_id, text=text)
+                text, content_type, file_id = row
+                logger.info(f"\nrow: {text=} | {content_type=} | {file_id=}")
 
-            for row in lesson_content:
-                if row[1] == "photo":
-                    await bot.send_photo(user_id, photo=row[4])
-                elif row[1] == "video":
-                    await bot.send_video(user_id, video=row[4])
-                elif row[1] == "document":
-                    await bot.send_document(user_id, document=row[4])
-                else:
-                    await bot.send_message(user_id, text=row[0])
+                # Нормализация текста
+                text = (text or "").strip()  # Обработка NULL
+                text = re.sub(r'\*START_LESSON\s*\d*', '', text)
+                text = re.sub(r'\*END_LESSON\s*\d*', '', text)
+                text = re.sub(r'\*HW_START\s*\d*', '', text)
+                text = re.sub(r'\*HW_END\s*\d*', '', text)
+                text = text.strip()
 
-                # Отображаем меню с напоминанием сдать домашку
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Сдать домашнее задание", callback_data=f"submit_hw:{course_id}:{lesson_num}")],
-                [InlineKeyboardButton(text="Вернуться к урокам", callback_data=f"menu_lessons:{course_id}")]    ])
-            await bot.send_message(user_id, "Вы закончили урок. Не забудьте сдать домашнее задание!", reply_markup=keyboard)
+                # Логирование после обработки
+                logger.info(f"processed: {text=}")
+
+                # Отправка контента
+                if content_type == "video" and file_id:
+                    logger.info("send_video")
+                    await bot.send_video(user_id, video=file_id, caption=text or None)
+                elif content_type == "photo" and file_id:
+                    logger.info("send_photo")
+                    await bot.send_photo(user_id, photo=file_id, caption=text or None)
+                elif content_type == "document" and file_id:
+                    logger.info("send_document")
+                    await bot.send_document(user_id, document=file_id, caption=text or None)
+                elif text:
+                    logger.info("send_text")
+                    await bot.send_message(user_id, text=text)
+
+
+            # Generate keyboard
+            keyboard = await get_main_menu_inline_keyboard(user_id=user_id)
+            logger.info("after keyboard  ")
+
+            logger.info("                 ✅ Урок завершен. ")
+
+            # Финал урока
+            status_message = (
+                f"Жду домашку, {callback_query.from_user.first_name}!\n\n"
+                f"🎓 Курс: база\n"
+                f"🔑 Тариф: Группа\n"
+                f"📚 Текущий урок: {lesson_num}"
+            )
+
+            await bot.send_message(
+                user_id,
+                status_message,
+                reply_markup=keyboard
+            )
 
         await callback_query.answer()
 
     except Exception as e:
-        logger.error(f"Ошибка при отображении урока: {e}")
+        logger.error(f"CRASH: {str(e)}", exc_info=True)
+        await callback_query.answer("⚠️ Ошибка отображения урока")
 
 
 @dp.callback_query(F.data == "menu_progress")
@@ -2488,7 +2511,7 @@ async def review_course_callback(callback_query: CallbackQuery):
 # ==================== это пользователь код вводит=========================================
 
 # функция для активации курса
-@dp.message(lambda message: message.text.lower() in settings["activation_codes"])
+@dp.message(lambda message: message.text and message.text.lower() in settings["activation_codes"])
 @db_exception_handler
 async def activate_course(message: types.Message):
     """Активирует курс для пользователя и показывает меню."""
@@ -2549,6 +2572,88 @@ async def activate_course(message: types.Message):
         logger.error(f"Ошибка активации: {str(e)}")
         await message.answer("⛔ Произошла ошибка при активации курса")
 
+# ==================== домашка фотка==================
+
+@dp.message(F.content_type.in_({'photo', 'document'}))
+@dp.message(Command("homework"))
+@db_exception_handler
+async def handle_homework(message: types.Message):
+    """
+    Обрабатывает отправку домашних заданий (фото/документы) и команду /homework
+    """
+    user_id = message.from_user.id
+    user_name = message.from_user.full_name
+
+    # Получаем данные о курсе пользователя
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute("""
+            SELECT uc.course_id, uc.version_id, uc.current_lesson
+            FROM user_courses uc
+            WHERE uc.user_id = ?
+        """, (user_id,))
+        user_course_data = await cursor.fetchone()
+
+    if not user_course_data:
+        await message.answer("❌ У вас нет активных курсов. Используйте /activate для активации")
+        return
+
+    course_id, version_id, current_lesson = user_course_data
+
+    # Проверяем тип проверки ДЗ
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute("""
+            SELECT homework_check_type 
+            FROM course_versions
+            WHERE course_id = ? AND version_id = ?
+        """, (course_id, version_id))
+        check_type = (await cursor.fetchone() or [None])[0]
+
+    if check_type != 'admin':
+        await message.answer("ℹ️ Ваш тариф не включает проверку ДЗ администратором")
+        return
+
+    # Формируем сообщение для админов
+    admin_message = (
+        f"📬 Новое ДЗ от @{message.from_user.username} ({user_name})\n"
+        f"🏷 Курс: {course_id}\n"
+        f"📚 Урок: {current_lesson}\n"
+        f"🕒 {datetime.now().strftime('%d.%m %H:%M')}"
+    )
+
+    # Отправляем медиафайл с описанием
+    try:
+        if message.content_type == 'photo':
+            await bot.send_photo(
+                chat_id=ADMIN_GROUP_ID,
+                photo=message.photo[-1].file_id,
+                caption=admin_message
+            )
+        elif message.content_type == 'document':
+            await bot.send_document(
+                chat_id=ADMIN_GROUP_ID,
+                document=message.document.file_id,
+                caption=admin_message
+            )
+        else:
+            await bot.forward_message(
+                chat_id=ADMIN_GROUP_ID,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+
+        await message.answer("✅ Домашка на проверке! Спасибо!")
+
+    except Exception as e:
+        logger.error(f"Ошибка отправки ДЗ: {e}", exc_info=True)
+        await message.answer("⚠️ Ошибка при отправке. Попробуйте позже")
+        await notify_admins(f"🚨 Ошибка ДЗ от @{message.from_user.username}: {str(e)}")
+
+async def notify_admins(text: str):
+    """Отправка уведомлений в группу админов"""
+    try:
+        await bot.send_message(ADMIN_GROUP_ID, text)
+    except Exception as e:
+        logger.error(f"Ошибка уведомления админов: {e}")
 
 #======================Конец обработчиков слов и хэндлеров кнопок=========================================
 
