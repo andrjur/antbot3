@@ -10,6 +10,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup,
                            KeyboardButton, Message, CallbackQuery, ChatFullInfo)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
 # Фикс для консоли Windows
@@ -142,6 +143,119 @@ lesson_stack = {}
 last_message_info = {}
 
 user_support_state = {}
+
+# Переменные для хранения задач и времени последней отправки статистики
+lesson_check_tasks = {}
+last_stats_sent = None
+
+
+
+async def check_lesson_schedule(user_id: int):
+    """Проверяет расписание уроков и отправляет урок, если пришло время."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("""
+                SELECT uc.course_id, uc.current_lesson
+                FROM user_courses uc
+                WHERE uc.user_id = ? AND uc.status = 'active'
+            """, (user_id,))
+            user_course = await cursor.fetchone()
+
+            if not user_course:
+                logger.info(f"У пользователя {user_id} нет активных курсов.")
+                return
+
+            course_id, current_lesson = user_course
+
+            # Получаем данные об уроке (время открытия, наличие домашки)
+            cursor = await conn.execute("""
+                SELECT open_time, is_homework FROM group_messages
+                WHERE course_id = ? AND lesson_num = ?
+            """, (course_id, current_lesson))
+            lesson_info = await cursor.fetchone()
+
+            if not lesson_info:
+                logger.info(f"Урок {current_lesson} в курсе {course_id} не найден.")
+                return
+
+            open_time, is_homework = lesson_info
+
+            # Проверяем, можно ли отправлять урок
+            now = datetime.datetime.now()
+            if now >= open_time:
+                # Проверяем, сдана ли домашка или она не нужна
+                if not is_homework:
+                    await send_lesson_to_user(user_id, course_id, current_lesson)
+                else:
+                    # Проверяем, сдана ли домашка
+                    cursor = await conn.execute("""
+                        SELECT COUNT(*) FROM homework_gallery
+                        WHERE user_id = ? AND course_id = ? AND lesson_num = ?
+                    """, (user_id, course_id, current_lesson))
+                    homework_exists = (await cursor.fetchone())[0]
+
+                    if homework_exists:
+                        await send_lesson_to_user(user_id, course_id, current_lesson)
+                    else:
+                        logger.info(f"Пользователь {user_id} не сдал домашку к уроку {current_lesson}.")
+            else:
+                logger.info(f"Время для урока {current_lesson} еще не наступило.")
+
+    except Exception as e:
+        logger.error(f"Ошибка при проверке расписания уроков для пользователя {user_id}: {e}")
+
+
+async def scheduled_lesson_check(user_id: int):
+    """Запускает проверку расписания уроков для пользователя каждые 7 минут."""
+    while True:
+        await check_lesson_schedule(user_id)
+        await asyncio.sleep(7 * 60)  # Каждые 7 минут
+
+async def send_admin_stats():
+    """Отправляет статистику администраторам каждые 5 часов."""
+    global last_stats_sent
+    while True:
+        now = datetime.datetime.now()
+        if last_stats_sent is None or now - last_stats_sent >= timedelta(hours=5):
+            stats = await gather_course_statistics()
+            await bot.send_message(ADMIN_GROUP_ID, stats)
+            last_stats_sent = now
+        await asyncio.sleep(500)  # Каждую (минуту) не, пореже раз в 8,5 (проверяем, не пора ли отправлять статистику)
+
+async def gather_course_statistics():
+    """Собирает статистику о пользователях и их прогрессе по курсам."""
+    stats = "Статистика по курсам:\n"
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("""
+                SELECT uc.course_id, uc.current_lesson, COUNT(uc.user_id)
+                FROM user_courses uc
+                GROUP BY uc.course_id, uc.current_lesson
+            """)
+            course_data = await cursor.fetchall()
+
+            for course_id, current_lesson, user_count in course_data:
+                stats += f"Курс: {course_id}, Урок: {current_lesson}, Пользователей: {user_count}\n"
+    except Exception as e:
+        logger.error(f"Ошибка при сборе статистики: {e}")
+        stats = "Ошибка при сборе статистики."
+    return stats
+
+async def start_lesson_schedule_task(user_id: int):
+    """Запускает периодическую проверку расписания уроков для пользователя."""
+    if user_id not in lesson_check_tasks:
+        task = asyncio.create_task(scheduled_lesson_check(user_id))
+        lesson_check_tasks[user_id] = task
+        logger.info(f"Запущена задача проверки расписания уроков для пользователя {user_id}.")
+
+async def stop_lesson_schedule_task(user_id: int):
+    """Останавливает периодическую проверку расписания уроков для пользователя."""
+    if user_id in lesson_check_tasks:
+        task = lesson_check_tasks[user_id]
+        task.cancel()
+        del lesson_check_tasks[user_id]
+        logger.info(f"Остановлена задача проверки расписания уроков для пользователя {user_id}.")
+
 
 def save_settings(settings):
     """Сохраняет настройки в файл settings.json."""
@@ -656,65 +770,63 @@ def get_admin_keyboard():
     return keyboard
 
 
-def get_main_menu_keyboard():
-    """Создает клавиатуру главного меню"""
-    logger.info(f"get_main_menu_keyboard ")
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
-    keyboard.add(
-        KeyboardButton("/mycourses"),  # Мои курсы
-        KeyboardButton("/lesson")  # Текущий урок
+
+def get_main_menu_inline_keyboard(
+    course_id: str,
+    lesson_num: int,
+    user_tariff: str,  # Тариф пользователя (v1, v2 и т.д.)
+    homework_pending: bool = False
+) -> InlineKeyboardMarkup:
+    """
+    Создает inline-клавиатуру для основного меню с учетом текущего курса и урока.
+
+    Args:
+        course_id: ID курса.
+        lesson_num: Номер текущего урока.
+        user_tariff: Тариф пользователя (v1, v2 и т.д.).
+        homework_pending: Флаг наличия непроверенной домашней работы.
+
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с кнопками.
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Кнопки для основного меню
+    builder.row(
+        InlineKeyboardButton(
+            text="📚 Следующий урок",
+            callback_data=CourseCallback(
+                action="next_lesson",
+                course_id=course_id,
+                lesson_num=lesson_num
+            ).pack()
+        )
     )
-    keyboard.add(
-        KeyboardButton("/progress"),  # Прогресс
-        KeyboardButton("/support")  # Поддержка
+
+    # Кнопка самоодобрения для тарифа v1
+    if user_tariff == "v1":
+        builder.row(
+            InlineKeyboardButton(
+                text="✅ СамоОдобрить ДЗ",
+                callback_data=CourseCallback(
+                    action="self_approve_hw",
+                    course_id=course_id,
+                    lesson_num=lesson_num
+                ).pack()
+            )
+        )
+
+    # Дополнительные кнопки меню
+    builder.row(
+        InlineKeyboardButton(text="📚 Мои курсы", callback_data="menu_mycourses"),
+        InlineKeyboardButton(text="📖 Текущий урок", callback_data="menu_current_lesson")
     )
-    keyboard.add(
-        KeyboardButton("/help")  # Помощь
+    builder.row(
+        InlineKeyboardButton(text="📈 Прогресс", callback_data="menu_progress"),
+        InlineKeyboardButton(text="📞 Поддержка", callback_data="menu_support")
     )
-    return keyboard
 
-
-@db_exception_handler # 08-04
-async def get_main_menu_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Создает Inline-клавиатуру главного меню."""
-    logger.info("get_main_menu_inline_keyboard новая")
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute("""
-                SELECT course_id FROM user_courses WHERE user_id = ? AND status = 'active'
-            """, (user_id,))
-            user_course = await cursor.fetchone()
-
-            if not user_course:
-                # User has no active courses
-                buttons = [
-                    [InlineKeyboardButton(text="📚 Мои курсы", callback_data="menu_mycourses")],
-                    [InlineKeyboardButton(text="📞 Поддержка", callback_data="menu_support")],
-                    [InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")]
-                ]
-
-            else:
-                course_id = user_course[0]
-                # Create a list of buttons
-                buttons = [
-                    [InlineKeyboardButton(text="📚 Мои курсы", callback_data="menu_mycourses"),
-                     InlineKeyboardButton(text="📖 Текущий урок", callback_data=f"menu_current_lesson:{course_id}")],
-                    [InlineKeyboardButton(text="📊 Прогресс", callback_data="menu_progress"),
-                     InlineKeyboardButton(text="📞 Поддержка", callback_data="menu_support")],
-                    [InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")]
-                ]
-
-            # Create a keyboard object with buttons
-            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-            # Log keyboard structure
-            logger.info("Inline keyboard created successfully.")
-
-            return keyboard
-
-    except Exception as e:
-        logger.error(f"Error creating inline keyboard: {e}")
-        return None
+    return builder.as_markup()
 
 
 
@@ -1037,7 +1149,7 @@ async def import_settings_to_db():
                     code_info["version"],
                     code_info["price"]
                 ))
-                logger.info(f"Added code: {code}")
+                #logger.info(f"Added code: {code}")
 
             await conn.commit()
             logger.info("Settings imported successfully")
@@ -1104,6 +1216,44 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
     except Exception as e:
         logger.error(f"Ошибка при отправке стартового сообщения в группу администраторов: {e}")
     logger.info("Стартовое сообщение отправлено администраторам")
+
+
+# 10-04 4. Переход к следующему уроку # После успешной проверки ДЗ (одобрения админом).# ИЛИ по расписанию (если уроки открываются автоматически).
+async def move_to_next_lesson(user_id: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        # Получаем текущий урок
+        cursor = await conn.execute("""
+            SELECT course_id, current_lesson 
+            FROM user_courses 
+            WHERE user_id = ? AND status = 'active'
+        """, (user_id,))
+        course_data = await cursor.fetchone()
+
+        if not course_data:
+            return
+
+        course_id, current_lesson = course_data
+
+        # Проверяем, есть ли следующий урок
+        cursor = await conn.execute("""
+            SELECT COUNT(*) 
+            FROM group_messages 
+            WHERE course_id = ? AND lesson_num > ?
+        """, (course_id, current_lesson))
+        next_lesson_exists = (await cursor.fetchone())[0]
+
+        if next_lesson_exists:
+            # Обновляем текущий урок
+            await conn.execute("""
+                UPDATE user_courses 
+                SET current_lesson = current_lesson + 1 
+                WHERE user_id = ?
+            """, (user_id,))
+            await conn.commit()
+            await bot.send_message(user_id, "🎉 Поздравляем! Следующий урок доступен.")
+        else:
+            await bot.send_message(user_id, "🏆 Вы завершили курс! Молодец!")
+
 
 # Пользовательский фильтр для проверки ID группы
 class IsCourseGroupFilter(BaseFilter):
@@ -1313,47 +1463,12 @@ async def import_db(message: types.Message):  # types.Message instead of Message
         await message.answer("❌ Произошла ошибка при импорте базы данных.")
 
 
-@dp.message(F.text, F.chat.id == ADMIN_GROUP_ID)
-@db_exception_handler
-async def process_rejection_reason(message: Message):
-    admin_id = message.from_user.id
-    logger.info(f"5557 process_rejection_reason {admin_id} ")
-    async with aiosqlite.connect(DB_FILE) as conn:
-        # Получаем контекст администратора todo: вспомнить бы что это
-        cursor = await conn.execute("""
-            SELECT context_data FROM admin_context WHERE admin_id = ?
-        """, (admin_id,))
-        context_data = await cursor.fetchone()
-
-        if not context_data:
-            return  # Если нет контекста - игнорируем сообщение
-
-        context = json.loads(context_data[0])
-
-        if context.get("action") != "reject_hw":
-            return  # Если действие не отклонение ДЗ - игнорируем
-
-        # Сохраняем причину отклонения
-        context["reason"] = message.text
-        await conn.execute("""
-            UPDATE admin_context SET context_data = ? WHERE admin_id = ?
-        """, (json.dumps(context), admin_id))
-        await conn.commit()
-
-        # Выполняем отклонение
-        await handle_homework_decision(
-            CallbackQuery(
-                id="fake_id",
-                from_user=message.from_user,
-                chat_instance="admin",
-                data=f"reject_hw:{context['user_id']}:{context['course_id']}:{context['lesson_num']}"
-            )
-        )
 
 
 @dp.callback_query(lambda c: c.data.startswith("approve_hw:") or c.data.startswith("reject_hw:"))
 @db_exception_handler
 async def handle_homework_decision(callback_query: CallbackQuery):
+    """Обрабатывает решение администратора о домашнем задании (принять/отказать)."""
     action, user_id, course_id, lesson_num = callback_query.data.split(":")
     admin_id = callback_query.from_user.id
     user_id = int(user_id)
@@ -1395,59 +1510,25 @@ async def handle_homework_decision(callback_query: CallbackQuery):
 
         elif action == "reject_hw":
             # Отклонение ДЗ
-            # Проверяем есть ли комментарий админа
-            context_cursor = await conn.execute("""
-                SELECT context_data FROM admin_context WHERE admin_id = ?
-            """, (admin_id,))
-            context_data = await context_cursor.fetchone()
 
-            if not context_data:
-                # Если нет комментария - запрашиваем его
-                await conn.execute("""
-                    INSERT OR REPLACE INTO admin_context (admin_id, context_data)
-                    VALUES (?, ?)
-                """, (admin_id, json.dumps({
-                    "action": "reject_hw",
-                    "user_id": user_id,
-                    "course_id": course_id,
-                    "lesson_num": lesson_num
-                })))
-                await conn.commit()
 
-                await callback_query.message.edit_text(
-                    "📝 Пожалуйста, отправьте причину отклонения домашнего задания.\n"
-                    "Для отмены введите /cancel"
-                )
-                return
-
-            # Если есть комментарий - обрабатываем отклонение
-            rejection_reason = json.loads(context_data[0])["reason"]
-
-            if not rejection_reason:
-                # Если нет причины - ждем ее от админа
-                await callback_query.answer("Причина отклонения не указана.")
-                return
-
-            # Обрабатываем отклонение
+            # Запрашиваем комментарий от админа
             await conn.execute("""
-                UPDATE homework SET status = 'rejected', admin_id = ?, 
-                decision_date = CURRENT_TIMESTAMP, rejection_reason = ?
-                WHERE user_id = ? AND course_id = ? AND lesson_num = ?
-            """, (admin_id, rejection_reason, user_id, course_id, lesson_num))
+                INSERT OR REPLACE INTO admin_context (admin_id, context_data)
+                VALUES (?, ?)
+            """, (admin_id, json.dumps({
+                "action": "reject_hw",
+                "user_id": user_id,
+                "course_id": course_id,
+                "lesson_num": lesson_num
+            })))
+            await conn.commit()
 
-            # Удаляем из галереи если там есть
-            await conn.execute("""
-                DELETE FROM homework_gallery 
-                WHERE user_id = ? AND course_id = ? AND lesson_num = ?
-            """, (user_id, course_id, lesson_num))
-
-            # Уведомляем пользователя
-            await bot.send_message(
-                user_id,
-                f"❌ Ваше домашнее задание к уроку {lesson_num} курса '{course_id}' отклонено.\n"
-                f"Причина: {rejection_reason}\n\n"
-                "Вы можете отправить новое домашнее задание."
+            await callback_query.message.edit_text(
+                "📝 Пожалуйста, отправьте причину отклонения домашнего задания.\n"
+                "Для отмены введите /cancel"
             )
+            return
 
         await conn.commit()
 
@@ -1631,7 +1712,6 @@ async def admin_edit_tags(query: types.CallbackQuery):
     # Register handler to receive new tags
 
 
-
 @dp.callback_query(lambda c: c.data.startswith("admin_delete_lesson:"))
 async def admin_delete_lesson(query: types.CallbackQuery):
     """Удаление урока."""
@@ -1650,17 +1730,111 @@ async def admin_delete_lesson(query: types.CallbackQuery):
     )
 
 
+@dp.message(F.text, F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def process_rejection_reason(message: Message):
+    """Обрабатывает сообщение с причиной отклонения домашнего задания от админа."""
+    admin_id = message.from_user.id
+    logger.info(f"5557 process_rejection_reason {admin_id} ")
+    rejection_reason = message.text
+
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Получаем контекст из admin_context
+            context_cursor = await conn.execute("""
+                SELECT context_data FROM admin_context WHERE admin_id = ?
+            """, (admin_id,))
+            context_data = await context_cursor.fetchone()
+
+            if not context_data:
+                await message.reply("Контекст не найден. Попробуйте отклонить ДЗ заново.")
+                return
+
+            context = json.loads(context_data[0])
+            user_id = context["user_id"]
+            course_id = context["course_id"]
+            lesson_num = context["lesson_num"]
+
+            # Обновляем homework и устанавливаем статус "rejected"
+            await conn.execute("""
+                UPDATE homework SET status = 'rejected', admin_id = ?, 
+                decision_date = CURRENT_TIMESTAMP, rejection_reason = ?
+                WHERE user_id = ? AND course_id = ? AND lesson_num = ?
+            """, (admin_id, rejection_reason, user_id, course_id, lesson_num))
+            await conn.commit()
+
+            # Уведомляем пользователя об отклонении
+            await bot.send_message(
+                user_id,
+                f"❌ Ваше домашнее задание к уроку {lesson_num} курса '{course_id}' отклонено.\n"
+                f"Причина: {rejection_reason}\n\n"
+                "Вы можете отправить новое домашнее задание."
+            )
+
+            # Удаляем контекст
+            await conn.execute("DELETE FROM admin_context WHERE admin_id = ?", (admin_id,))
+            await conn.commit()
+
+            await message.reply("Причина отклонения отправлена пользователю.")
+
+    except Exception as e:
+        logger.error(f"Ошибка в process_rejection_reason: {e}", exc_info=True)
+        await message.reply("Произошла ошибка при обработке причины отклонения.")
+
+
+
 
 # Команды для взаимодействия с пользователем - в конце, аминь.
 #=======================================================================================================================
 
-# Регистрация нового пользователя или приветствие существующего
+
+
+@db_exception_handler
+async def get_user_tariff_from_db(user_id: int) -> str:
+    """Получает тариф пользователя из базы данных."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("""
+                SELECT cv.version_id
+                FROM user_courses uc
+                JOIN course_activation_codes cac ON uc.course_id = cac.course_id
+                JOIN course_versions cv ON cac.version_id = cv.version_id
+                WHERE uc.user_id = ? AND uc.status = 'active'
+            """, (user_id,))
+            tariff_data = await cursor.fetchone()
+            if tariff_data:
+                return tariff_data[0]  # Возвращаем tariff
+            else:
+                return "free"  # default tariff
+    except Exception as e:
+        logger.error(f"Error getting user tariff from db: {e}")
+        return "free"  # Default tariff on error
+
+@db_exception_handler
+async def check_homework_pending(user_id: int, course_id: str, lesson_num: int) -> bool:
+    """Проверяет, есть ли у пользователя непроверенное ДЗ по данному уроку."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("""
+                SELECT COUNT(*)
+                FROM homework_gallery
+                WHERE user_id = ? AND course_id = ? AND lesson_num = ? AND approved_by = 0
+            """, (user_id, course_id, lesson_num))
+            result = await cursor.fetchone()
+            return result[0] > 0  # returns true if homework pending
+    except Exception as e:
+        logger.error(f"Error while checking homework status: {e}")
+        return False
+
+
 @dp.message(CommandStart())
 @db_exception_handler
 async def cmd_start(message: types.Message):
     """Обработчик команды /start."""
     user_id = message.from_user.id
     first_name = message.from_user.first_name
+    logger.info(f"cmd_start ")
+    await start_lesson_schedule_task(message.from_user.id)
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
@@ -1677,46 +1851,96 @@ async def cmd_start(message: types.Message):
                 await conn.commit()
                 logger.info(f"New user added: {user_id}")
 
-            # Get active course
+            # Get active or completed course
             cursor = await conn.execute("""
-                SELECT c.title, uc.course_id, uc.version_id, uc.current_lesson
+                SELECT uc.course_id, uc.version_id
                 FROM user_courses uc
-                JOIN courses c ON uc.course_id = c.course_id
-                WHERE uc.user_id = ? AND uc.status = 'active'
+                WHERE uc.user_id = ? AND (uc.status = 'active' OR uc.status = 'completed')
             """, (user_id,))
             active_course = await cursor.fetchone()
 
-            # Generate keyboard
-            keyboard = await get_main_menu_inline_keyboard(user_id=user_id)
-
             if active_course:
-                # Show course status
-                course_data = (active_course[1], active_course[0], active_course[2], active_course[3])  # course_id, title, version_id, current_lesson
-                welcome_message = f"С возвращением, {first_name}!\n\n" \
-                                  f"🎓 Курс: {course_data[1]}\n" \
-                                  f"🔑 Тариф: {get_tariff_name(course_data[2])}\n" \
-                                  f"📚 Текущий урок: {course_data[3]}\n"
-                logger.info(f"333 Active course found for user {user_id}: {course_data=}")
-                if keyboard:
-                    await message.answer(welcome_message, reply_markup=keyboard)
+                course_id, version_id = active_course
+
+                # Get user tariff
+                user_tariff = await get_user_tariff_from_db(user_id)
+
+                # Get tariff names from settings
+                tariff_names = settings.get("tariff_names", {
+                    "v1": "Соло",
+                    "v2": "Группа",
+                    "v3": "VIP"
+                })
+                tariff_name = tariff_names.get(version_id, "Базовый")
+
+                # Получаем информацию о курсе для приветствия
+                cursor = await conn.execute("""
+                    SELECT c.title
+                    FROM courses c
+                    WHERE c.course_id = ?
+                """, (course_id,))
+                course_info = await cursor.fetchone()
+
+                if course_info:
+                    course_name = course_info[0]
+                    welcome_message = (
+                        f"С возвращением, {first_name}!\n\n"
+                        f"🎓 Курс: {course_name}\n"
+                        f"🔑 Тариф: {tariff_name}\n"
+                        f"📚 Текущий урок: 1"
+                    )
                 else:
-                    await message.answer("Произошла ошибка при создании меню.")
+                    welcome_message = "С возвращением!"
+
+                # Выводим 0 урок - описание курса
+                await send_course_description(user_id, course_id)
+
+                # Determine if there's homework pending
+                homework_pending = await check_homework_pending(user_id, course_id, 0)
+
+                # Generate keyboard
+                keyboard = get_main_menu_inline_keyboard(
+                    course_id=course_id,
+                    lesson_num=0,  # Для описания курса ставим урок 0
+                    user_tariff=version_id,
+                    homework_pending=homework_pending
+                )
+                await message.answer(f"{welcome_message}\n\nГлавное меню:", reply_markup=keyboard)
             else:
-                # User has no active courses
-                courses = await get_courses_list()
-                if courses:
-                    courses_text = "\n".join([f"- {title} ({course_id})" for course_id, title in courses])
-                    welcome_message = f"{'Добро пожаловать' if not user_exists else 'С возвращением'}, {first_name}!\n\n" \
-                                      "Доступные курсы:\n" \
-                                      f"{courses_text}\n\n" \
-                                      "Введите кодовое слово для активации курса:"
-                    await message.answer(welcome_message)
-                else:
-                    await message.answer("К сожалению, сейчас нет доступных курсов.")
+                # User has no active or completed courses
+                await message.answer(
+                    "❌ У вас нет активных или завершенных курсов.\n"
+                    "Пожалуйста, введите код активации для начала обучения."
+                )
 
     except Exception as e:
         logger.error(f"Error in cmd_start: {e}")
         await message.answer("Произошла ошибка при обработке команды. Пожалуйста, попробуйте позже.")
+
+
+
+
+async def send_course_description(user_id: int, course_id: str):
+    """Отправляет описание курса пользователю."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("""
+                SELECT text
+                FROM group_messages
+                WHERE course_id = ? AND lesson_num = 0
+            """, (course_id,))
+            description = await cursor.fetchone()
+
+            if description:
+                await bot.send_message(user_id, description[0])
+            else:
+                await bot.send_message(user_id, "Описание курса не найдено.")
+
+    except Exception as e:
+        logger.error(f"Error sending course description: {e}")
+        await bot.send_message(user_id, "Ошибка при получении описания курса.")
+
+
 
 def get_tariff_name(version_id: str) -> str:
     """Возвращает человекочитаемое название тарифа."""
@@ -1817,7 +2041,7 @@ async def process_support_evaluation(query: types.CallbackQuery):
 async def cmd_activate(message: Message):
     """Handler for the /activate command to activate a course"""
     user_id = message.from_user.id
-    logger.info(f"cmd_activate User {user_id} initiated activation process.")
+    logger.info(f"del del del cmd_activate User {user_id} initiated activation process.")
 
     await message.answer(escape_md(
         "🔑 *Активация курса*\n\n"
@@ -1825,62 +2049,6 @@ async def cmd_activate(message: Message):
         "Для отмены введите /cancel."),
         parse_mode="MarkdownV2"
     )
-
-
-@dp.message(Command("mycourses"))
-@db_exception_handler  # todo потестить
-async def old_cmd_mycourses(message: Message):
-    """Показывает список активных и завершенных курсов с маппингом тарифов"""
-    user_id = message.from_user.id
-    logger.info(f"Обработка /mycourses для пользователя {user_id}")
-
-    try:
-        # Получаем данные через кэширующую функцию
-        active_course = await get_course_status(user_id)
-
-        if not active_course:
-            await message.answer(
-                "У вас пока нет активированных курсов.\n"
-                "Используйте команду /activate для активации курса."
-            )
-            return
-
-        # Распаковка данных курса
-        course_id, title, version_id, current_lesson = active_course
-
-        # Маппинг версий на названия тарифов
-        TARIFF_NAMES = {
-            "v1": "Соло",
-            "v2": "Группа",
-            "v3": "VIP"
-        }
-
-        # Формирование сообщения
-        courses_text = (
-            "📚 *Ваши курсы:*\n\n"
-            f"*{title}*\n"
-            f"🔑 Тариф: {TARIFF_NAMES.get(version_id, 'Базовый')}\n"
-            f"📖 Прогресс: Урок {current_lesson}/[общее_количество]\n\n"
-            "_Для продолжения нажмите кнопку ниже_"
-        )
-
-        # Создаем клавиатуру
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f"➡️ Продолжить {title}",
-                callback_data=f"start_lesson:{course_id}:{current_lesson}"
-            )]
-        ])
-
-        await message.answer(
-            escape_md(courses_text),
-            reply_markup=keyboard,
-            parse_mode="MarkdownV2"
-        )
-
-    except Exception as e:
-        logger.error(f"Ошибка в cmd_mycourses: {e}")
-        await message.answer("Произошла ошибка при загрузке курсов. Попробуйте позже.")
 
 
 
@@ -1956,36 +2124,35 @@ async def cmd_completed_courses(message: Message):
                          reply_markup=keyboard,
                          parse_mode="MarkdownV2")  # Позволяет просматривать уроки со сниппетами
 
-
+# 11-04
 @dp.callback_query(lambda c: c.data.startswith("menu_current_lesson"))
 async def show_lesson_content(callback_query: types.CallbackQuery):
     """Отображает текущий урок с основным меню."""
     try:
-        # Извлекаем данные из callback
-        course_id = callback_query.data.split(":")[1]
         user_id = callback_query.from_user.id
 
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Получаем номер урока
+            # Получаем номер урока и course_id
             cursor = await conn.execute("""
-                SELECT current_lesson FROM user_courses 
-                WHERE user_id = ? AND course_id = ?
-            """, (user_id, course_id))
+                SELECT current_lesson, course_id, version_id
+                FROM user_courses 
+                WHERE user_id = ? AND status = 'active'
+            """, (user_id,))
             lesson_record = await cursor.fetchone()
 
             if not lesson_record:
                 await callback_query.answer("❌ Урок не найден")
                 return
 
-            lesson_num = lesson_record[0]
-            logger.info(f"lesson_num={lesson_num}")
+            lesson_num, course_id, version_id = lesson_record
+            logger.info(f"show_lesson_content {lesson_num=} {course_id=}")
 
             # Получаем содержимое урока
             cursor = await conn.execute("""
                 SELECT text, content_type, file_id 
                 FROM group_messages 
-                WHERE course_id = ? AND lesson_num = ?
-                ORDER BY id ASC
+                WHERE course_id = ? 
+                AND lesson_num = ?
             """, (course_id, lesson_num))
 
             lesson_content = await cursor.fetchall()
@@ -2001,57 +2168,38 @@ async def show_lesson_content(callback_query: types.CallbackQuery):
                 text, content_type, file_id = row
                 logger.info(f"\nrow: {text=} | {content_type=} | {file_id=}")
 
-                # Нормализация текста
-                text = (text or "").strip()  # Обработка NULL
-                text = re.sub(r'\*START_LESSON\s*\d*', '', text)
-                text = re.sub(r'\*END_LESSON\s*\d*', '', text)
-                text = re.sub(r'\*HW_START\s*\d*', '', text)
-                text = re.sub(r'\*HW_END\s*\d*', '', text)
-                text = text.strip()
-
-                # Логирование после обработки
-                logger.info(f"processed: {text=}")
-
-                # Отправка контента
                 if content_type == "video" and file_id:
-                    logger.info("send_video")
                     await bot.send_video(user_id, video=file_id, caption=text or None)
                 elif content_type == "photo" and file_id:
-                    logger.info("send_photo")
                     await bot.send_photo(user_id, photo=file_id, caption=text or None)
                 elif content_type == "document" and file_id:
-                    logger.info("send_document")
                     await bot.send_document(user_id, document=file_id, caption=text or None)
                 elif text:
-                    logger.info("send_text")
                     await bot.send_message(user_id, text=text)
 
+            # Get tariff names from settings
+            tariff_names = settings.get("tariff_names", {
+                "v1": "Соло",
+                "v2": "Группа",
+                "v3": "VIP"
+            })
+            user_tariff = tariff_names.get(version_id, "Базовый")
 
-            # Generate keyboard
-            keyboard = await get_main_menu_inline_keyboard(user_id=user_id)
-            logger.info("after keyboard  ")
-
-            logger.info("                 ✅ Урок завершен. ")
-
-            # Финал урока
-            status_message = (
-                f"Жду домашку, {callback_query.from_user.first_name}!\n\n"
-                f"🎓 Курс: база\n"
-                f"🔑 Тариф: Группа\n"
-                f"📚 Текущий урок: {lesson_num}"
+            # Формируем и отправляем клавиатуру
+            homework_pending = await check_homework_pending(user_id, course_id, lesson_num)
+            keyboard = get_main_menu_inline_keyboard(
+                course_id=course_id,
+                lesson_num=lesson_num,
+                user_tariff=version_id,  # Передаем version_id, а не user_tariff
+                homework_pending=homework_pending
             )
-
-            await bot.send_message(
-                user_id,
-                status_message,
-                reply_markup=keyboard
-            )
-
-        await callback_query.answer()
+            # todo - посылатьменю в этот момент?
+            await bot.send_message(user_id, "Меню:", reply_markup=keyboard)
+            await callback_query.answer()
 
     except Exception as e:
-        logger.error(f"CRASH: {str(e)}", exc_info=True)
-        await callback_query.answer("⚠️ Ошибка отображения урока")
+        logger.error(f"Критический фейл: {str(e)}", exc_info=True)
+        await callback_query.answer("💥 Технические шоколадки...")
 
 
 @dp.callback_query(F.data == "menu_progress")
@@ -2536,6 +2684,14 @@ async def activate_course(message: types.Message):
             course_id, version_id = result
             logger.info(f"Found code: {course_id=}, {version_id=}")
 
+            # Get tariff names from settings
+            tariff_names = settings.get("tariff_names", {
+                "v1": "Соло",
+                "v2": "Группа",
+                "v3": "VIP"
+            })
+            tariff_name = tariff_names.get(version_id, "Базовый")
+
             # Активируем курс
             await conn.execute("""
                 INSERT OR REPLACE INTO user_courses 
@@ -2544,19 +2700,19 @@ async def activate_course(message: types.Message):
             """, (user_id, course_id, version_id))
             await conn.commit()
 
+            # Выводим 0 урок - описание курса
+            await send_course_description(user_id, course_id)
+
             # Получаем информацию о курсе
             cursor = await conn.execute("""
-                SELECT c.title, cv.title 
+                SELECT c.title
                 FROM courses c
-                JOIN course_versions cv 
-                    ON c.course_id = cv.course_id 
-                    AND cv.version_id = ?
                 WHERE c.course_id = ?
-            """, (version_id, course_id))
+            """, (course_id,))
             course_data = await cursor.fetchone()
 
             if course_data:
-                course_name, tariff_name = course_data
+                course_name = course_data[0]
                 response = (
                     f"✅ Курс активирован!\n\n"
                     f"🎓 Курс: {course_name}\n"
@@ -2568,6 +2724,18 @@ async def activate_course(message: types.Message):
 
             await message.answer(response)
 
+            # Determine if there's homework pending
+            homework_pending = await check_homework_pending(user_id, course_id, 0)
+
+            # Generate keyboard
+            keyboard = get_main_menu_inline_keyboard(
+                course_id=course_id,
+                lesson_num=0,  # Для описания курса ставим урок 0
+                user_tariff=version_id,
+                homework_pending=homework_pending
+            )
+            await message.answer("Главное меню:", reply_markup=keyboard)
+
     except Exception as e:
         logger.error(f"Ошибка активации: {str(e)}")
         await message.answer("⛔ Произошла ошибка при активации курса")
@@ -2575,91 +2743,153 @@ async def activate_course(message: types.Message):
 # ==================== домашка фотка==================
 
 @dp.message(F.content_type.in_({'photo', 'document'}))
-@dp.message(Command("homework"))
 @db_exception_handler
 async def handle_homework(message: types.Message):
-    """
-    Обрабатывает отправку домашних заданий (фото/документы) и команду /homework
-    """
+    """Обрабатывает отправку домашних заданий (фото/документы)"""
     user_id = message.from_user.id
     user_name = message.from_user.full_name
+    logger.info(f"300 handle_homework {user_id=} {user_name=}")
 
     # Получаем данные о курсе пользователя
     async with aiosqlite.connect(DB_FILE) as conn:
         cursor = await conn.execute("""
-            SELECT uc.course_id, uc.version_id, uc.current_lesson
+            SELECT uc.course_id, uc.current_lesson, uc.version_id,
+                   c.name as course_name, v.name as version_name
             FROM user_courses uc
-            WHERE uc.user_id = ?
+            JOIN courses c ON uc.course_id = c.id
+            JOIN versions v ON uc.version_id = v.id
+            WHERE uc.user_id = ? AND uc.status = 'active'
         """, (user_id,))
         user_course_data = await cursor.fetchone()
 
     if not user_course_data:
-        await message.answer("❌ У вас нет активных курсов. Используйте /activate для активации")
+        await message.answer("❌ У вас нет активных курсов. Просто введите код активации.")
         return
 
-    course_id, version_id, current_lesson = user_course_data
-
-    # Проверяем тип проверки ДЗ
-    async with aiosqlite.connect(DB_FILE) as conn:
-        cursor = await conn.execute("""
-            SELECT homework_check_type 
-            FROM course_versions
-            WHERE course_id = ? AND version_id = ?
-        """, (course_id, version_id))
-        check_type = (await cursor.fetchone() or [None])[0]
-
-    if check_type != 'admin':
-        await message.answer("ℹ️ Ваш тариф не включает проверку ДЗ администратором")
+    course_id, current_lesson, version_id, course_name, version_name = user_course_data
+    logger.info(f"handle_homework {user_id=} {course_id=} {current_lesson=} {version_id=} {course_name=} {version_name=}")
+    # Get tariff names from settings
+    tariff_names = settings.get("tariff_names", {
+        "v1": "Соло",
+        "v2": "Группа",
+        "v3": "VIP"
+    })
+    tariff_name = tariff_names.get(version_id, "Базовый")
+    logger.info(f"300 handle_homework {tariff_name=}")
+    # Если версия тарифа — v1, то не отправляем админам
+    if version_id == 'v1':
+        await message.answer("✅ Домашка принята для самопроверки! Спасибо!")
+        # Обновляем меню
+        keyboard = await get_main_menu_inline_keyboard(user_id=user_id, homework_pending=False)
+        await message.answer("Главное меню:", reply_markup=keyboard)
         return
 
     # Формируем сообщение для админов
     admin_message = (
         f"📬 Новое ДЗ от @{message.from_user.username} ({user_name})\n"
-        f"🏷 Курс: {course_id}\n"
+        f"🏷 Курс: {course_name}\n"
         f"📚 Урок: {current_lesson}\n"
+        f"🔑 Тариф: {version_name}\n"
         f"🕒 {datetime.now().strftime('%d.%m %H:%M')}"
     )
 
-    # Отправляем медиафайл с описанием
     try:
+        # Отправка контента в админскую группу
         if message.content_type == 'photo':
-            await bot.send_photo(
+            sent_message = await bot.send_photo(
                 chat_id=ADMIN_GROUP_ID,
                 photo=message.photo[-1].file_id,
                 caption=admin_message
             )
-        elif message.content_type == 'document':
-            await bot.send_document(
+        else:  # document
+            sent_message = await bot.send_document(
                 chat_id=ADMIN_GROUP_ID,
                 document=message.document.file_id,
                 caption=admin_message
             )
-        else:
-            await bot.forward_message(
-                chat_id=ADMIN_GROUP_ID,
-                from_chat_id=message.chat.id,
-                message_id=message.message_id
-            )
 
+        # Логирование в базу данных
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute("""
+                INSERT INTO homework_gallery 
+                (user_id, course_id, lesson_num, message_id, approved_by)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, course_id, current_lesson, sent_message.message_id, 0))
+            await conn.commit()
+
+        # Обновление интерфейса пользователя
         await message.answer("✅ Домашка на проверке! Спасибо!")
+        keyboard = await get_main_menu_inline_keyboard(
+            course_id=course_id,
+            lesson_num=current_lesson,
+            user_tariff=version_id,
+            homework_pending=True
+        )
+        await message.answer("Выберите действие:", reply_markup=keyboard)
 
     except Exception as e:
         logger.error(f"Ошибка отправки ДЗ: {e}", exc_info=True)
         await message.answer("⚠️ Ошибка при отправке. Попробуйте позже")
-        await notify_admins(f"🚨 Ошибка ДЗ от @{message.from_user.username}: {str(e)}")
+        await bot.send_message(
+            ADMIN_GROUP_ID,
+            f"🚨 Ошибка ДЗ от @{message.from_user.username}: {str(e)}"
+        )
 
-async def notify_admins(text: str):
-    """Отправка уведомлений в группу админов"""
-    try:
-        await bot.send_message(ADMIN_GROUP_ID, text)
-    except Exception as e:
-        logger.error(f"Ошибка уведомления админов: {e}")
 
 #======================Конец обработчиков слов и хэндлеров кнопок=========================================
 
+@dp.message(F.text)
+@db_exception_handler
+async def handle_text(message: types.Message):
+    user_id = message.from_user.id
+    text = message.text.strip()
+
+    # Проверяем, есть ли у пользователя активный курс
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute("SELECT course_id FROM user_courses WHERE user_id = ? AND status = 'active'", (user_id,))
+        active_course = await cursor.fetchone()
+
+    if active_course:  # Если курс активен → текст считаем ДЗ
+        await handle_text_homework(message)
+    else:  # Если нет курса → текст считаем кодом активации
+        await handle_activation_code(message)
+
+
+async def handle_text_homework(message: types.Message):
+    user_id = message.from_user.id
+    text = message.text
+
+    # Получаем данные о курсе
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute("""
+            SELECT course_id, current_lesson, version_id 
+            FROM user_courses 
+            WHERE user_id = ? AND status = 'active'
+        """, (user_id,))
+        user_course_data = await cursor.fetchone()
+
+    if not user_course_data:
+        return
+
+    course_id, current_lesson, version_id = user_course_data
+
+    # Если тариф v1 → самопроверка
+    if version_id == 'v1':
+        await message.answer("✅ Текстовая домашка принята для самопроверки!")
+        return
+
+    # Отправляем админам
+    admin_message = (
+        f"📝 Текстовая домашка от @{message.from_user.username}\n"
+        f"Курс: {course_id}\nУрок: {current_lesson}\n\n"
+        f"{text}"
+    )
+    await bot.send_message(ADMIN_GROUP_ID, admin_message)
+    await message.answer("✅ Текстовая домашка на проверке!")
+
 # Обработчик последний - чтобы не мешал другим обработчикам работать. Порядок имеет значение
-@dp.message(F.text)  # Фильтр только для текстовых сообщений
-async def process_message(message: types.Message):
+#@dp.message(F.text)  # Фильтр только для текстовых сообщений
+async def handle_activation_code(message: types.Message): # handle_activation_code process_message
     """Проверяет код активации и выдаёт уроки, если всё окей"""
     user_id = message.from_user.id
     code = message.text.strip().lower()  # Приводим к нижнему регистру
@@ -2688,18 +2918,39 @@ async def process_message(message: types.Message):
                     existing_enrollment = await cursor.fetchone()
 
                     if existing_enrollment:
-                        await message.answer("Этот курс уже активирован.", reply_markup=get_main_menu_inline_keyboard())
+                        await message.answer("Этот курс уже активирован.")
+                        # Load 0 lesson
+                        await send_course_description(user_id, course_id)
+
+                        # Generate keyboard
+                        keyboard = get_main_menu_inline_keyboard(
+                            course_id=course_id,
+                            lesson_num=0,  # Для описания курса ставим урок 0
+                            user_tariff=version_id,
+                            homework_pending=False
+                        )
+                        await message.answer("Главное меню:", reply_markup=keyboard)
                     else:
                         await conn.execute("""
-                            INSERT INTO user_courses (user_id, course_id, version_id, status, activation_date)
-                            VALUES (?, ?, ?, 'active', CURRENT_TIMESTAMP)
+                            INSERT OR REPLACE INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date)
+                            VALUES (?, ?, ?, 'active', 1, CURRENT_TIMESTAMP)
                         """, (user_id, course_id, version_id))
 
                         await conn.commit()
                         await log_user_activity(user_id, "COURSE_ACTIVATION",
                                                 f"Курс {course_id} активирован с кодом {message.text.strip()}")
-                        await message.answer("Курс успешно активирован!\nИспользуйте кнопки ниже для навигации.",
-                                             reply_markup=get_main_menu_inline_keyboard())
+
+                        # Load 0 lesson
+                        await send_course_description(user_id, course_id)
+
+                        # Generate keyboard
+                        keyboard = get_main_menu_inline_keyboard(
+                            course_id=course_id,
+                            lesson_num=0,  # Для описания курса ставим урок 0
+                            user_tariff=version_id,
+                            homework_pending=False
+                        )
+                        await message.answer("Курс успешно активирован!\nГлавное меню:", reply_markup=keyboard)
             except Exception as e:
                 logger.error(f"Ошибка при активации курса: {e}")
                 await message.answer("Произошла ошибка при активации курса.")
@@ -2740,8 +2991,12 @@ async def handle_document(message: types.Message):
 
 #=======================Конец обработчиков текстовых сообщений=========================================
 
-# Запуск бота
+
+
+
+
 async def main():
+    logger.info("Запуск main()...")
     global settings, COURSE_GROUPS
     # Инициализация базы данных
     await init_db()
@@ -2750,6 +3005,9 @@ async def main():
 
     COURSE_GROUPS = list(map(int, settings.get("groups", {}).keys()))  # load to value too
     logger.info(f"555  {COURSE_GROUPS=}")
+
+
+
     await import_settings_to_db()
     await asyncio.sleep(0.2) # Небольшая задержка перед отправкой сообщения
     await send_startup_message(bot, ADMIN_GROUP_ID)  # Отправка сообщения в группу администраторов
@@ -2757,6 +3015,16 @@ async def main():
 
     # Запуск бота
     logger.info(f"Бот успешно запущен.")
+
+    logger.info("пускаем таймеры")
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute("SELECT user_id FROM users")
+        users = await cursor.fetchall()
+
+        for user in users:
+            await start_lesson_schedule_task(user[0])
+
+    logger.info("Начинаем dp.start_polling()...")  # Добавлено логирование перед запуском polling
     await dp.start_polling(bot)
 
 
