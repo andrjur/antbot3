@@ -157,7 +157,7 @@ async def check_lesson_schedule(user_id: int):
         async with aiosqlite.connect(DB_FILE) as conn:
             # Шаг 1: Получаем активный курс пользователя
             cursor = await conn.execute("""
-                SELECT course_id, current_lesson, last_lesson_sent_time 
+                SELECT course_id, current_lesson, first_lesson_sent_time, last_lesson_sent_time 
                 FROM user_courses 
                 WHERE user_id = ? AND status = 'active'
             """, (user_id,))
@@ -167,7 +167,7 @@ async def check_lesson_schedule(user_id: int):
                 logger.info(f"❌ У пользователя {user_id} нет активных курсов.")
                 return
 
-            course_id, current_lesson, last_sent_time = user_course
+            course_id, current_lesson, first_sent_time, last_sent_time = user_course
 
             # Шаг 2: Проверяем данные курса
             if current_lesson is None or current_lesson <= 0:
@@ -176,8 +176,12 @@ async def check_lesson_schedule(user_id: int):
 
             # Шаг 3: Проверяем расписание отправки уроков
             message_interval = settings.get("message_interval", 24)  # Часы между уроками
+            if first_sent_time:
+                logger.info(f"Проверяем время отправки c 1 урока {user_id}")
+                # todo: перенести сюда отправку
 
-            if last_sent_time:
+
+            if last_sent_time: # ненужная секция. Если время последнего урока отправлено
                 try:
                     last_sent = datetime.strptime(last_sent_time, '%Y-%m-%d %H:%M:%S')
                     next_lesson_time = last_sent + timedelta(hours=message_interval)
@@ -192,20 +196,23 @@ async def check_lesson_schedule(user_id: int):
                         #     "Пока можно повторить пройденное 📚"
                         # )
                         return
+                    else:
+                        logger.info(f"✅ время пришло. Тут высылать если от времени последнего отсылания")
+                        # Шаг 4: Отправляем урок и обновляем время
+                        await send_lesson_to_user(user_id, course_id, current_lesson)
+                        await conn.execute("""
+                                        UPDATE user_courses 
+                                        SET last_lesson_sent_time = CURRENT_TIMESTAMP 
+                                        WHERE user_id = ? AND course_id = ?
+                                    """, (user_id, course_id))
+                        await conn.commit()
 
                 except ValueError as ve:
                     logger.error(f"⚠️ Ошибка преобразования времени: {ve}")
                     await bot.send_message(user_id, "📛 Ошибка времени отправки урока. Мы уже чиним робота!")
                     return
 
-            # Шаг 4: Отправляем урок и обновляем время
-            await send_lesson_to_user(user_id, course_id, current_lesson)
-            await conn.execute("""
-                UPDATE user_courses 
-                SET last_lesson_sent_time = CURRENT_TIMESTAMP 
-                WHERE user_id = ? AND course_id = ?
-            """, (user_id, course_id))
-            await conn.commit()
+
 
     except Exception as e:
         logger.error(f"💥 Бот устал проверять уроки: {e}", exc_info=True)
@@ -420,6 +427,7 @@ async def init_db():
                     version_id TEXT,
                     status TEXT DEFAULT 'active',
                     current_lesson INTEGER DEFAULT 0,
+                    first_lesson_sent_time DATETIME,
                     last_lesson_sent_time DATETIME,
                     is_completed INTEGER DEFAULT 0,
                     activation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2253,7 +2261,12 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
                     WHERE user_id = ? AND course_id = ?
                 """, (user_id, course_id))
             current_lesson = (await cursor.fetchone())[0]
-            lesson_num=current_lesson
+            if current_lesson:
+                lesson_num = current_lesson
+            else:
+                logger.error(f"800 Пустой урок: {course_id} урок {current_lesson}")
+                lesson_num = 1
+
             logger.info(f"15 show_lesson_content {course_id=} {lesson_num=} ")
             # Получаем контент урока
             cursor = await conn.execute("""
@@ -2265,7 +2278,7 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
             lesson_content = await cursor.fetchall()
 
             if not lesson_content:
-                logger.error(f"Пустой урок: {course_id} урок {lesson_num}")
+                logger.error(f"900 Пустой уоньТент урока: {course_id} урок {lesson_num}")
                 await callback_query.answer("📭 Урок пуст")
                 return
 
@@ -2349,23 +2362,14 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
                 f"📚 Текущий урок: {current_lesson}"
                 f"{lesson_progress}"
             )
-            logger.info(f"1554 запишем в базу  current_lesson{current_lesson+1}  ")
-            await conn.execute("""
-                UPDATE user_courses 
-                SET current_lesson = ?
-                WHERE user_id = ? AND course_id = ?
-                """, (current_lesson+1, user_id, course_id))
-            await conn.commit()
-
-            # current_lesson из базы
-            cursor = await conn.execute("""
-                    SELECT current_lesson 
-                    FROM user_courses 
+            if current_lesson==0:
+                logger.info(f"1554 запишем в базу  current_lesson{1}  ")
+                await conn.execute("""
+                    UPDATE user_courses 
+                    SET current_lesson = ?
                     WHERE user_id = ? AND course_id = ?
-                """, (user_id, course_id))
-            current_lesson = (await cursor.fetchone())[0]
-
-            logger.info(f"1555 считали из базы  {current_lesson=}  ")
+                    """, (1, user_id, course_id))
+                await conn.commit()
 
         if current_lesson == total_lessons:
             await bot.send_message(user_id, "🎉 Вы прошли все уроки курса!")
