@@ -9,7 +9,7 @@ from aiogram.filters import Command, CommandStart, BaseFilter
 from aiogram.filters.callback_data import CallbackData
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup,
-                           KeyboardButton, Message, CallbackQuery, ChatFullInfo)
+                           KeyboardButton, Message, CallbackQuery, ChatFullInfo, FSInputFile)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
@@ -1853,23 +1853,23 @@ async def check_homework_pending(user_id: int, course_id: str, lesson_num: int) 
 @db_exception_handler
 async def cmd_start(message: types.Message):
     """Обработчик команды /start."""
-    user_id = message.from_user.id
-    first_name = message.from_user.first_name
+    user = message.from_user
+    user_id = user.id
+    first_name = user.first_name or "Пользователь"
     logger.info(f"cmd_start {user_id}")
-    await start_lesson_schedule_task(message.from_user.id)
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Проверка существования пользователя
+            # Проверяем, есть ли пользователь в базе данных
             cursor = await conn.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
             user_exists = await cursor.fetchone()
 
             if not user_exists:
-                # Add new user
-                await conn.execute(
-                    "INSERT INTO users (user_id, username, first_name, last_name) VALUES (?, ?, ?, ?)",
-                    (user_id, message.from_user.username, first_name, message.from_user.last_name)
-                )
+                # Добавляем нового пользователя в базу данных
+                await conn.execute("""
+                    INSERT INTO users (user_id, username, first_name, last_name)
+                    VALUES (?, ?, ?, ?)
+                """, (user_id, user.username, user.first_name, user.last_name))
                 await conn.commit()
                 logger.info(f"New user added: {user_id}")
 
@@ -1891,13 +1891,31 @@ async def cmd_start(message: types.Message):
             """, (user_id,))
             current_course = await cursor.fetchone()
 
+            # Если у пользователя нет активного курса, предлагаем активировать
             if not current_course:
                 await message.answer("❌ Нет активных курсов. Активируйте курс через код")
+                try:
+                    if not os.path.exists("ask_parol.jpg"):
+                        raise FileNotFoundError("Файл ask_parol.jpg не найден")
+
+                    # InputFile должен принимать путь к файлу, а не открытый файл
+                    await bot.send_photo(
+                        chat_id=user_id,
+                        photo=types.FSInputFile("ask_parol.jpg")  # Используем FSInputFile для файловой системы
+                    )
+                except FileNotFoundError as fnf_error:
+                    logger.error(f"Файл не найден: {fnf_error}")
+                    await message.answer("⚠️ Произошла ошибка при отправке фотографии.")
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке фото: {e}", exc_info=True)
+                    await message.answer("⚠️ Произошла ошибка при отправке фотографии.")
+
                 return
 
             # Распаковываем данные активного курса, включая group_id
             course_id, lesson_num, version_id, course_name, version_name, status, group_id = current_course
             logger.info(f"cmd_start: active course - {course_id=}, {lesson_num=}, {version_id=}, {course_name=}, {version_name=}, {status=}, {group_id=}")
+            await start_lesson_schedule_task(message.from_user.id)
 
             # Получаем статистику по всем курсам пользователя (активные и завершенные)
             cursor = await conn.execute("""
@@ -1922,8 +1940,16 @@ async def cmd_start(message: types.Message):
             progress_data = await cursor.fetchone()
             total_lessons = progress_data[0] if progress_data and progress_data[0] is not None else 1  # Default to 1 if no lessons found
 
+            # current_lesson
+            cursor = await conn.execute("""
+                            SELECT current_lesson 
+                            FROM user_courses 
+                            WHERE user_id = ? AND course_id = ?
+                        """, (user_id, course_id))
+            current_lesson = (await cursor.fetchone())[0]
+
             # Кол-во завершенных уроков
-            completed_lessons_count = lesson_num
+            completed_lessons_count = current_lesson
             logger.info(f"cmd_start: course progress - {completed_lessons_count=}, {total_lessons=}")
 
             lesson_progress = (
@@ -2204,7 +2230,18 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             course_id = callback_data.course_id
-            lesson_num = callback_data.lesson_num
+            # lesson_num = callback_data.lesson_num # удаляем эту строчку
+
+            logger.info(f"77 show_lesson_content {course_id=} ")
+
+            # current_lesson из базы
+            cursor = await conn.execute("""
+                    SELECT current_lesson 
+                    FROM user_courses 
+                    WHERE user_id = ? AND course_id = ?
+                """, (user_id, course_id))
+            current_lesson = (await cursor.fetchone())[0]
+            lesson_num=current_lesson
             logger.info(f"15 show_lesson_content {course_id=} {lesson_num=} ")
             # Получаем контент урока
             cursor = await conn.execute("""
@@ -2288,12 +2325,26 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
                 f"📚 Текущий урок: {current_lesson}"
                 f"{lesson_progress}"
             )
-        await conn.execute("""
-        UPDATE user_courses 
-        SET current_lesson = ?
-        WHERE user_id = ? AND course_id = ?
-        """, (current_lesson+1, user_id, course_id))
-        await conn.commit()
+            await conn.execute("""
+                UPDATE user_courses 
+                SET current_lesson = ?
+                WHERE user_id = ? AND course_id = ?
+                """, (current_lesson+1, user_id, course_id))
+            await conn.commit()
+
+            # current_lesson из базы
+            cursor = await conn.execute("""
+                    SELECT current_lesson 
+                    FROM user_courses 
+                    WHERE user_id = ? AND course_id = ?
+                """, (user_id, course_id))
+            current_lesson = (await cursor.fetchone())[0]
+
+            logger.info(f"1555 считали из базы  {current_lesson=}  ")
+
+        if current_lesson == total_lessons:
+            await bot.send_message(user_id, "🎉 Вы прошли все уроки курса!")
+            await callback_query.message.delete()
 
         await bot.send_message(user_id, message, reply_markup=keyboard)
         await callback_query.answer()
