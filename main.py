@@ -152,7 +152,7 @@ last_stats_sent = None
 @db_exception_handler
 async def check_lesson_schedule(user_id: int):
     """Проверяет расписание уроков и отправляет урок, если пришло время."""
-    logger.info(f" check_lesson_schedule Проверка расписания уроков для пользователя {user_id}")
+    logger.info(f"🔄  check_lesson_schedule Проверка расписания уроков для пользователя {user_id}")
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             # Шаг 1: Получаем активный курс пользователя
@@ -164,46 +164,51 @@ async def check_lesson_schedule(user_id: int):
             user_course = await cursor.fetchone()
 
             if not user_course:
-                logger.info(f"У пользователя {user_id} нет активных курсов.")
+                logger.info(f"❌ У пользователя {user_id} нет активных курсов.")
                 return
 
             course_id, current_lesson, last_sent_time = user_course
 
-            # Шаг 2: Для первого урока — отправляем сразу
-            if current_lesson == 1:
-                logger.info(f"🎁 Первый урок для {user_id} — отправляем без проверок")
-                #await send_lesson_to_user(user_id, course_id, current_lesson) - вот эту строку нужно убрать
+            # Шаг 2: Проверяем данные курса
+            if current_lesson is None or current_lesson <= 0:
+                logger.error(f"⚠️ Некорректный номер текущего урока: {current_lesson} для пользователя {user_id}")
                 return
 
-                # Шаг 3: Для уроков со второго — проверяем время
-                message_interval = settings.get("message_interval", 24)  # Часы между уроками
+            # Шаг 3: Проверяем расписание отправки уроков
+            message_interval = settings.get("message_interval", 24)  # Часы между уроками
 
-                if last_sent_time:
-                    last_sent = datetime.datetime.strptime(last_sent_time, '%Y-%m-%d %H:%M:%S')
+            if last_sent_time:
+                try:
+                    last_sent = datetime.strptime(last_sent_time, '%Y-%m-%d %H:%M:%S')
                     next_lesson_time = last_sent + timedelta(hours=message_interval)
 
-                    if datetime.datetime.now() < next_lesson_time:
-                        time_left = next_lesson_time - datetime.datetime.now()
-                        hours = time_left.seconds // 3600
-                        minutes = (time_left.seconds % 3600) // 60
-                        await bot.send_message(
-                            user_id,
-                            f"⏳ Следующий урок через {hours} ч. {minutes} мин.\n"
-                            "Пока можно повторить пройденное 📚"
-                        )
+                    if datetime.now() < next_lesson_time:
+                        # time_left = next_lesson_time - datetime.now()
+                        # hours = time_left.seconds // 3600
+                        # minutes = (time_left.seconds % 3600) // 60
+                        # await bot.send_message(
+                        #     user_id,
+                        #     f"⏳ Следующий урок через {hours} ч. {minutes} мин.\n"
+                        #     "Пока можно повторить пройденное 📚"
+                        # )
                         return
 
-                # Шаг 4: Отправляем урок и обновляем время
-                #await send_lesson_to_user(user_id, course_id, current_lesson)
-                await conn.execute("""
-                               UPDATE user_courses 
-                               SET last_lesson_sent_time = CURRENT_TIMESTAMP 
-                               WHERE user_id = ? AND course_id = ?
-                           """, (user_id, course_id))
-                await conn.commit()
+                except ValueError as ve:
+                    logger.error(f"⚠️ Ошибка преобразования времени: {ve}")
+                    await bot.send_message(user_id, "📛 Ошибка времени отправки урока. Мы уже чиним робота!")
+                    return
+
+            # Шаг 4: Отправляем урок и обновляем время
+            await send_lesson_to_user(user_id, course_id, current_lesson)
+            await conn.execute("""
+                UPDATE user_courses 
+                SET last_lesson_sent_time = CURRENT_TIMESTAMP 
+                WHERE user_id = ? AND course_id = ?
+            """, (user_id, course_id))
+            await conn.commit()
 
     except Exception as e:
-        logger.error(f"💥 Бот устал проверять уроки: {e}")
+        logger.error(f"💥 Бот устал проверять уроки: {e}", exc_info=True)
         await bot.send_message(user_id, "📛 Ошибка расписания. Мы уже чиним робота!")
 
 
@@ -853,8 +858,11 @@ async def check_group_access(bot: Bot, raw_id: str, course_name: str):
 async def save_message_to_db(group_id: int, message: Message):
     """Сохранение сообщения в базу данных."""
     global lesson_stack, last_message_info
-    logger.info(f"Saving message {message.message_id} from group {group_id}")
+    group_id = str(message.chat.id)
+    mes_id = message.message_id
+    logger.info(f"Saving message {mes_id=} from group {group_id=}")
 
+    # Шаг 1: Определение course_id для данного group_id
     logger.info(f"777 ищем course_id для group_id {group_id}.")
     course_id = next(
         (course for g, course in settings["groups"].items() if g == str(group_id)),
@@ -866,6 +874,7 @@ async def save_message_to_db(group_id: int, message: Message):
         return
     logger.info(f"777 это {course_id=}.")
 
+    # Определение типа контента и извлечение file_id
     text = message.text or ""
     user_id = message.from_user.id if message.from_user else None
     file_id = message.photo[-1].file_id if message.photo else (message.document.file_id if message.document else None)
@@ -959,6 +968,8 @@ async def save_message_to_db(group_id: int, message: Message):
         elif message.content_type == "document":
             file_id = message.document.file_id
             text = message.caption  # Подпись к документу
+        elif message.content_type == "audio" and message.audio:
+            file_id = message.audio.file_id
         else:
             file_id = None
             text = cleaned_text  # Обычный текст
@@ -1280,6 +1291,7 @@ class IsCourseGroupFilter(BaseFilter):
 @dp.message(IsCourseGroupFilter())
 @db_exception_handler # Обработчик новых сообщений в группах курсов
 async def handle_group_message(message: Message):
+    """Обрабатывает сообщения из группы."""
     logger.info(f"COURSE_GROUPS ПРИШЛО в {message.chat.id}, mes_id={message.message_id} {COURSE_GROUPS}")
 
     if message.chat.type == "private":
@@ -2266,6 +2278,8 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
                     await bot.send_photo(user_id, photo=file_id, caption=text or None)
                 elif content_type == "document" and file_id:
                     await bot.send_document(user_id, document=file_id, caption=text or None)
+                elif content_type == "audio" and file_id:
+                    await bot.send_audio(user_id, audio=file_id, caption=text or None)
                 elif text:
                     await bot.send_message(user_id, text=text)
 
@@ -2325,6 +2339,7 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
                 f"📚 Текущий урок: {current_lesson}"
                 f"{lesson_progress}"
             )
+            logger.info(f"1554 запишем в базу  current_lesson{current_lesson+1}  ")
             await conn.execute("""
                 UPDATE user_courses 
                 SET current_lesson = ?
