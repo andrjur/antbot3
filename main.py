@@ -2257,7 +2257,7 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
             logger.info(f"15 show_lesson_content {course_id=} {lesson_num=} ")
             # Получаем контент урока
             cursor = await conn.execute("""
-                SELECT text, content_type, file_id 
+                SELECT text, content_type, file_id, is_homework, hw_type
                 FROM group_messages 
                 WHERE course_id = ? AND lesson_num = ?
             """, (course_id, lesson_num))
@@ -2269,9 +2269,19 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
                 await callback_query.answer("📭 Урок пуст")
                 return
 
-            # Отправка контента с задержкой
-            for text, content_type, file_id in lesson_content:
-                logger.info(f"\nrow: {text=} | {content_type=} | {file_id=}")
+            ka="домашки нет"
+            # Отправка контента с микрозадержкой
+            for text, content_type, file_id, is_homework, hw_type in lesson_content:
+                logger.info(f"\nrow: {text=} | {content_type=} | {file_id=} {is_homework=}, {hw_type=}")
+                if is_homework:
+                    if hw_type == "photo":
+                        ka= "📸 Отправьте фото для домашнего задания"
+                    elif hw_type == "text":
+                        ka="📝 Отправьте текст для домашнего задания"
+                    elif hw_type == "video":
+                        ka= "📹 Отправьте видео для домашнего задания"
+                    elif hw_type == "any":
+                        ka= "📹 Отправьте для домашнего задания что угодно"
                 if content_type == "video" and file_id:
                     await bot.send_video(user_id, video=file_id, caption=text or None)
                 elif content_type == "photo" and file_id:
@@ -2333,7 +2343,7 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
             )
 
             message = (
-                f"Вам урок, {first_name}!\n\n"
+                f"{ka}, {first_name}!\n\n"
                 f"🎓 Курс: {course_name}\n"
                 f"🔑 Тариф: {user_tariff}\n"
                 f"📚 Текущий урок: {current_lesson}"
