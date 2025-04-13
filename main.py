@@ -185,6 +185,7 @@ async def check_lesson_schedule(user_id: int):
                 try:
                     last_sent = datetime.strptime(last_sent_time, '%Y-%m-%d %H:%M:%S')
                     next_lesson_time = last_sent + timedelta(hours=message_interval)
+                    logger.info(f"⏳{message_interval=} Следующий урок через {next_lesson_time} для пользователя {user_id} ")
 
                     if datetime.now() < next_lesson_time:
                         # time_left = next_lesson_time - datetime.now()
@@ -426,6 +427,7 @@ async def init_db():
                     course_id TEXT,
                     version_id TEXT,
                     status TEXT DEFAULT 'active',
+                    hw_status TEXT DEFAULT 'none',
                     current_lesson INTEGER DEFAULT 0,
                     first_lesson_sent_time DATETIME,
                     last_lesson_sent_time DATETIME,
@@ -592,70 +594,6 @@ async def get_course_status(user_id: int) -> tuple | None:
         return None
 
 
-# фоновая задача для проверки и отправки уведомлений о новых уроках.
-@db_exception_handler
-async def old_check_and_schedule_lessons():
-    """Background task to check and send scheduled lessons"""
-    logger.info("Starting check_and_schedule_lessons...")
-    while True:
-        try:
-            async with aiosqlite.connect(DB_FILE) as conn:
-                # Fetch all active user courses with scheduled lessons
-                cursor = await conn.execute(
-                    """
-                    SELECT uc.user_id, uc.course_id, uc.current_lesson
-                    FROM user_courses uc
-                    JOIN courses c ON uc.course_id = c.course_id
-                    WHERE uc.next_lesson_date <= CURRENT_TIMESTAMP
-                    AND uc.is_completed = 0
-                    AND c.is_active = 1
-                    """
-                )
-                user_lessons = await cursor.fetchall()
-
-                logger.info(f"Found {len(user_lessons)} user(s) with due lessons.")
-
-                for user_id, course_id, current_lesson in user_lessons:
-                    try:
-                        # Create a keyboard to start the lesson
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                            InlineKeyboardButton(
-                                text="Начать урок",
-                                callback_data=f"start_lesson:{course_id}:{current_lesson}"
-                            )
-                        ]])
-
-                        # Send the notification
-                        await bot.send_message(
-                            user_id,
-                            f"🔔 Доступен новый урок курса! Нажмите кнопку ниже, чтобы начать.",
-                            reply_markup=keyboard
-                        )
-
-                        # Update next lesson date to NULL to prevent repeated notifications
-                        await conn.execute(
-                            "UPDATE user_courses SET next_lesson_date = NULL WHERE user_id = ? AND course_id = ?",
-                            (user_id, course_id)
-                        )
-                        logger.info(
-                            f"Scheduled lesson notification sent for user {user_id}, course {course_id}, lesson {current_lesson}")
-
-                        # Log user activity
-                        await log_user_activity(user_id, "LESSON_AVAILABLE",
-                                                f"Course: {course_id}, Lesson: {current_lesson}")
-
-                    except Exception as e:
-                        logger.error(f"Failed to process or send scheduled lesson to user {user_id}: {e}")
-                await conn.commit()
-
-        except Exception as e:
-            logger.error(f"General error in check_and_schedule_lessons: {e}")
-
-        logger.info("Background task: check_and_schedule_lessons completed one cycle, sleeping for 60 seconds.")
-
-        # Check every minute
-        await asyncio.sleep(60)
-
 
 def generate_progress_bar(percent, length=10):
     """Generate a text progress bar"""
@@ -667,9 +605,9 @@ def generate_progress_bar(percent, length=10):
 # обработка содержимого ДЗ
 @db_exception_handler
 async def process_homework_submission(message: Message):
-    """Process homework submission from users"""
+    """принятие ДЗ"""
     user_id = message.from_user.id
-    logger.info(f"process_homework_submission {user_id=} ")
+    logger.info(f"process_homework_submission {user_id=} принятие ДЗ ")
     # Get course and lesson from context
     async with aiosqlite.connect(DB_FILE) as conn:
         cursor = await conn.execute(
@@ -1408,6 +1346,14 @@ async def approve_course(message: Message):
             await conn.commit()
         await bot.send_message(user_id, f"Ваш доступ к курсу '{course_id}' одобрен!")
         await send_lesson_to_user(user_id, course_id, 1)
+        # времена запишем чтоб было в базе
+        await conn.execute("""
+                UPDATE user_courses 
+                SET first_lesson_sent_time = CURRENT_TIMESTAMP, 
+                    last_lesson_sent_time = CURRENT_TIMESTAMP 
+                WHERE user_id = ? AND course_id = ?
+            """, (user_id, course_id))
+        await conn.commit()
     except Exception as e:
         await message.answer(f"Ошибка: {e}")
 
@@ -1498,7 +1444,7 @@ async def import_db(message: types.Message):  # types.Message instead of Message
         await message.answer("❌ Произошла ошибка при импорте базы данных.")
 
 
-
+# 13-04 просмотрено
 @dp.callback_query(F.chat.id == ADMIN_GROUP_ID,lambda c: c.data.startswith("approve_hw:") or c.data.startswith("reject_hw:"))
 @db_exception_handler
 async def handle_homework_decision(callback_query: CallbackQuery):
@@ -3196,6 +3142,36 @@ async def handle_document(message: types.Message):
         await message.answer("Документ получен!")
     except Exception as e:
         logger.error(f"Ошибка при обработке документа: {e}")
+
+
+# 13-04 Обновленные обработчики контента
+@dp.message(F.photo | F.video | F.document | F.text)
+async def handle_user_content(message: types.Message):
+    """Обработчик пользовательского контента для ДЗ"""
+    try:
+        # Проверяем контекст отправки ДЗ
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute(
+                "SELECT context_data FROM user_context WHERE user_id = ?",
+                (message.from_user.id,)
+            )
+            context = await cursor.fetchone()
+
+            if context and json.loads(context[0]).get("awaiting_hw"):
+                await process_homework_submission(message)
+            else:
+                # Обработка обычных сообщений
+                if message.content_type == "photo":
+                    await message.answer("📸 Фото получено!")
+                elif message.content_type == "video":
+                    await message.answer("🎥 Видео получено!")
+                elif message.content_type == "document":
+                    await message.answer("📄 Документ получен!")
+                elif message.text:
+                    await handle_activation_code(message)
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки контента: {e}")
 
 
 #=======================Конец обработчиков текстовых сообщений=========================================
