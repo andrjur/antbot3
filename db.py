@@ -96,6 +96,7 @@ async def init_db():
                     course_id TEXT,
                     version_id TEXT,
                     status TEXT DEFAULT 'active',
+                    hw_status TEXT DEFAULT 'none',
                     current_lesson INTEGER DEFAULT 0,
                     last_lesson_sent_time DATETIME,
                     is_completed INTEGER DEFAULT 0,
