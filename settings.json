@@ -1,5 +1,5 @@
 {
-    "message_interval": 0.04,
+    "message_interval": 0.02,
 	"tariff_names": {
 	    "v1": "Соло",
 	    "v2": "с проверкой",

@@ -34,6 +34,7 @@ async def init_db():
                     course_id TEXT PRIMARY KEY,
                     group_id TEXT,
                     title TEXT NOT NULL COLLATE NOCASE,
+                    message_interval REAL NOT NULL DEFAULT 24,
                     description TEXT COLLATE NOCASE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
