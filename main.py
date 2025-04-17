@@ -33,7 +33,7 @@ def setup_logging():
     log_file = 'bot.log'
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s %(name)s %(lineno)d - %(message)s  %(levelname)s',
+        format='%(asctime)s %(lineno)d [%(funcName)s] - %(message)s  %(levelname)s',
         datefmt='%H:%M:%S',
         handlers=[
             RotatingFileHandler(
@@ -53,13 +53,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения.")
 logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
-
-# Получение ADMIN_IDS с проверкой
-# admin_ids_raw = os.getenv("ADMIN_IDS", "")
-# try:
-#     ADMIN_IDS = [int(id.strip()) for id in admin_ids_raw.split(",") if id.strip().isdigit()]
-# except ValueError:
-#     raise ValueError("ADMIN_IDS содержит некорректные данные. Убедитесь, что это список чисел, разделенных запятыми.")
 
 ADMIN_GROUP_ID = int(os.getenv('ADMIN_GROUP_ID', 0))
 
@@ -470,7 +463,6 @@ async def check_lesson_schedule(user_id: int, hours = 24, minutes = 0):
         try:
             async with aiosqlite.connect(DB_FILE) as conn:
                 logger.info(f"✅ Успешно подключились к базе данных")
-                await asyncio.sleep(0.1)  # Дадим другим задачам немного времени
                 cursor = await conn.execute("""
                     SELECT course_id, current_lesson, version_id, 
                            last_lesson_sent_time, hw_status, last_menu_message_id
@@ -496,9 +488,9 @@ async def check_lesson_schedule(user_id: int, hours = 24, minutes = 0):
             logger.info(f"⏳ Ожидаем ДЗ или проверку: {hw_status=}")
             return
 
-        # Шаг 3: Проверка времени
+        # Шаг 3: Проверка времени - только если ДЗ не ждём
         message_interval = settings.get("message_interval", 24)
-        logger.info(f"✅ 13 {message_interval=}")
+        logger.info(f"⏳✅⏳ 13 {message_interval=}")
         if last_sent_time or (hours == 0 and minutes == 0):
             logger.info(f"✅ 2 14 {last_sent_time=}")
             try:
@@ -552,9 +544,9 @@ async def check_lesson_schedule(user_id: int, hours = 24, minutes = 0):
                                 logger.error(f"❌ Ошибка при обновлении menu_message_id: {e}")
 
                 else:  # Шаг 4: Отправка следующего урока +1
-                    logger.info(f"🔄🔄🔄 отправляем след урок: {course_id=} {current_lesson=} {user_id=}")
+                    logger.info(f"🔄🔄🔄 время пришло отправляем след урок: {course_id=} {current_lesson=} {user_id=}")
                     await send_lesson_to_user(user_id, course_id, current_lesson+1)
-                    logger.info(f"✅ 555 после  await send_lesson_to_user(user_id, course_id, current_lesson) ")
+                    logger.info(f"✅ 555 после  await send_lesson_to_user(user_id, course_id, current_lesson+1) ")
 
                     # Обновляем время последнего урока
                     now = datetime.now()
@@ -601,7 +593,7 @@ async def scheduled_lesson_check(user_id: int):
     """Запускает проверку расписания уроков для пользователя каждые 7 минут."""
     while True:
         await check_lesson_schedule(user_id)
-        await asyncio.sleep(2 * 60)  # Каждые 2 минут
+        await asyncio.sleep(2 * 60)  # Каждые 2 минуты
 
 async def send_admin_stats():
     """Отправляет статистику администраторам каждые 5 часов."""
@@ -1068,6 +1060,7 @@ def generate_progress_bar(percent, length=10):
     filled = int(percent / 100 * length)
     bar = "▓" * filled + "░" * (length - filled)
     return bar
+
 
 
 # Обновленная функция process_homework_submission
@@ -1888,6 +1881,8 @@ async def import_db(message: types.Message):  # types.Message instead of Message
         await message.answer("❌ Произошла ошибка при импорте базы данных.", parse_mode=None)
 
 
+
+
 # 13-04 просмотрено
 @dp.callback_query(HomeworkActionCallback.filter(F.action.in_({"approve_hw", "reject_hw"})))
 @db_exception_handler
@@ -2202,7 +2197,7 @@ async def process_rejection_reason(message: Message):
             context_data = await context_cursor.fetchone()
 
             if not context_data:
-                await message.reply("Контекст не найден. Попробуйте отклонить ДЗ заново.")
+                await message.reply("Контекст не найден. Попробуйте отклонить ДЗ заново.", parse_mode=None)
                 return
 
             user_id, course_id, lesson_num = context_data
@@ -2226,11 +2221,13 @@ async def process_rejection_reason(message: Message):
             await conn.execute("DELETE FROM admin_context WHERE user_id = ?", (admin_id,))  # Используем admin_id для удаления
             await conn.commit()
 
-            await message.reply("Причина отклонения отправлена пользователю.")
+            await message.reply("Причина отклонения отправлена пользователю.", parse_mode=None)
 
     except Exception as e:
         logger.error(f"Ошибка в process_rejection_reason: {e}", exc_info=True)
-        await message.reply("Произошла ошибка при обработке причины отклонения.")
+        await message.reply("Произошла ошибка при обработке причины отклонения.", parse_mode=None)
+
+
 
 
 
@@ -2801,6 +2798,26 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
             ADMIN_GROUP_ID,
             f"🚨 Ошибка у @{user.username}: {str(e)}", parse_mode=None)
 
+# данные о курсе пользователя courses.id:int, user_courses.current_lesson, user_courses.version_id
+async def get_user_course_data(user_id: int) -> tuple:
+    """
+    Получает данные о курсе пользователя (course_numeric_id, current_lesson, version_id).
+    Возвращает None, если нет активного курса.
+    """
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute("""
+            SELECT courses.id, user_courses.current_lesson, user_courses.version_id 
+            FROM user_courses 
+            JOIN courses ON user_courses.course_id = courses.course_id
+            WHERE user_courses.user_id = ? AND user_courses.status = 'active'
+        """, (user_id,))
+        user_course_data = await cursor.fetchone()
+        logger.info(f"776 {user_course_data=}  ")
+        if not user_course_data:
+            logger.warning(f"Нет активного курса для пользователя {user_id}")
+            return None
+    return user_course_data
+
 
 
 @dp.callback_query(F.data == "menu_progress")
@@ -2899,7 +2916,7 @@ async def select_course(message: Message):
     args = message.text.split()[1:]  # Получаем аргументы команды
     logger.info(f"select_course {user_id=}")
     if not args:
-        return await message.reply("Использование: /select_course <course_id>")
+        return await message.reply("Использование: /select_course <course_id>", parse_mode=None)
 
     course_id = args[0]
 
@@ -2907,14 +2924,14 @@ async def select_course(message: Message):
         # Проверяем, что курс существует
         cursor = await conn.execute("SELECT title FROM courses WHERE course_id = ?", (course_id,))
         if not (course := await cursor.fetchone()):
-            return await message.reply("Курс не найден.")
+            return await message.reply("Курс не найден.", parse_mode=None)
 
         # Проверяем регистрацию пользователя на курс
         cursor = await conn.execute(
             "SELECT 1 FROM user_courses WHERE user_id = ? AND course_id = ?", (user_id, course_id)
         )
         if not await cursor.fetchone():
-            return await message.reply("Вы не зарегистрированы на этот курс.")
+            return await message.reply("Вы не зарегистрированы на этот курс.", parse_mode=None)
 
         # Обновляем текущий курс в user_states
         await conn.execute(
@@ -2927,7 +2944,7 @@ async def select_course(message: Message):
         )
         await conn.commit()
 
-    await message.reply(f"Вы выбрали курс: {course[0]}")
+    await message.reply(f"Вы выбрали курс: {course[0]}", parse_mode=None)
 
 
 
@@ -3393,7 +3410,7 @@ async def activate_course(message: types.Message):
 # ==================== домашка фотка==================
 @dp.message(F.content_type.in_({'photo', 'document'}))
 @db_exception_handler
-async def handle_homework(message: types.Message):
+async def old_handle_homework(message: types.Message):
     """Обрабатывает отправку домашних заданий (фото/документы)"""
     user_id = message.from_user.id
     user_name = message.from_user.full_name
@@ -3610,49 +3627,129 @@ async def check_state(message: types.Message, state: FSMContext) -> bool:
 @db_exception_handler
 async def handle_text(message: types.Message, state: FSMContext):
     """
-    Обработчик текстовых сообщений.
-    Проверяет, является ли сообщение кодом активации, и активирует курс для пользователя.
-    Иначе предлагает ввести код активации.
+    Минималистичный обработчик текста. Проверяет курс и передаёт дальше.
     """
     user_id = message.from_user.id
     text = message.text.strip()
-    logger.info(f"37 handle_text  {text=} {user_id=}")
+    logger.info(f"handle_text: {text=} {user_id=}")
 
-    # Проверяем, является ли текст командой /cancel
     if text == "/cancel":
-        await message.reply("Действие отменено.")
+        await message.reply("Действие отменено.", parse_mode=None)
         return
 
-    # Проверяем, есть ли у пользователя активный курс
     async with aiosqlite.connect(DB_FILE) as conn:
-        cursor = await conn.execute("SELECT course_id FROM user_courses WHERE user_id = ? AND status = 'active'", (user_id,))
+        cursor = await conn.execute(
+            "SELECT course_id FROM user_courses WHERE user_id = ? AND status = 'active'",
+            (user_id,))
         active_course = await cursor.fetchone()
-        logger.info(f"13 handle_text {active_course=}")
+        logger.info(f"handle_text: active_course={active_course}")
 
-    if active_course:  # Если курс активен → текст считаем ДЗ
-        logger.info(f"14 handle_text {active_course=}")
-        await handle_text_homework(message)
-    else:  # Если нет курса → текст считаем кодом активации
-        logger.info(f"15 handle_text {active_course=}")
-        await handle_activation_code(message)
+    if active_course:
+        logger.info("handle_text: отправляем в handle_homework")
+    return await handle_homework(message)
 
-    # Проверяем, является ли текст кодом активации
-    async with aiosqlite.connect(DB_FILE) as conn:
-        cursor = await conn.execute("SELECT code_word FROM course_activation_codes WHERE code_word = ?", (text,))
-        activation_code = await cursor.fetchone()
 
-    if activation_code:
-        # Активируем курс для пользователя
-        is_activated, answer_message = await activate_course(user_id, text)
-        logger.info(f"11 handle_text activate_course   {is_activated=} {answer_message=}")
-        await message.reply(answer_message)
-    elif IsAdmin():
-        # 14-04 - проверяем, является ли пользователь админом? Если админ → пересылаем в админку
-        await handle_text_homework(message)
-        return  # Прекращаем дальнейшую обработку handle_text
+# ----------------- новый обработчик и текстовой домашки и фото --------------------
+@dp.message(F.content_type.in_({'photo', 'document', 'text'}))
+@db_exception_handler
+async def handle_homework(message: types.Message):
+    """Обрабатывает отправку домашних заданий (фото/документы/текст)"""
+    user_id = message.from_user.id
+    logger.info(f" новый обработчик и текстовой домашки и фото  17-04 {user_id=}")
+
+    # Получаем данные о курсе
+    user_course_data = await get_user_course_data(user_id)
+    if not user_course_data:
+        await message.answer("Не найден ваш активный курс для сдачи ДЗ.")
+        return
+
+    course_numeric_id, current_lesson, version_id = user_course_data
+    course_id = await get_course_id_str(course_numeric_id)
+
+    # Получаем имя пользователя для отображения в сообщении админам
+    user_name = md.quote(message.from_user.full_name)
+
+    # Создаем клавиатуру для админа (ДО формирования сообщения)
+    keyboard = create_admin_keyboard(
+        user_id=user_id,
+        course_id=course_numeric_id,
+        lesson_num=current_lesson,
+        message_id=message.message_id
+    )
+
+    # Формируем сообщение для админа в зависимости от типа контента
+    if message.text:
+        homework_type = "Текстовая домашка"
+        text = message.text.strip()
+        file_id = None
+        admin_message_content = f"✏️ Текст: {md.quote(text)}"
+    elif message.photo:
+        homework_type = "Домашка с фото"
+        text = message.caption or ""  # Получаем подпись к фото (если есть)
+        file_id = message.photo[-1].file_id  # Берем последнее (самое большое) фото
+        admin_message_content = f"📸 Фото: {file_id}\n✏️ Описание: {md.quote(text)}"
+    elif message.document:
+        homework_type = "Домашка с документом"
+        text = message.caption or ""  # Получаем подпись к документу (если есть)
+        file_id = message.document.file_id
+        admin_message_content = f"📎 Документ: {file_id}\n✏️ Описание: {md.quote(text)}"
     else:
-        # Если это обычный пользователь, то предлагаем ввести код активации.
-        await message.reply("Пожалуйста, введите код активации для активации курса.")
+        await message.answer("Неподдерживаемый тип контента.")
+        return
+
+    # Если тариф v1 → самопроверка
+    if version_id == 'v1':
+        try:
+            await message.answer(md.quote("✅ Домашка принята для самопроверки и будет одобрена автоматически!"), parse_mode=ParseMode.MARKDOWN_V2)
+            async with aiosqlite.connect(DB_FILE) as conn:
+                await conn.execute("""
+                    UPDATE user_courses 
+                    SET hw_status = 'approved'
+                    WHERE user_id = ? AND course_id = ?
+                """, (user_id, course_id))
+                await conn.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при отправке сообщения об авто-аппруве: {e}", exc_info=True)
+        return
+
+    # Формируем сообщение для админа
+    course_title = await get_course_title(course_numeric_id)
+    admin_message = (
+        f"📝 Новое ДЗ ({homework_type})\n"
+        f"👤 Пользователь: {user_name}\n"
+        f"📚 Курс: {md.quote(course_title)}\n"
+        f"⚡ Тариф: {version_id}\n"
+        f"📖 Урок: {current_lesson}\n"
+        f"{admin_message_content}"  # Добавляем контент в сообщение
+    )
+
+    try:
+        # Сохраняем информацию о ДЗ в базе данных (для последующей обработки админами)
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute("""
+                INSERT OR REPLACE INTO admin_context (user_id, course_id, lesson_num, text)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, course_numeric_id, current_lesson, f"{user_id}:{course_numeric_id}:{current_lesson}"))
+            await conn.commit()
+
+        # Отправляем сообщение админам
+        await bot.send_message(
+            ADMIN_GROUP_ID,
+            admin_message,
+            reply_markup=keyboard,
+            parse_mode=None  # если нет форматирования, иначе ParseMode.MARKDOWN_V2 если нужно
+        )
+
+        # Отправляем сообщение пользователю
+        await message.answer(
+            md.quote(f"✅ {homework_type} на проверке!"),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка отправки домашки админам: {e}", exc_info=True)
+
+
 
 # НАДО 17-04
 @db_exception_handler
@@ -3849,7 +3946,6 @@ async def send_message_to_user(user_id: int, text: str, reply_markup: InlineKeyb
         logger.error(f"Ошибка при отправке сообщения пользователю {user_id}: {e}", exc_info=True)
 
 
-
 # НАДО 17-04
 @dp.callback_query(AdminHomeworkCallback.filter(F.action == "approve_hw"))
 async def approve_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
@@ -3867,10 +3963,13 @@ async def approve_homework(callback_query: types.CallbackQuery, callback_data: A
         # Обновляем статус ДЗ в базе данных
         await update_homework_status(user_id, course_name, lesson_num, "approved")
 
+        # Получаем время следующего урока
+        next_lesson_time = await get_next_lesson_time(user_id, course_name)
+
         # Отправляем сообщение пользователю об одобрении ДЗ
         await bot.send_message(
             chat_id=user_id,
-            text=f"Ваше домашнее задание по курсу {course_name}, урок {lesson_num} одобрено! Следующий урок придёт по расписанию",
+            text=f"Ваше домашнее задание по курсу {course_name}, урок {lesson_num} одобрено! Следующий урок придёт по расписанию {next_lesson_time}",
             parse_mode=None
         )
 
@@ -4041,15 +4140,24 @@ async def reject_with_feedback(callback_query: types.CallbackQuery, callback_dat
         message_id = callback_data.message_id
         logger.info(f" reject_with_feedback {user_id=} {course_id=} {lesson_num=} {message_id=} ")
         await callback_query.answer()
-        await state.update_data(user_id=user_id, course_id=course_id, lesson_num=lesson_num, message_id=message_id, action="reject")
-        await bot.edit_message_text(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id, text="Wait for admin message")
+        await state.update_data(
+            user_id=user_id,
+            course_id=course_id,
+            lesson_num=lesson_num,
+            message_id=message_id,
+            action="reject",
+            admin_id=callback_query.from_user.id  # ID админа
+        )
+        await bot.edit_message_text(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id, text="Ожидаю сообщение с причиной отказа от администратора")
         await state.set_state(Form.feedback)  # переключаем в режим ожидания фидбека
+
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении данных для фидбека: {e}")
 
-@dp.message(Form.feedback, F.chat.id == ADMIN_GROUP_ID) # 18-04
-async def process_feedback(message: types.Message, state: FSMContext):
-    """Process feedback from admin and finalize approval"""
+# Обработчик получения текста причины отказа и завершения процесса
+@dp.message(Form.feedback)
+async def process_rejection_feedback(message: types.Message, state: FSMContext):
+    """Process feedback from admin and finalize rejection"""
     try:
         feedback_text = message.text
         data = await state.get_data()
@@ -4057,37 +4165,36 @@ async def process_feedback(message: types.Message, state: FSMContext):
         course_id = data.get("course_id")
         lesson_num = data.get("lesson_num")
         message_id = data.get("message_id")
-        admin_id = data.get("admin_id") # Получаем ID админа
+        admin_id = data.get("admin_id")  # Получаем ID админа
 
         admin_name = message.from_user.first_name or message.from_user.username or "Администратор"
 
         # Обновляем статус ДЗ в базе данных
-        await update_homework_status(user_id, course_id, lesson_num, "approved")
+        await update_homework_status(user_id, course_id, lesson_num, "rejected")
 
-        # Отправляем сообщение пользователю с фидбеком
+        # Отправляем сообщение пользователю с причиной отказа
         await bot.send_message(
             chat_id=user_id,
-            text=f"Ваше домашнее задание по курсу {course_id}, урок {lesson_num} одобрено {admin_name}!\n\n'{feedback_text}'"
+            text=f"К сожалению, ваше домашнее задание по курсу {course_id}, урок {lesson_num} отклонено.\n\nПричина: {feedback_text}\n\nПожалуйста, исправьте ошибки и отправьте задание на проверку снова."
         )
 
-         # Отправляем сообщение в группу админов
+        # Отправляем сообщение в группу админов
         await bot.send_message(
             chat_id=ADMIN_GROUP_ID,
-            text=f"Домашнее задание от пользователя {user_id} по курсу {course_id}, урок {lesson_num} одобрено администратором {admin_name} с сообщением: {feedback_text}"
+            text=f"Домашнее задание от пользователя {user_id} по курсу {course_id}, урок {lesson_num} отклонено администратором {admin_name} с причиной: {feedback_text}"
         )
 
         # Удаляем клавиатуру из исходного сообщения в группе админов
         await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID, message_id=message_id, reply_markup=None)
 
-        # Удаляем сообщение с фидбеком от админа
+        # Удаляем сообщение с причиной отказа от админа
         await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=message.message_id)
 
-        await state.clear() #clear FSM
+        await state.clear()  # clear FSM
 
-        logger.info(f"ДЗ для user_id={user_id}, course_id={course_id}, lesson_num={lesson_num} одобрено с фидбеком.")
+        logger.info(f"ДЗ для user_id={user_id}, course_id={course_id}, lesson_num={lesson_num} отклонено с причиной.")
     except Exception as e:
-        logger.error(f"❌ Ошибка при обработке фидбека и одобрении ДЗ: {e}")
-
+        logger.error(f"❌ Ошибка при обработке причины отказа и отклонении ДЗ: {e}")
 
 
 # Обработчик последний - чтобы не мешал другим обработчикам работать. Порядок имеет значение
@@ -4184,6 +4291,41 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
     except Exception as e:
         logger.error(f"Общая ошибка в process_message: {e}", exc_info=True)
         await message.answer("Произошла общая ошибка. Пожалуйста, попробуйте позже.", parse_mode=None)
+
+
+
+async def get_next_lesson_time(user_id: int, course_id: str) -> str:
+    """Получает время следующего урока для пользователя."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Получаем время последнего отправленного урока
+            cursor = await conn.execute("""
+                SELECT last_lesson_sent_time
+                FROM user_courses
+                WHERE user_id = ? AND course_id = ? AND status = 'active'
+            """, (user_id, course_id))
+            result = await cursor.fetchone()
+
+            if not result or not result[0]:
+                return "в ближайшее время (как только появится в расписании)"
+
+            last_lesson_sent_time_str = result[0]
+            last_lesson_sent_time = datetime.fromisoformat(last_lesson_sent_time_str)
+
+            # Получаем интервал отправки уроков из настроек
+            lesson_interval_hours = settings["groups"].get(course_id, {}).get("lesson_interval", 24)
+
+            # Рассчитываем время следующего урока
+            next_lesson_time = last_lesson_sent_time + timedelta(hours=lesson_interval_hours)
+
+            # Форматируем время для отображения пользователю
+            formatted_time = next_lesson_time.strftime("%d.%m.%Y в %H:%M")
+
+            return formatted_time
+
+    except Exception as e:
+        logger.error(f"Ошибка при получении времени следующего урока: {e}", exc_info=True)
+        return "в ближайшее время (произошла ошибка при расчёте)"
 
 
 #  Обработчик входящего контента от пользователя
