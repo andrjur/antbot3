@@ -3860,7 +3860,7 @@ async def approve_homework(callback_query: types.CallbackQuery, callback_data: A
     lesson_num = callback_data.lesson_num
     message_id = callback_data.message_id
     course_name = callback_data.course_id # Оккам посоветовал
-    course_name = get_course_id_str(callback_data.course_id)
+    course_name = await get_course_id_str(callback_data.course_id)
     logger.info(f"553 {course_name=} {course_numeric_id=} {message_id=}")
 
     try:
@@ -3902,7 +3902,7 @@ async def reject_homework(callback_query: types.CallbackQuery, callback_data: Ad
     lesson_num = callback_data.lesson_num
     message_id = callback_data.message_id
     course_name = callback_data.course_id  # Оккам посоветовал
-    course_name = get_course_id_str(callback_data.course_id)
+    course_name = await get_course_id_str(callback_data.course_id)
 
     logger.info(f"555 course_name={course_name}")
 
