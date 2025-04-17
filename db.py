@@ -31,6 +31,7 @@ async def init_db():
             # Создаем таблицу courses  INSERT OR REPLACE INTO courses (course_id, title, group_id)
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS courses (
+                    id INTEGER AUTOINCREMENT,
                     course_id TEXT PRIMARY KEY,
                     group_id TEXT,
                     title TEXT NOT NULL COLLATE NOCASE,
