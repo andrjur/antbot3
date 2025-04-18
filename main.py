@@ -2216,36 +2216,78 @@ async def cmd_progress_callback(query: types.CallbackQuery):
     user_id = query.from_user.id
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Fetch all courses the user is enrolled in
+            # Получаем все активные курсы пользователя
             cursor = await conn.execute("""
-                SELECT uc.course_id, c.title, uc.current_lesson
+                SELECT uc.course_id, c.title, uc.current_lesson, uc.activation_date, uc.version_id
                 FROM user_courses uc
                 JOIN courses c ON uc.course_id = c.course_id
-                WHERE uc.user_id = ?
+                WHERE uc.user_id = ? AND uc.status = 'active'
             """, (user_id,))
             courses = await cursor.fetchall()
 
             if not courses:
-                await query.answer("Вы не записаны ни на один курс.", show_alert=True)
+                await query.answer("Вы не записаны ни на один активный курс.", show_alert=True)
                 return
 
             progress_text = ""
-            for course_id, course_title, current_lesson in courses:
-                # Fetch total number of lessons for this course
-                cursor = await conn.execute("""
-                    SELECT COUNT(DISTINCT lesson_num) 
-                    FROM group_messages WHERE group_id = ?
-                """, (course_id,))
-                total_lessons = (await cursor.fetchone())[0]
-                progress_text += f"<b>{course_title}:</b>\n"
-                progress_text += f"  Пройдено {current_lesson} из {total_lessons} уроков.\n"
+            now = datetime.now()
 
-            await query.message.edit_text(progress_text, parse_mode="HTML")
+            for course_id, course_title, current_lesson, activation_date_str, version_id in courses:
+                # Получаем общее количество уроков курса
+                cursor = await conn.execute("""
+                    SELECT MAX(lesson_num) 
+                    FROM group_messages 
+                    WHERE course_id = ? AND lesson_num > 0
+                """, (course_id,))
+                total_lessons = (await cursor.fetchone())[0] or 0
+
+                # Считаем сколько дней прошло с активации
+                days_since_activation = "неизвестно"
+                if activation_date_str:
+                    try:
+                        activation_date = datetime.fromisoformat(activation_date_str)
+                        days_since_activation = (now - activation_date).days
+                    except ValueError:
+                        logger.warning(f"Некорректный формат даты активации: {activation_date_str}")
+
+                # Вычисляем процент прохождения
+                percent_complete = (current_lesson / total_lessons * 100) if total_lessons > 0 else 0
+
+                # Формируем текст прогресса
+                progress_text += (
+                    f"📚 {course_title} \n"
+                    f"  Пройдено уроков: {current_lesson} из {total_lessons} ({percent_complete:.1f}%)\n"
+                    f"  Дней с начала курса: {days_since_activation}\n\n"
+                )
+
+            # Добавляем заголовок с общим количеством активных курсов
+            total_active_courses = len(courses)
+            progress_text = f"📊 Ваш прогресс по {total_active_courses} активным курсам:\n\n" + progress_text
+
+            # Получаем клавиатуру для первого курса
+            if courses:
+                first_course_id, _, _, _, version_id = courses[0]
+                course_numeric_id = await get_course_id_int(first_course_id)
+                keyboard = get_main_menu_inline_keyboard(
+                    course_numeric_id,
+                    lesson_num=0,
+                    user_tariff=version_id
+                )
+            else:
+                keyboard = None
+
+            # Отправляем сообщение с прогрессом
+            await bot.send_message(
+                user_id,
+                progress_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+            await query.answer("✅ Прогресс обновлен.")
 
     except Exception as e:
-        logger.error(f"Error in cmd_progress: {e}")
-        await query.answer("Произошла ошибка при получении прогресса.", show_alert=True)
-
+        logger.error(f"Ошибка в cmd_progress_callback: {e}", exc_info=True)
+        await query.answer("⚠️ Произошла ошибка при получении прогресса.", show_alert=True)
 
 
 # 14-04 ночью - кнопка самоодобрения
@@ -2453,7 +2495,7 @@ async def process_feedback(message: types.Message, state: FSMContext):
 
         await handle_homework_result(user_id, course_id, course_numeric_id, lesson_num, admin_id, feedback_text, is_approved, callback_query)
 
-        await bot.send_message(message.from_user.id, "Обратная связь сохранена.", parse_mode=None)
+
     except Exception as e:
         logger.error(f"❌ Error in process_feedback: {e}", exc_info=True)
     finally:
@@ -2486,13 +2528,13 @@ async def handle_homework_result(user_id: int, course_id: str, course_numeric_id
         next_lesson_time = await get_next_lesson_time(user_id, course_id)
 
         if is_approved:
-            message_to_user = f"✅ Ваше домашнее задание по курсу *{escape_md(course_id)}*, {lesson_num} принято"
+            message_to_user = f"✅ Ваше домашнее задание по курсу {escape_md(course_id)}, {lesson_num} принято"
             if feedback_text:
-                message_to_user += f"\n\nАдминистратор:\n{escape_md(feedback_text)}"
+                message_to_user += f"\n\nАдминистратор написал:\n{escape_md(feedback_text)}"
 
             # ADD - Display timer - 24-04
             logger.info(f"3333 {next_lesson_time=}")
-            message_to_user += f"\n\n⏳ Следующий урок: {next_lesson_time}"
+            message_to_user += f"\n\n⏳ Следующий урок откроется: {next_lesson_time}"
             # END - Display timer - 24-04
         else:
             message_to_user = f"❌ Твоя домашка по *{escape_md(course_id)}*, lesson {lesson_num} отклонена"
