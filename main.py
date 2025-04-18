@@ -78,39 +78,7 @@ class CourseCallback(CallbackData, prefix="course"):
 
 # Callback data classes
 class AdminHomeworkCallback(CallbackData, prefix="admin_hw"):
-    action: str  # approve_hw/reject_hw
-    user_id: int
-    course_id: int
-    lesson_num: int
-    message_id: int
-
-class HomeworkActionCallback(CallbackData, prefix="hw_action"):
-    action: str  # approve/reject
-    user_id: int
-    course_id: int
-    lesson_num: int
-    message_id: int
-
-class RejectFinalCallback(CallbackData, prefix="reject_final"):
-    user_id: int
-    course_id: int
-    lesson_num: int
-    message_id: int
-    admin_id: int
-
-class ApproveWithFeedbackCallback(CallbackData, prefix="approve_feedback"):
-    user_id: int
-    course_id: int
-    lesson_num: int
-    message_id: int
-
-class RejectWithFeedbackCallback(CallbackData, prefix="reject_feedback"):
-    user_id: int
-    course_id: int
-    lesson_num: int
-    message_id: int
-
-class ApproveFinalCallback(CallbackData, prefix="approve_final"):
+    action: str  # approve_hw/reject_hw/approve_reason/reject_reason
     user_id: int
     course_id: int
     lesson_num: int
@@ -252,6 +220,89 @@ async def get_all_courses():
         return []
     return courses
 
+# 14-04 todo нафига
+async def get_all_courses_by_status(status='active'):
+    """Получает список всех активных курсов."""
+    logger.info(f"get_all_courses_by_status {status=}")
+    courses = []
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("SELECT course_id, title FROM courses WHERE status = ?", (status,))
+            rows = await cursor.fetchall()
+            courses = [(row[0], row[1]) for row in rows]
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка курсов: {e}")
+        return []
+    return courses
+
+# 14-04 todo нафига
+async def get_user_active_courses(user_id: int):
+    """Получает список активных курсов пользователя."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("""
+                SELECT uc.course_id, c.title
+                FROM user_courses uc
+                JOIN courses c ON uc.course_id = c.course_id
+                WHERE uc.user_id = ? AND uc.status = 'active'
+            """, (user_id,))
+            rows = await cursor.fetchall()
+            return [(row[0], row[1]) for row in rows]
+    except Exception as e:
+        logger.error(f"Ошибка при получении активных курсов пользователя: {e}")
+        return []
+
+# 14-04 todo нафига
+async def get_user_courses_count(user_id: int, status = 'active') -> int:
+    """Получает количество курсов пользователя."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM user_courses WHERE user_id = ? AND status = ?", (user_id, status))
+            result = await cursor.fetchone()
+            return result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Ошибка при получении количества курсов пользователя: {e}")
+        return 0
+
+# 14-04 todo нафига
+async def get_course_start_date(user_id: int, course_id: str):
+    """Получает дату старта курса для пользователя."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("SELECT start_date FROM user_courses WHERE user_id = ? AND course_id = ?", (user_id, course_id))
+            result = await cursor.fetchone()
+            if result:
+                start_date_str = result[0]  # Дата в формате ISO
+                return datetime.fromisoformat(start_date_str) if start_date_str else None
+            else:
+                return None
+    except Exception as e:
+        logger.error(f"Ошибка при получении даты старта курса: {e}")
+        return None
+
+# 14-04
+async def is_course_active(user_id: int, course_id: str) -> bool:
+    """Проверяет, активен ли курс у пользователя."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("SELECT 1 FROM user_courses WHERE user_id = ? AND course_id = ? AND status = 'active'", (user_id, course_id))
+            result = await cursor.fetchone()
+            return result is not None
+    except Exception as e:
+        logger.error(f"Ошибка при проверке активности курса: {e}")
+        return False
+
+# 14-04 todo нафига. use get_user_active_courses. get_user_active_courses and is_course_active
+async def get_user_courses(user_id: int) -> list:
+    """Получает список всех курсов пользователя."""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("SELECT course_id, status FROM user_courses WHERE user_id = ?", (user_id,))
+            rows = await cursor.fetchall()
+            return rows
+    except Exception as e:
+        logger.error(f"Ошибка при получении курсов пользователя: {e}")
+        return []
 
 # course_numeric_id = await get_course_id_int(course_id)
 async def get_course_id_int(course_id: str) -> int:
@@ -479,7 +530,8 @@ async def check_lesson_schedule(user_id: int, hours = 24, minutes = 0):
                                 chat_id=user_id,
                                 message_id=menu_message_id,
                                 text=time_message,
-                                reply_markup=keyboard
+                                reply_markup=keyboard,
+                                parse_mode=None
                             )
                             logger.info(f"Тихо обновили сообщение для {user_id}") # Обновили
 
@@ -1709,54 +1761,6 @@ async def update_settings_file():
         logger.error(f"Ошибка при обновлении файла settings.json: {e}")
 
 
-@dp.message(F.text, F.chat.id == ADMIN_GROUP_ID)
-@db_exception_handler
-async def process_rejection_reason(message: Message):
-    """Обрабатывает сообщение с причиной отклонения домашнего задания от админа."""
-    admin_id = message.from_user.id
-    logger.info(f"5557 Process request from admin to reject homework: {admin_id} ")
-    rejection_reason = message.text
-
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            # Получаем user_id, course_id, lesson_num из admin_context
-            context_cursor = await conn.execute("""
-                SELECT user_id, course_id, lesson_num FROM admin_context WHERE user_id = ?
-            """, (admin_id,))  # Используем admin_id для поиска
-            context_data = await context_cursor.fetchone()
-
-            if not context_data:
-                await message.reply("Контекст не найден. Попробуйте отклонить ДЗ заново.", parse_mode=None)
-                return
-
-            user_id, course_id, lesson_num = context_data
-
-            # Обновляем homework и устанавливаем статус "rejected"
-            await conn.execute("""
-                UPDATE homework SET status = 'rejected', admin_id = ?, 
-                decision_date = CURRENT_TIMESTAMP, rejection_reason = ?
-                WHERE user_id = ? AND course_id = ? AND lesson_num = ?
-            """, (admin_id, rejection_reason, user_id, course_id, lesson_num))
-            await conn.commit()
-
-            # Уведомляем пользователя об отклонении
-            await bot.send_message(
-                user_id,
-                f"❌ Ваше домашнее задание к уроку {lesson_num} курса '{course_id}' отклонено.\n"
-                f"Причина: {rejection_reason}\n\n"
-                "Вы можете отправить новое домашнее задание.", parse_mode=None)
-
-            # Удаляем контекст
-            await conn.execute("DELETE FROM admin_context WHERE user_id = ?", (admin_id,))  # Используем admin_id для удаления
-            await conn.commit()
-
-            await message.reply("Причина отклонения отправлена пользователю.", parse_mode=None)
-
-    except Exception as e:
-        logger.error(f"Ошибка в process_rejection_reason: {e}", exc_info=True)
-        await message.reply("Произошла ошибка при обработке причины отклонения.", parse_mode=None)
-
-
 
 
 # Команды для взаимодействия с пользователем - в конце, аминь.
@@ -2506,9 +2510,384 @@ def create_admin_keyboard(user_id: int, course_id: int, lesson_num: int, message
         ])
 
 
+
+async def send_message_to_user(user_id: int, text: str, reply_markup: InlineKeyboardMarkup = None):
+    """Утилита для отправки сообщения пользователю."""
+    try:
+        await bot.send_message(user_id, text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке сообщения пользователю {user_id}: {e}", exc_info=True)
+
+
+def get_tariff_name(version_id: str) -> str:
+    """Возвращает человекочитаемое название тарифа."""
+    TARIFF_NAMES = {
+        "v1": "Соло",
+        "v2": "Группа",
+        "v3": "VIP"
+    }
+    return TARIFF_NAMES.get(version_id, f"Тариф {version_id}")
+
+
+# НАДО 18-04
+@dp.callback_query(AdminHomeworkCallback.filter(F.action.in_(["approve_hw", "reject_hw", "approve_reason", "reject_reason"])))
+async def process_homework_action(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback, state: FSMContext):
+    """Handles approving, rejecting, or requesting feedback for homework."""
+    try:
+        user_id = callback_data.user_id
+        course_numeric_id = callback_data.course_id
+        course_id = await get_course_id_str(course_numeric_id)
+        lesson_num = callback_data.lesson_num
+        message_id = callback_data.message_id
+        action = callback_data.action
+
+        await callback_query.answer()
+
+        if action == "approve_hw":
+            await handle_homework_result(user_id, course_id, lesson_num, callback_query.from_user.id, "", True)
+        elif action == "reject_hw":
+            await handle_homework_result(user_id, course_id, lesson_num, callback_query.from_user.id, "", False)
+        elif action in ["approve_reason", "reject_reason"]:
+            # Store data and prompt for feedback
+            await state.update_data(
+                user_id=user_id,
+                course_id=course_id,
+                lesson_num=lesson_num,
+                message_id=message_id,
+                action=action.split("_")[0],  # "approve" or "reject"
+                admin_id=callback_query.from_user.id
+            )
+            text = "Ожидаю сообщение от администратора для одобрения/отклонения."
+            await bot.edit_message_text(
+                chat_id=ADMIN_GROUP_ID,
+                message_id=callback_query.message.message_id,
+                text=escape_md(text),  # Экранируем текст
+                parse_mode=None  # Указываем parse_mode
+            )
+            await state.set_state(Form.feedback)
+    except Exception as e:
+        logger.error(f"❌ Error in process_homework_action: {e}", exc_info=True)
+
+@dp.message(Form.feedback)
+async def process_feedback(message: types.Message, state: FSMContext):
+    """Process feedback from admin and finalize approval/rejection"""
+    try:
+        user_data = await state.get_data()
+        user_id = user_data.get("user_id")
+        course_id = user_data.get("course_id")
+        lesson_num = user_data.get("lesson_num")
+        admin_id = message.from_user.id
+        feedback_text = message.text
+        action = user_data.get("action")  # "approve" or "reject"
+
+        is_approved = action == "approve"
+
+        await handle_homework_result(user_id, course_id, lesson_num, admin_id, feedback_text, is_approved)
+        await bot.send_message(message.from_user.id, "Обратная связь сохранена.")
+    except Exception as e:
+        logger.error(f"❌ Error in process_feedback: {e}", exc_info=True)
+    finally:
+        await state.clear()
+
+# вызывается из process_feedback - вверху функция
+async def handle_homework_result(user_id: int, course_id: str, lesson_num: int, admin_id: int, feedback_text: str, is_approved: bool):
+    """
+    Handles both approving and rejecting homework, sending feedback to the user,
+    and notifying admins.
+    """
+    logger.info(F"handle_homework_result")
+    try:
+        # Determine the homework status
+        hw_status = "approved" if is_approved else "rejected"
+
+        # Update homework status in the database
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute(
+                """
+                UPDATE user_courses
+                SET hw_status = ?
+                WHERE user_id = ? AND course_id = ? AND current_lesson = ?
+                """,
+                (hw_status, user_id, course_id, lesson_num),
+            )
+            await conn.commit()
+
+        # Prepare the message for the user
+        if is_approved:
+            message_to_user = escape_md(f"✅ Твоя домашка по *{course_id}*, lesson {lesson_num} принята!")
+            if feedback_text:
+                message_to_user += f"\n\nFeedback from the administrator:\n{escape_md(feedback_text)}"
+
+        else:
+            message_to_user = escape_md(f"❌ Твоя домашка по *{course_id}*, lesson {lesson_num} отклонена!")
+            if feedback_text:
+                message_to_user += f"\n\nFeedback from the administrator:\n{escape_md(feedback_text)}"
+
+        # Send the message to the user
+        await send_message_to_user(user_id, message_to_user)
+
+        # Notify admins
+        user_name = await get_user_name(user_id)
+        notification_message = (
+            f"ДЗ от {user_name} ({user_id}) {course_id}, урок {lesson_num} "
+            f" {'Принято' if is_approved else 'Отклонено'} by administrator {admin_id}."
+        )
+
+        # Send the message to admin with the feedback text
+        await bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=notification_message,
+            parse_mode=None
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error handling homework result: {e}", exc_info=True)
+
+
+
+async def get_user_name(user_id: int) -> str:
+    """Получает имя пользователя по ID."""
+    try:
+        user = await bot.get_chat(user_id)
+        return user.first_name or user.username or str(user_id)
+    except Exception as e:
+        logger.error(f"Ошибка при получении имени пользователя: {e}")
+        return str(user_id)
+
+
+
+@dp.callback_query(AdminHomeworkCallback.filter(F.action == "approve_hw"))
+async def old_approve_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
+    """Approve a homework"""
+    logger.info(f"16 тут approve_homework {callback_data=}")
+    user_id = callback_data.user_id
+    course_numeric_id = callback_data.course_id  # Теперь это числовой ID
+    lesson_num = callback_data.lesson_num
+    message_id = callback_data.message_id
+    course_name = callback_data.course_id  # Оккам посоветовал
+    course_name = await get_course_id_str(callback_data.course_id)
+    logger.info(f"553 {course_name=} {course_numeric_id=} {message_id=}")
+
+    try:
+        # Обновляем статус ДЗ в базе данных
+        await update_homework_status(user_id, course_name, lesson_num, "approved")
+
+        # Получаем время следующего урока
+        next_lesson_time = await get_next_lesson_time(user_id, course_name)
+        logger.info(f"555 {next_lesson_time=}")
+        # Формируем текст для сообщения об одобрении ДЗ
+        approved_text = md.quote(f"Ваше домашнее задание по курсу {course_name}, урок {lesson_num} одобрено! ")
+
+        # Получаем имя пользователя и формируем приветственный текст
+        user = callback_query.from_user
+        welcome_text = md.quote(f"С возвращением, {user.first_name or user.username}!")
+
+        # Получаем название тарифа
+        async with aiosqlite.connect(DB_FILE) as conn:  # 19-04
+            version_id = await conn.execute(  # 19-04
+                "SELECT version_id FROM user_courses WHERE user_id = ? AND course_id = ?",
+                (user_id, course_name))
+            version_id = (await version_id.fetchone())[0]
+
+        tariff_name = get_tariff_name(version_id)
+
+        # Формируем текст для меню
+        menu_text = (
+            f"{welcome_text}\n\n"
+            f"🎓 Курс: {md.quote(course_name)}\n"
+            f"🔑 Тариф: {md.quote(tariff_name)}\n"
+            f"📚 Текущий урок: {lesson_num}\n"
+            f"⏳ Следующий урок: {md.quote(next_lesson_time)}"  # добавлено время
+        )
+
+        # Получаем клавиатуру для меню
+        keyboard = get_main_menu_inline_keyboard(course_numeric_id, lesson_num, version_id)  # 19-04
+
+        # Отправляем сообщение пользователю с текстом об одобрении ДЗ и меню
+        await bot.send_message(
+            chat_id=user_id,
+            text=approved_text + "\n\n" + menu_text,
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN_V2  # Для форматирования menu_text
+        )
+
+        # Получаем имя админа, который нажал кнопку
+        admin_name = callback_query.from_user.first_name or callback_query.from_user.username or "Администратор"
+
+        # Отправляем новое сообщение в группу админов вместо редактирования старого
+        await bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=f"ДЗ от {user.first_name or user.username} ({user_id}) по курсу {course_name}, урок {lesson_num} одобрено администратором {admin_name}.",
+            parse_mode=None
+        )
+
+        # Удаляем старое сообщение (опционально)
+        await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id)
+
+        await callback_query.answer()
+
+    except Exception as e:  # 18-04
+        logger.error(f"❌ Ошибка в функции approve_homework: {e}", exc_info=True)  # 18-04
+
+
+# НАДО 17-04
+@dp.callback_query(AdminHomeworkCallback.filter(F.action == "reject_hw"))
+async def old_reject_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
+    """Reject a homework"""
+    logger.info(f"16 тут reject_homework {callback_data=}")
+    user_id = callback_data.user_id
+    course_numeric_id = callback_data.course_id
+    lesson_num = callback_data.lesson_num
+    message_id = callback_data.message_id
+    course_name = callback_data.course_id  # Оккам посоветовал
+    course_name = await get_course_id_str(callback_data.course_id)
+
+    logger.info(f"555 course_name={course_name}")
+
+
+    try:
+        # Обновляем статус ДЗ в базе данных
+        await update_homework_status(user_id, course_name, lesson_num, "rejected")
+
+        # Отправляем сообщение пользователю об отклонении ДЗ
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"К сожалению, ваше домашнее задание по курсу {course_name}, урок {lesson_num} отклонено. Пожалуйста, переделайте его и отправьте снова.",
+            parse_mode = None
+        )
+
+        # Получаем имя админа, который нажал кнопку
+        admin_name = callback_query.from_user.first_name or callback_query.from_user.username or "Администратор"
+
+        # Отправляем новое сообщение в группу админов вместо редактирования старого
+        await bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=f"Домашнее задание от пользователя {user_id} по курсу {course_name}, урок {lesson_num} отклонено администратором {admin_name}.",
+            parse_mode=None
+        )
+
+        # Удаляем старое сообщение (опционально)
+        await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id)
+
+        await callback_query.answer()
+
+    except Exception as e:  # 18-04
+        logger.error(f"❌ Ошибка в функции reject_homework: {e}", exc_info=True)  # 18-04
+
+
+
+@dp.callback_query(AdminHomeworkCallback.filter(F.action.in_(["approve_reason", "reject_reason"])))
+async def old_approve_reason(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback, state: FSMContext):
+    """Approve/Reject with feedback - get text from admin"""
+    try:
+        user_id = callback_data.user_id
+        course_numeric_id = callback_data.course_id
+        course_id = await get_course_id_str(course_numeric_id)
+        lesson_num = callback_data.lesson_num
+        message_id = callback_data.message_id
+        action = callback_data.action.split("_")[0]  # "approve" or "reject"
+
+        await callback_query.answer()
+        await state.update_data(
+            user_id=user_id,
+            course_id=course_id,
+            lesson_num=lesson_num,
+            message_id=message_id,
+            action=action,  # "approve" or "reject"
+            admin_id=callback_query.from_user.id
+        )
+
+        # Prompt the admin to send a feedback message
+        if action == "approve":
+            text = "Ожидаю сообщение от администратора для одобрения."
+        else:
+            text = "Ожидаю сообщение от администратора для отклонения."
+
+        await bot.edit_message_text(
+            chat_id=ADMIN_GROUP_ID,
+            message_id=callback_query.message.message_id,
+            text=text,
+            parse_mode=None
+        )
+        await state.set_state(Form.feedback)  # переключаем в режим ожидания фидбека
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сохранении данных для фидбека: {e}")
+
+
+
+@dp.message(Form.feedback)
+async def old_process_feedback(message: types.Message, state: FSMContext):
+    """Process feedback from admin and finalize approval/rejection"""
+    user_data = await state.get_data()
+    user_id = user_data.get("user_id")
+    course_id = user_data.get("course_id")
+    lesson_num = user_data.get("lesson_num")
+    admin_id = message.from_user.id
+    feedback_text = message.text
+    action = user_data.get("action")  # "approve" or "reject"
+
+    is_approved = action == "approve"
+
+    await handle_homework_result(user_id, course_id, lesson_num, admin_id, feedback_text, is_approved)
+    await bot.send_message(message.from_user.id, "Обратная связь сохранена.")
+    await state.clear()
+
+
+
+@dp.message(F.text, F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def old_process_rejection_reason(message: Message):
+    """Обрабатывает сообщение с причиной отклонения домашнего задания от админа."""
+    admin_id = message.from_user.id
+    logger.info(f"5557 Process request from admin to reject homework: {admin_id} ")
+    rejection_reason = message.text
+
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Получаем user_id, course_id, lesson_num из admin_context
+            context_cursor = await conn.execute("""
+                SELECT user_id, course_id, lesson_num FROM admin_context WHERE user_id = ?
+            """, (admin_id,))  # Используем admin_id для поиска
+            context_data = await context_cursor.fetchone()
+
+            if not context_data:
+                await message.reply("Контекст не найден. Попробуйте отклонить ДЗ заново.", parse_mode=None)
+                return
+
+            user_id, course_id, lesson_num = context_data
+
+            # Обновляем homework и устанавливаем статус "rejected"
+            await conn.execute("""
+                UPDATE user_courses SET hw_status = 'rejected', admin_id = ?, 
+                WHERE user_id = ? AND course_id = ? AND lesson_num = ?
+            """, (admin_id, user_id, course_id, lesson_num))
+            await conn.commit()
+
+            # Уведомляем пользователя об отклонении
+            await bot.send_message(
+                user_id,
+                f"❌ Ваше домашнее задание к уроку {lesson_num} курса '{course_id}' отклонено.\n"
+                f"Причина: {rejection_reason}\n\n"
+                "Вы можете отправить новое домашнее задание.", parse_mode=None)
+
+            # Удаляем контекст
+            await conn.execute("DELETE FROM admin_context WHERE user_id = ?", (admin_id,))  # Используем admin_id для удаления
+            await conn.commit()
+
+            await message.reply("Причина отклонения отправлена пользователю.", parse_mode=None)
+
+    except Exception as e:
+        logger.error(f"Ошибка в process_rejection_reason: {e}", exc_info=True)
+        await message.reply("Произошла ошибка при обработке причины отклонения.", parse_mode=None)
+
+
+
 # 14-04
 @dp.message(F.text, IsAdmin())
-async def handle_text_homework(message: types.Message):
+async def old_handle_text_homework(message: types.Message):
     """
     Обработчик текстовых домашек, которые присылают пользователи.
     Работает только для админов (проверяется фильтром IsAdmin).
@@ -2606,307 +2985,6 @@ async def handle_text_homework(message: types.Message):
     except Exception as e:
         logger.error(f"❌ Ошибка отправки домашки админам: {e}", exc_info=True)
 
-
-
-async def send_message_to_user(user_id: int, text: str, reply_markup: InlineKeyboardMarkup = None):
-    """Утилита для отправки сообщения пользователю."""
-    try:
-        await bot.send_message(user_id, text, reply_markup=reply_markup)
-    except TelegramBadRequest as e:
-        logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
-    except Exception as e:
-        logger.error(f"Ошибка при отправке сообщения пользователю {user_id}: {e}", exc_info=True)
-
-
-def get_tariff_name(version_id: str) -> str:
-    """Возвращает человекочитаемое название тарифа."""
-    TARIFF_NAMES = {
-        "v1": "Соло",
-        "v2": "Группа",
-        "v3": "VIP"
-    }
-    return TARIFF_NAMES.get(version_id, f"Тариф {version_id}")
-
-
-# НАДО 17-04
-@dp.callback_query(AdminHomeworkCallback.filter(F.action == "approve_hw"))
-async def approve_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
-    """Approve a homework"""
-    logger.info(f"16 тут approve_homework {callback_data=}")
-    user_id = callback_data.user_id
-    course_numeric_id = callback_data.course_id  # Теперь это числовой ID
-    lesson_num = callback_data.lesson_num
-    message_id = callback_data.message_id
-    course_name = callback_data.course_id  # Оккам посоветовал
-    course_name = await get_course_id_str(callback_data.course_id)
-    logger.info(f"553 {course_name=} {course_numeric_id=} {message_id=}")
-
-    try:
-        # Обновляем статус ДЗ в базе данных
-        await update_homework_status(user_id, course_name, lesson_num, "approved")
-
-        # Получаем время следующего урока
-        next_lesson_time = await get_next_lesson_time(user_id, course_name)
-        logger.info(f"555 {next_lesson_time=}")
-        # Формируем текст для сообщения об одобрении ДЗ
-        approved_text = md.quote(f"Ваше домашнее задание по курсу {course_name}, урок {lesson_num} одобрено! ")
-
-        # Получаем имя пользователя и формируем приветственный текст
-        user = callback_query.from_user
-        welcome_text = md.quote(f"С возвращением, {user.first_name or user.username}!")
-
-        # Получаем название тарифа
-        async with aiosqlite.connect(DB_FILE) as conn:  # 19-04
-            version_id = await conn.execute(  # 19-04
-                "SELECT version_id FROM user_courses WHERE user_id = ? AND course_id = ?",
-                (user_id, course_name))
-            version_id = (await version_id.fetchone())[0]
-
-        tariff_name = get_tariff_name(version_id)
-
-        # Формируем текст для меню
-        menu_text = (
-            f"{welcome_text}\n\n"
-            f"🎓 Курс: {md.quote(course_name)}\n"
-            f"🔑 Тариф: {md.quote(tariff_name)}\n"
-            f"📚 Текущий урок: {lesson_num}\n"
-            f"⏳ Следующий урок: {md.quote(next_lesson_time)}"  # добавлено время
-        )
-
-        # Получаем клавиатуру для меню
-        keyboard = get_main_menu_inline_keyboard(course_numeric_id, lesson_num, version_id)  # 19-04
-
-        # Отправляем сообщение пользователю с текстом об одобрении ДЗ и меню
-        await bot.send_message(
-            chat_id=user_id,
-            text=approved_text + "\n\n" + menu_text,
-            reply_markup=keyboard,
-            parse_mode=ParseMode.MARKDOWN_V2  # Для форматирования menu_text
-        )
-
-        # Получаем имя админа, который нажал кнопку
-        admin_name = callback_query.from_user.first_name or callback_query.from_user.username or "Администратор"
-
-        # Отправляем новое сообщение в группу админов вместо редактирования старого
-        await bot.send_message(
-            chat_id=ADMIN_GROUP_ID,
-            text=f"ДЗ от {user.first_name or user.username} ({user_id}) по курсу {course_name}, урок {lesson_num} одобрено администратором {admin_name}.",
-            parse_mode=None
-        )
-
-        # Удаляем старое сообщение (опционально)
-        await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id)
-
-        await callback_query.answer()
-
-    except Exception as e:  # 18-04
-        logger.error(f"❌ Ошибка в функции approve_homework: {e}", exc_info=True)  # 18-04
-
-
-# НАДО 17-04
-@dp.callback_query(AdminHomeworkCallback.filter(F.action == "reject_hw"))
-async def reject_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
-    """Reject a homework"""
-    logger.info(f"16 тут reject_homework {callback_data=}")
-    user_id = callback_data.user_id
-    course_numeric_id = callback_data.course_id
-    lesson_num = callback_data.lesson_num
-    message_id = callback_data.message_id
-    course_name = callback_data.course_id  # Оккам посоветовал
-    course_name = await get_course_id_str(callback_data.course_id)
-
-    logger.info(f"555 course_name={course_name}")
-
-
-    try:
-        # Обновляем статус ДЗ в базе данных
-        await update_homework_status(user_id, course_name, lesson_num, "rejected")
-
-        # Отправляем сообщение пользователю об отклонении ДЗ
-        await bot.send_message(
-            chat_id=user_id,
-            text=f"К сожалению, ваше домашнее задание по курсу {course_name}, урок {lesson_num} отклонено. Пожалуйста, переделайте его и отправьте снова.",
-            parse_mode = None
-        )
-
-        # Получаем имя админа, который нажал кнопку
-        admin_name = callback_query.from_user.first_name or callback_query.from_user.username or "Администратор"
-
-        # Отправляем новое сообщение в группу админов вместо редактирования старого
-        await bot.send_message(
-            chat_id=ADMIN_GROUP_ID,
-            text=f"Домашнее задание от пользователя {user_id} по курсу {course_name}, урок {lesson_num} отклонено администратором {admin_name}.",
-            parse_mode=None
-        )
-
-        # Удаляем старое сообщение (опционально)
-        await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id)
-
-        await callback_query.answer()
-
-    except Exception as e:  # 18-04
-        logger.error(f"❌ Ошибка в функции reject_homework: {e}", exc_info=True)  # 18-04
-
-
-@dp.callback_query(ApproveFinalCallback.filter())
-async def approve_final(callback_query: types.CallbackQuery, callback_data: ApproveFinalCallback):
-    """Final approve"""
-    try:
-        user_id = callback_data.user_id
-        course_numeric_id = callback_data.course_id
-        course_id = await get_course_id_str(course_numeric_id)
-
-        lesson_num = callback_data.lesson_num
-        message_id = callback_data.message_id
-
-        message_to_user = escape_md(f"✅ Следующий урок {course_id} — {lesson_num}!")  # Sanitize info
-
-        await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID, message_id=message_id, reply_markup=None)
-
-        # Send results
-        logger.info(f" before DB write")
-
-        # Grab user object
-        async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute("""
-                UPDATE user_courses 
-                SET hw_status = 'approved'
-                WHERE user_id = ? AND course_id = ? AND current_lesson= ?
-            """, (user_id, course_id, lesson_num))
-            await conn.commit()
-        logger.info(f" забубенили {user_id=} {course_id=} {lesson_num=} ")
-        await send_message_to_user(str(user_id),message_to_user)
-
-        #await check_lesson_schedule(int(user_id)) #отправляем следующий урок
-
-        await callback_query.answer() #close query
-    except Exception as e:
-        logger.error(f"❌ Ошибка при изменение статуса домашки: {e}")
-
-
-@dp.callback_query(RejectFinalCallback.filter())
-async def reject_final(callback_query: types.CallbackQuery, callback_data: RejectFinalCallback):
-    """Final reject"""
-    try:
-        user_id = callback_data.user_id
-        course_numeric_id = callback_data.course_id
-        course_id = await get_course_id_str(course_numeric_id)
-
-        lesson_num = callback_data.lesson_num
-        message_id = callback_data.message_id
-        admin_id = callback_data.admin_id
-
-        message_to_user = f"❌ Your homework for course *{course_id}*, lesson {lesson_num} has been rejected\\!"  # 17-04
-        await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID, message_id=message_id, reply_markup=None)  # 17-04
-
-        async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute("""
-                UPDATE user_courses 
-                SET hw_status = 'rejected'
-                WHERE user_id = ? AND course_id = ? AND current_lesson= ?
-            """, (user_id, course_id, lesson_num))
-            await conn.commit()
-
-             # Удаляем контекст из admin_context
-            await conn.execute("DELETE FROM admin_context WHERE user_id = ?", (admin_id,))  # Опять Admin_id!
-            await conn.commit()
-
-        await send_message_to_user(int(user_id), message_to_user)  # 17-04 int()
-        await callback_query.answer()  # close query
-    except Exception as e:
-        logger.error(f"❌ Ошибка при изменение статуса домашки: {e}")
-
-@dp.callback_query(ApproveWithFeedbackCallback.filter())
-async def approve_with_feedback(callback_query: types.CallbackQuery, callback_data: ApproveWithFeedbackCallback, state: FSMContext):
-    """Approve with feedback - get text from admin"""
-    try:
-        user_id = callback_data.user_id
-        course_numeric_id = callback_data.course_id
-        course_id = await get_course_id_str(course_numeric_id)
-        lesson_num = callback_data.lesson_num
-        message_id = callback_data.message_id
-        logger.info(f" approve_with_feedback {user_id=} {course_id=} {lesson_num=} {message_id=} ")
-        await callback_query.answer()
-        await state.update_data(
-            user_id=user_id,
-            course_id=course_id,
-            lesson_num=lesson_num,
-            message_id=message_id,
-            action="approve",
-            admin_id=callback_query.from_user.id  # ID админа
-        )
-        await bot.edit_message_text(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id, text="Ожидаю сообщение от администратора")
-        await state.set_state(Form.feedback)  # переключаем в режим ожидания фидбека
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка при сохранении данных для фидбека: {e}")
-
-@dp.callback_query(RejectWithFeedbackCallback.filter())
-async def reject_with_feedback(callback_query: types.CallbackQuery, callback_data: RejectWithFeedbackCallback, state: FSMContext):
-    """Reject with feedback - get text from admin"""
-    try:
-        user_id = callback_data.user_id
-        course_numeric_id = callback_data.course_id
-        course_id = await get_course_id_str(course_numeric_id)
-        lesson_num = callback_data.lesson_num
-        message_id = callback_data.message_id
-        logger.info(f" reject_with_feedback {user_id=} {course_id=} {lesson_num=} {message_id=} ")
-        await callback_query.answer()
-        await state.update_data(
-            user_id=user_id,
-            course_id=course_id,
-            lesson_num=lesson_num,
-            message_id=message_id,
-            action="reject",
-            admin_id=callback_query.from_user.id  # ID админа
-        )
-        await bot.edit_message_text(chat_id=ADMIN_GROUP_ID, message_id=callback_query.message.message_id, text="Ожидаю сообщение с причиной отказа от администратора")
-        await state.set_state(Form.feedback)  # переключаем в режим ожидания фидбека
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка при сохранении данных для фидбека: {e}")
-
-# Обработчик получения текста причины отказа и завершения процесса
-@dp.message(Form.feedback)
-async def process_rejection_feedback(message: types.Message, state: FSMContext):
-    """Process feedback from admin and finalize rejection"""
-    try:
-        feedback_text = message.text
-        data = await state.get_data()
-        user_id = data.get("user_id")
-        course_id = data.get("course_id")
-        lesson_num = data.get("lesson_num")
-        message_id = data.get("message_id")
-        admin_id = data.get("admin_id")  # Получаем ID админа
-
-        admin_name = message.from_user.first_name or message.from_user.username or "Администратор"
-
-        # Обновляем статус ДЗ в базе данных
-        await update_homework_status(user_id, course_id, lesson_num, "rejected")
-
-        # Отправляем сообщение пользователю с причиной отказа
-        await bot.send_message(
-            chat_id=user_id,
-            text=f"К сожалению, ваше домашнее задание по курсу {course_id}, урок {lesson_num} отклонено.\n\nПричина: {feedback_text}\n\nПожалуйста, исправьте ошибки и отправьте задание на проверку снова."
-        )
-
-        # Отправляем сообщение в группу админов
-        await bot.send_message(
-            chat_id=ADMIN_GROUP_ID,
-            text=f"Домашнее задание от пользователя {user_id} по курсу {course_id}, урок {lesson_num} отклонено администратором {admin_name} с причиной: {feedback_text}"
-        )
-
-        # Удаляем клавиатуру из исходного сообщения в группе админов
-        await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID, message_id=message_id, reply_markup=None)
-
-        # Удаляем сообщение с причиной отказа от админа
-        await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=message.message_id)
-
-        await state.clear()  # clear FSM
-
-        logger.info(f"ДЗ для user_id={user_id}, course_id={course_id}, lesson_num={lesson_num} отклонено с причиной.")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при обработке причины отказа и отклонении ДЗ: {e}")
 
 
 # Обработчик последний - чтобы не мешал другим обработчикам работать. Порядок имеет значение
