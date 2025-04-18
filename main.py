@@ -1962,44 +1962,71 @@ async def cmd_help(message: Message):
 
 
 # 17-04
-@dp.callback_query(F.data == "menu_mycourses") #08-04 Предоставляет кнопки для продолжения или повторного просмотра
-@db_exception_handler  # Показывает список активных и завершенных курсов # Разделяет курсы на активные и завершенные
+@dp.callback_query(F.data == "menu_mycourses")  # Предоставляет кнопки для продолжения или повторного просмотра
+@db_exception_handler  # Показывает список активных и завершенных курсов
 async def cmd_mycourses_callback(query: types.CallbackQuery):
     """Показывает список активных и завершенных курсов."""
     user_id = query.from_user.id
     logger.info("12 cmd_mycourses_callback  {user_id=}   ")
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Get active courses
+            # Получаем активные курсы
             cursor = await conn.execute("""
-                SELECT c.title, uc.course_id FROM user_courses uc
+                SELECT c.title, uc.course_id, uc.version_id, uc.current_lesson, c.id
+                FROM user_courses uc
                 JOIN courses c ON uc.course_id = c.course_id
                 WHERE uc.user_id = ? AND uc.status = 'active'
             """, (user_id,))
             active_courses = await cursor.fetchall()
 
-            # Get completed courses
+            # Получаем завершенные курсы
             cursor = await conn.execute("""
-                SELECT c.title, uc.course_id FROM user_courses uc
+                SELECT c.title, uc.course_id, uc.version_id, c.id
+                FROM user_courses uc
                 JOIN courses c ON uc.course_id = c.course_id
                 WHERE uc.user_id = ? AND uc.status = 'completed'
             """, (user_id,))
             completed_courses = await cursor.fetchall()
 
-        # Building text response
+        # Формируем текст ответа
         response_text = ""
         if active_courses:
             response_text += "<b>Активные курсы:</b>\n"
-            response_text += "\n".join([f"- {title}" for title, course_id in active_courses]) + "\n\n"
+            response_text += "\n".join([f"- {title}" for title, course_id, version_id, current_lesson, id in active_courses]) + "\n\n"
         if completed_courses:
             response_text += "<b>Завершенные курсы:</b>\n"
-            response_text += "\n".join([f"- {title}" for title, course_id in completed_courses])
+            response_text += "\n".join([f"- {title}" for title, course_id, version_id, id in completed_courses])
 
         if not active_courses and not completed_courses:
             response_text = "У вас нет активных или завершенных курсов."
 
-        await query.message.edit_text(response_text, parse_mode="HTML")
+        # Проверяем, есть ли активные курсы, чтобы взять данные для меню
+        if active_courses:
+            # Берем данные из первого активного курса для примера
+            title, course_id, version_id, lesson_num, id = active_courses[0]
+        else:
+            # Если нет активных курсов, задаем значения по умолчанию или None
+            id = None
+            lesson_num = 0
+            version_id = None
 
+        # Создаем кнопки меню
+        keyboard = get_main_menu_inline_keyboard(
+            course_numeric_id=id,  # Определите course_id
+            lesson_num=lesson_num,  # Определите lesson_num
+            user_tariff=version_id,  # Определите version_id
+            homework_pending=False,  # disable_button=True
+            courses_button_text=f"📚 Мои курсы"
+        )
+
+        # Отправляем сообщение с прогрессом
+        await bot.send_message(
+            user_id,
+            response_text,
+            reply_markup=keyboard,
+            parse_mode=None
+        )
+        await query.answer("✅ Курсы")
     except Exception as e:
         logger.error(f"Error in cmd_mycourses: {e}")
         await query.answer("Произошла ошибка при обработке запроса.", show_alert=True)
@@ -2283,7 +2310,7 @@ async def cmd_progress_callback(query: types.CallbackQuery):
                 reply_markup=keyboard,
                 parse_mode="HTML"
             )
-            await query.answer("✅ Прогресс обновлен.")
+            await query.answer("✅ Прогресс обновлен")
 
     except Exception as e:
         logger.error(f"Ошибка в cmd_progress_callback: {e}", exc_info=True)
