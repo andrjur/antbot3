@@ -84,11 +84,12 @@ class AdminHomeworkCallback(CallbackData, prefix="admin_hw"):
     lesson_num: int
     message_id: int
 
-
-
 class Form(StatesGroup):
     """Feedback Form"""
     feedback = State()
+
+class SupportRequest(StatesGroup):
+    waiting_for_message = State()
 
 # декоратор для обработки ошибок в БД
 def db_exception_handler(func):
@@ -386,6 +387,10 @@ async def activate_course(user_id: int, activation_code: str):
                 VALUES (?, ?, ?, 'active', 1, CURRENT_TIMESTAMP)
             """, (user_id, course_id, version_id))
             await conn.commit()
+
+            # Удаляем код активации, чтобы его нельзя было использовать повторно
+            # await conn.execute("DELETE FROM course_activation_codes WHERE code_word = ?", (activation_code,))
+            # await conn.commit()
 
             # Запускаем проверку расписания для пользователя
             await start_lesson_schedule_task(user_id)
@@ -1114,45 +1119,87 @@ async def get_next_lesson_time(user_id: int, course_id: str) -> str:
 
 
 @dp.callback_query(F.data == "menu_support")
-async def cmd_support_callback(query: types.CallbackQuery):
+@db_exception_handler
+async def cmd_support_callback(query: types.CallbackQuery, state: FSMContext):
     """Обработчик для кнопки 'Поддержка'."""
     global user_support_state
     user_id = query.from_user.id
-    chat_id = query.message.chat.id
-    message_id = query.message.message_id
-    logger.info("10 1 cmd_support_callback  {user_id=}  {chat_id=}  {message_id=} ")
-    # Создаем кнопки оценки
-    evaluation_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="😍 Класс!", callback_data="support_eval:5"),
-            InlineKeyboardButton(text="👍 Норм", callback_data="support_eval:4"),
-        ],
-        [
-            InlineKeyboardButton(text="😐 Средне", callback_data="support_eval:3"),
-            InlineKeyboardButton(text="👎 Фигня", callback_data="support_eval:2"),
-        ],
-        [InlineKeyboardButton(text="😡 Злой", callback_data="support_eval:1")]
-    ])
+    logger.info(f"10 cmd_support_callback {user_id=}")
 
-    # Сохраняем текущее состояние для пользователя
-    user_support_state[user_id] = {"chat_id": chat_id, "message_id": message_id}
+    try:
+        # Устанавливаем состояние ожидания сообщения от пользователя
+        await state.set_state(SupportRequest.waiting_for_message)
 
-    # Пересылаем сообщение администратору
-    if ADMIN_GROUP_ID:
-        await bot.forward_message(chat_id=ADMIN_GROUP_ID, from_chat_id=chat_id, message_id=query.message.message_id)
-
-        # Сообщение админу
-        await bot.send_message(
-            chat_id=ADMIN_GROUP_ID,
-            text=f"Вопрос от пользователя {query.from_user.full_name} (ID: {user_id}). Ответьте на это сообщение, чтобы пользователь получил ваш ответ.",
-            reply_to_message_id=query.message.message_id, parse_mode=None)
-
-        # Сообщение пользователю
+        # Изменяем текст сообщения для пользователя
         await query.message.edit_text(
-            "Ваш запрос отправлен в поддержку. Ожидайте ответа.",
+            "⏳ Пожалуйста, напишите ваш вопрос в чат. У вас есть 2 минуты.",
         )
-    else:
-        await query.message.edit_text("Не удалось отправить запрос в поддержку. Обратитесь к администратору.")
+        await query.answer()
+
+        # Ждем сообщение от пользователя в течение 2 минут
+        try:
+            # Ожидаем следующее сообщение от пользователя
+            message = await bot.receive(SupportRequest.waiting_for_message, user_id=user_id, timeout=120)
+
+            if ADMIN_GROUP_ID:
+                # Пересылаем сообщение пользователя в группу админов
+                try:
+                    copied_msg = await bot.copy_message(
+                        chat_id=ADMIN_GROUP_ID,
+                        from_chat_id=user_id,
+                        message_id=message.message_id
+                    )
+
+                    # Отправляем служебное сообщение админам
+                    admin_msg = await bot.send_message(
+                        chat_id=ADMIN_GROUP_ID,
+                        text=f"Вопрос от {query.from_user.full_name} (ID: {user_id})\nОтветьте на это сообщение:",
+                        reply_to_message_id=copied_msg.message_id
+                    )
+
+                    # Сохраняем связь между сообщениями
+                    user_support_state[user_id] = {
+                        "user_message_id": message.message_id,
+                        "admin_message_id": admin_msg.message_id,
+                        "forwarded_message_id": copied_msg.message_id
+                    }
+
+                    # Отправляем пользователю клавиатуру оценки
+                    evaluation_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="😍 Класс!", callback_data="support_eval:5"),
+                            InlineKeyboardButton(text="👍 Норм", callback_data="support_eval:4"),
+                        ],
+                        [
+                            InlineKeyboardButton(text="😐 Средне", callback_data="support_eval:3"),
+                            InlineKeyboardButton(text="👎 Фигня", callback_data="support_eval:2"),
+                        ],
+                        [InlineKeyboardButton(text="😡 Злой", callback_data="support_eval:1")]
+                    ])
+
+                    await query.message.edit_text(
+                        text="✅ Ваш запрос отправлен в поддержку. Ожидайте ответа.",
+                        reply_markup=evaluation_keyboard
+                    )
+
+                except TelegramBadRequest as e:
+                    logger.error(f"Ошибка отправки сообщения: {e}")
+                    await query.message.edit_text("❌ Не удалось отправить запрос. Попробуйте позже.")
+            else:
+                await query.message.edit_text("⚠️ Служба поддержки временно недоступна.")
+
+        except asyncio.TimeoutError:
+            await query.message.edit_text("⏰ Время ожидания истекло. Пожалуйста, попробуйте еще раз.")
+        except Exception as e:
+            logger.error(f"Ошибка при ожидании сообщения от пользователя: {e}")
+            await query.message.edit_text("❌ Произошла ошибка при обработке запроса. Пожалуйста, попробуйте еще раз.")
+        finally:
+            # Сбрасываем состояние
+            await state.clear()
+
+    except Exception as e:
+        logger.error(f"Ошибка в обработчике поддержки: {e}")
+        await query.answer("❌ Произошла ошибка при обработке запроса.", show_alert=True)
 
 
 def get_main_menu_inline_keyboard(
@@ -1773,6 +1820,45 @@ async def check_homework_pending(user_id: int, course_id: str, lesson_num: int) 
         return False
 
 
+
+@dp.callback_query(F.data.startswith("support_eval:"))
+async def process_support_evaluation(callback: types.CallbackQuery):
+    """Обрабатывает оценку пользователя после обращения в поддержку."""
+    try:
+        user_id = callback.from_user.id
+        evaluation = callback.data.split(":")[1]  # Извлекаем оценку (1-5)
+        message_id = callback.message.message_id
+        logger.info(f"Получена оценка {evaluation=} от {user_id=}")
+
+        # Сохраняем оценку в базе данных (пример)
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute("""
+                INSERT INTO support_evaluations (user_id, message_id, evaluation, timestamp)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, message_id, evaluation, datetime.now()))
+            await conn.commit()
+
+        # Подтверждение пользователю
+        await callback.answer(f"Спасибо за вашу оценку ({evaluation})!", show_alert=True)
+
+        # Отправляем оценку администраторам (опционально)
+        if ADMIN_GROUP_ID:
+            await bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=f"Пользователь {callback.from_user.full_name} (ID: {user_id}) оценил поддержку на {evaluation}."
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при обработке оценки поддержки: {e}")
+        await callback.answer("Произошла ошибка при обработке вашей оценки.", show_alert=True)
+
+@dp.message()
+async def echo(message: types.Message):
+    try:
+        await message.send_copy(chat_id=message.chat.id)
+    except TypeError:
+        await message.answer("Nice try!")
+
+
 @dp.message(CommandStart())
 @db_exception_handler
 async def cmd_start(message: types.Message):
@@ -1991,10 +2077,10 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
         # Формируем текст ответа
         response_text = ""
         if active_courses:
-            response_text += "<b>Активные курсы:</b>\n"
+            response_text += "Активные курсы:\n"
             response_text += "\n".join([f"- {title}" for title, course_id, version_id, current_lesson, id in active_courses]) + "\n\n"
         if completed_courses:
-            response_text += "<b>Завершенные курсы:</b>\n"
+            response_text += "Завершенные курсы:\n"
             response_text += "\n".join([f"- {title}" for title, course_id, version_id, id in completed_courses])
 
         if not active_courses and not completed_courses:
@@ -2388,6 +2474,7 @@ async def update_homework_status(user_id: int, course_id: str, lesson_num: int, 
                 (status, user_id, course_id, lesson_num),
             )
             await db.commit()
+
         logger.info(f"Homework status updated for user {user_id}, course {course_id}, lesson {lesson_num} to {status}")
     except Exception as e:
         logger.error(f"Error updating homework status in database: {e}")
@@ -2503,6 +2590,15 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
     except Exception as e:
         logger.error(f"❌ Error in process_homework_action: {e}", exc_info=True)
 
+
+# Обработка callback-запроса для оставления отзыва
+@dp.callback_query(F.data == "menu_feedback")
+async def cmd_feedback(query: types.CallbackQuery, state: FSMContext):
+    """Обработка callback-запроса для оставления отзыва."""
+    await query.message.edit_text("Пожалуйста, напишите ваш отзыв:")
+    await state.set_state(Form.feedback)
+    await query.answer()
+
 @dp.message(Form.feedback)
 async def process_feedback(message: types.Message, state: FSMContext):
     """Process feedback from admin and finalize approval/rejection"""
@@ -2555,18 +2651,18 @@ async def handle_homework_result(user_id: int, course_id: str, course_numeric_id
         next_lesson_time = await get_next_lesson_time(user_id, course_id)
 
         if is_approved:
-            message_to_user = f"✅ Ваше домашнее задание по курсу {escape_md(course_id)}, {lesson_num} принято"
+            message_to_user = f"✅ Ваше домашнее задание по курсу {course_id}, {lesson_num} принято"
             if feedback_text:
-                message_to_user += f"\n\nАдминистратор написал:\n{escape_md(feedback_text)}"
+                message_to_user += f"\n\nАдминистратор написал:\n{feedback_text}"
 
             # ADD - Display timer - 24-04
             logger.info(f"3333 {next_lesson_time=}")
             message_to_user += f"\n\n⏳ Следующий урок откроется: {next_lesson_time}"
             # END - Display timer - 24-04
         else:
-            message_to_user = f"❌ Твоя домашка по *{escape_md(course_id)}*, lesson {lesson_num} отклонена"
+            message_to_user = f"❌ Твоя домашка по {course_id}, lesson {lesson_num} отклонена"
             if feedback_text:
-                message_to_user += f"\n\nFeedback from the administrator:\n{escape_md(feedback_text)}"
+                message_to_user += f"\n\nFeedback from the administrator:\n{feedback_text}"
 
         # Формируем текст для меню
         menu_text = (
@@ -2625,6 +2721,36 @@ async def get_user_name(user_id: int) -> str:
         return str(user_id)
 
 
+@dp.message(F.chat.id == ADMIN_GROUP_ID, F.reply_to_message)
+@db_exception_handler
+async def admin_reply_handler(message: types.Message):
+    """Обрабатывает ответы админов в группе поддержки."""
+    try:
+        # Ищем информацию о запросе в user_support_state по ID сообщения, на которое ответили
+        user_id = None
+        for u_id, state in user_support_state.items():
+            if state.get("forwarded_message_id") == message.reply_to_message.message_id:
+                user_id = u_id
+                break
+
+        if user_id:
+            # Пересылаем ответ админа пользователю
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"Ответ поддержки:\n{message.text}"
+            )
+
+            # Убираем информацию из user_support_state (опционально)
+            del user_support_state[user_id]
+            logger.info(f"Ответ от админа для {user_id=} успешно переслан.")
+        else:
+            logger.warning(f"Не найдено соответствие для ответа админа на сообщение {message.reply_to_message.message_id}.")
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке ответа админа: {e}")
+
+
+# ===================== гетто ===============================
 
 @dp.callback_query(AdminHomeworkCallback.filter(F.action == "approve_hw"))
 async def old_approve_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
@@ -2699,8 +2825,6 @@ async def old_approve_homework(callback_query: types.CallbackQuery, callback_dat
     except Exception as e:  # 18-04
         logger.error(f"❌ Ошибка в функции approve_homework: {e}", exc_info=True)  # 18-04
 
-
-# НАДО 17-04
 @dp.callback_query(AdminHomeworkCallback.filter(F.action == "reject_hw"))
 async def old_reject_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
     """Reject a homework"""
@@ -2744,8 +2868,6 @@ async def old_reject_homework(callback_query: types.CallbackQuery, callback_data
     except Exception as e:  # 18-04
         logger.error(f"❌ Ошибка в функции reject_homework: {e}", exc_info=True)  # 18-04
 
-
-
 @dp.callback_query(AdminHomeworkCallback.filter(F.action.in_(["approve_reason", "reject_reason"])))
 async def old_approve_reason(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback, state: FSMContext):
     """Approve/Reject with feedback - get text from admin"""
@@ -2785,8 +2907,6 @@ async def old_approve_reason(callback_query: types.CallbackQuery, callback_data:
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении данных для фидбека: {e}")
 
-
-
 @dp.message(Form.feedback)
 async def old_process_feedback(message: types.Message, state: FSMContext):
     """Process feedback from admin and finalize approval/rejection"""
@@ -2804,8 +2924,6 @@ async def old_process_feedback(message: types.Message, state: FSMContext):
     await handle_homework_result(user_id, course_id, lesson_num, admin_id, feedback_text, is_approved)
     await bot.send_message(message.from_user.id, "Обратная связь сохранена.", parse_mode=None)
     await state.clear()
-
-
 
 @dp.message(F.text, F.chat.id == ADMIN_GROUP_ID)
 @db_exception_handler
@@ -2852,8 +2970,6 @@ async def old_process_rejection_reason(message: Message):
     except Exception as e:
         logger.error(f"Ошибка в process_rejection_reason: {e}", exc_info=True)
         await message.reply("Произошла ошибка при обработке причины отклонения.", parse_mode=None)
-
-
 
 # 14-04
 @dp.message(F.text, F.chat.id == ADMIN_GROUP_ID)
@@ -2981,6 +3097,38 @@ async def handle_text(message: types.Message, state: FSMContext):
     if active_course:
         logger.info("handle_text: отправляем в handle_homework")
     return await handle_homework(message)
+
+
+# смайлики из "поддержки" кнопки пользователя
+@dp.callback_query(F.data.startswith("support_eval:"))
+async def process_support_evaluation(callback: types.CallbackQuery):
+    """Обрабатывает оценку пользователя после обращения в поддержку."""
+    try:
+        user_id = callback.from_user.id
+        evaluation = callback.data.split(":")[1]  # Извлекаем оценку (1-5)
+        message_id = callback.message.message_id
+        logger.info(f"Получена оценка {evaluation=} от {user_id=}")
+
+        # Сохраняем оценку в базе данных (пример)
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute("""
+                INSERT INTO support_evaluations (user_id, message_id, evaluation, timestamp)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, message_id, evaluation, datetime.now()))
+            await conn.commit()
+
+        # Подтверждение пользователю
+        await callback.answer(f"Спасибо за вашу оценку ({evaluation})!", show_alert=True)
+
+        # Отправляем оценку администраторам (опционально)
+        if ADMIN_GROUP_ID:
+            await bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=f"Пользователь {callback.from_user.full_name} (ID: {user_id}) оценил поддержку на {evaluation}."
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при обработке оценки поддержки: {e}")
+        await callback.answer("Произошла ошибка при обработке вашей оценки.", show_alert=True)
 
 
 # ----------------- новый обработчик и текстовой домашки и фото -------- от пользователя ------------
