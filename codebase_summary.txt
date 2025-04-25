@@ -1,39 +1,258 @@
 
+
+# 14-04 todo нафига
+async def get_all_courses_by_status(status='active'):
+
+
+# 14-04 todo нафига
+async def get_user_active_courses(user_id: int):
+
+
+# 14-04 todo нафига
+async def get_user_courses_count(user_id: int, status = 'active') -> int:
+
+
+# 14-04 todo нафига
+async def get_course_start_date(user_id: int, course_id: str):
+
+
+# 14-04
+async def is_course_active(user_id: int, course_id: str) -> bool:
+
+
+# 14-04 todo нафига. use get_user_active_courses. get_user_active_courses and is_course_active
+async def get_user_courses(user_id: int) -> list:
+
+
+# course_numeric_id = await get_course_id_int(course_id)
+async def get_course_id_int(course_id: str) -> int:
+
+
+# course_id = get_course_id_str(course_numeric_id)
+async def get_course_id_str(course_numeric_id: int) -> str:
+
+
+# 14-04
+async def get_course_title(course_id: str) -> str:
+
+
+# 14-04
+async def is_valid_activation_code(code: str) -> bool:
+
+
+# 14-04
+async def activate_course(user_id: int, activation_code: str):
+
+
+# 14-04
+async def deactivate_course(user_id: int, course_id: str):
+
+
+@db_exception_handler
+async def check_lesson_schedule(user_id: int, hours = 24, minutes = 0):
+
+await bot.send_message(user_id, "📛 Ошибка расписания. Мы уже чиним робота!", parse_mode=None)
+
+async def scheduled_lesson_check(user_id: int):
+
+await asyncio.sleep(2 * 60)  # Каждые 2 минуты
+
+async def send_admin_stats():
+
+await asyncio.sleep(5 * 3600)  # Каждые 5 часов
+
+async def gather_course_statistics():
+
+)
+
+async def start_lesson_schedule_task(user_id: int):
+
+logger.info(f" 500 start_lesson_schedule_task Запущена задача проверки расписания уроков для пользователя {user_id}.")
+
+async def stop_lesson_schedule_task(user_id: int):
+
+
+
+def save_settings(settings):
+
+
+@db_exception_handler
+async def process_add_course_to_db(course_id, group_id, code1, code2, code3):
+
+
+
+async def backup_settings_file():
+
+
+@db_exception_handler
+async def init_db():
+
+
+# Функция для экранирования спецсимволов в тексте для использования в MarkdownV2
+def escape_md(text):
+
+# логирование действий пользователя
+@db_exception_handler
+async def log_user_activity(user_id, action, details=""):
+
+# функция для разрешения ID пользователя по алиасу или ID
+@db_exception_handler
+async def resolve_user_id(user_identifier):
+
+
+@db_exception_handler
+async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int):
+
+# функция для кэширования статуса курса пользователя
+@lru_cache(maxsize=100)
+async def get_course_status(user_id: int) -> tuple | None:
+
+
+@dp.message(Command("set_timezone"))
+async def set_timezone(message: types.Message):
+
+
+
+async def get_next_lesson_time(user_id: int, course_id: str) -> str:
+
+@dp.callback_query(F.data == "menu_support")
+@db_exception_handler
+async def cmd_support_callback(query: types.CallbackQuery, state: FSMContext):
+
+@dp.callback_query(F.data == "old_menu_support")
+@db_exception_handler
+async def old_cmd_support_callback(query: types.CallbackQuery, state: FSMContext):
+
+
+
+def get_main_menu_inline_keyboard(
+
+
+@db_exception_handler
+async def save_message_to_db(group_id: int, message: Message):
+
+
+@db_exception_handler
+async def test_and_send_random_lesson(course_id: str, conn: aiosqlite.Connection):
+
+
+@db_exception_handler # как курс закончен - подведём статистику и отправляем админам *COURSE_END — когда приходит
+async def process_course_completion(group_id: int, conn: aiosqlite.Connection):
+
+
+
+def extract_course_snippet(text: str) -> str:
+
+
+
+def extract_course_title(text: str) -> str:
+
+
+@db_exception_handler
+async def import_settings_to_db():
+
+
+# 14-04 - Проверка доступа в группах
+async def check_groups_access(bot: Bot, raw_id: int, gr_name:str):
+
+
+
+async def send_startup_message(bot: Bot, admin_group_id: int):
+
+# Пользовательский фильтр для проверки ID группы
+class IsCourseGroupFilter(BaseFilter):
+async def __call__(self, message: Message) -> bool:
+
+@dp.message(IsCourseGroupFilter())
+@db_exception_handler # Обработчик новых сообщений в группах курсов
+async def handle_group_message(message: Message):
+
+
+@dp.callback_query(F.chat.id == ADMIN_GROUP_ID,lambda c: c.data in ["export_db", "import_db"])
+async def handle_admin_actions(callback: CallbackQuery):
+
+@dp.message(Command("export_db"), F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def export_db(message: types.Message):  # types.Message instead of Message
+
+@dp.message(Command("import_db"), F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def import_db(message: types.Message):  # types.Message instead of Message
+
+
+
+async def update_settings_file():
+
+
+@dp.message(Command("timezone"))
+async def cmd_set_timezone(message: types.Message):
+
+
+@dp.message(F.text == "⌨️ Выбрать вручную")
+async def manual_timezone_selection(message: types.Message):
+
+
+@dp.callback_query(lambda c: c.data.startswith("set_tz_manual:"))
+async def process_manual_timezone(callback: types.CallbackQuery):
+
+
+@dp.message(F.location)
+async def handle_location(message: types.Message):
+
+)
+
+def is_valid_timezone(tz: str) -> bool:
+
+
+# Обновленная функция получения времени
+async def get_local_time(user_id: int) -> datetime:
+
+
+@db_exception_handler
+async def check_homework_pending(user_id: int, course_id: str, lesson_num: int) -> bool:
+
+
+@dp.callback_query(F.data.startswith("support_eval:"))
+async def process_support_evaluation(callback: types.CallbackQuery):
+
+
+
+async def check_state(message: types.Message, state: FSMContext) -> bool:
+
+# добавлено 24-04
+@dp.message(SupportRequest.waiting_for_response, F.chat.type == "private")
+async def process_support_response(message: types.Message, state: FSMContext):
+
 @dp.message(CommandStart())
 @db_exception_handler
 async def cmd_start(message: types.Message):
 
 
-async def send_course_description(user_id: int, course_id: str):
 
-ef get_tariff_name(version_id: str) -> str:
+async def send_course_description(user_id: int, course_id: str):
 
 # help
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
 
+# --- Вспомогательные функции ---
 
-@dp.callback_query(F.data == "menu_support")
-async def cmd_support_callback(query: types.CallbackQuery):
+def escape_markdown_v2(text: str) -> str:
 
+return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
 
-@dp.callback_query(lambda c: c.data.startswith("support_eval:"))
-async def process_support_evaluation(query: types.CallbackQuery):
+def get_lesson_plural(n):
 
-# Активация курса по кодовому слову. Записывает пользователя на курс
-@dp.message(Command("activate"))
-async def cmd_activate(message: Message):
+return "уроков"
 
-@dp.callback_query(F.data == "menu_mycourses") #08-04 Предоставляет кнопки для продолжения или повторного просмотра
-@db_exception_handler  # Показывает список активных и завершенных курсов # Разделяет курсы на активные и завершенные
+def get_course_plural(n):
+
+@dp.callback_query(F.data == "menu_mycourses")  # Предоставляет кнопки для продолжения или повторного просмотра
+@db_exception_handler  # Показывает список активных и завершенных курсов
 async def cmd_mycourses_callback(query: types.CallbackQuery):
 
-@dp.message(Command("completed_courses"))  # Показывает список завершенных курсов # Реализует пагинацию уроков
-@db_exception_handler  # Позволяет просматривать уроки с сниппетами
-async def cmd_completed_courses(message: Message):
-
-# 11-04
 @dp.callback_query(CourseCallback.filter(F.action == "menu_cur"))
+@db_exception_handler
 async def show_lesson_content(callback_query: types.CallbackQuery, callback_data: CourseCallback):
 
 
@@ -44,65 +263,17 @@ async def get_user_course_data(user_id: int) -> tuple:
 @db_exception_handler # Обработчик для команды просмотра прогресса по всем курсам
 async def cmd_progress_callback(query: types.CallbackQuery):
 
-@dp.message(Command("homework"))
-@db_exception_handler  # пользователь домашку сдаёт
-async def cmd_homework(message: types.Message):
-
-@dp.message(Command("select_course"))
-@db_exception_handler
-async def select_course(message: Message):
-
-@dp.callback_query(lambda c: c.data.startswith("submit_homework:"))
-@db_exception_handler  # обработка отправки ДЗ
-async def submit_homework_callback(callback_query: CallbackQuery, course_id, lesson_num):
-
 @dp.callback_query(CourseCallback.filter(F.action == "self_approve_hw"))
 @db_exception_handler
 async def process_self_approve_hw(callback: types.CallbackQuery, callback_data: CourseCallback):
 
-@dp.callback_query(lambda c: c.data.startswith("review_prev:") or c.data.startswith("review_next:"))
-@db_exception_handler  # пользователь просто лазит по урокам в свободном режиме
-async def review_navigation_callback(callback_query: CallbackQuery):
 
-@dp.callback_query(lambda c: c.data.startswith("review_lesson:"))
-@db_exception_handler  # пользователь пользователь хочет просмотреть определенный урок
-async def review_lesson_callback(callback_query: CallbackQuery):
-
-@dp.callback_query(lambda c: c.data.startswith("view_completed_course:"))
-@db_exception_handler
-async def view_completed_course(callback_query: CallbackQuery):
-
-@dp.callback_query(lambda c: c.data.startswith("view_completed_lesson:"))
-@db_exception_handler
-async def view_completed_lesson(callback_query: CallbackQuery):
-
-@dp.callback_query(lambda c: c.data.startswith("show_full_lesson:"))
-@db_exception_handler
-async def show_full_lesson(callback_query: CallbackQuery):
-
-@dp.callback_query(lambda c: c.data.startswith("review_course:"))
-@db_exception_handler
-async def review_course_callback(callback_query: CallbackQuery):
-
-@dp.message(lambda message: message.text and message.text.lower() in settings["activation_codes"])
-@db_exception_handler
-async def activate_course(message: types.Message):
-
-@dp.message(F.content_type.in_({'photo', 'document'}))
-@db_exception_handler
-async def old_handle_homework(message: types.Message):
+@dp.callback_query(ReplySupportCallback.filter())
+async def reply_support_callback(callback: types.CallbackQuery, callback_data: ReplySupportCallback, state: FSMContext):
 
 #======================Конец обработчиков слов и хэндлеров кнопок=========================================
 
 async def check_state(message: types.Message, state: FSMContext) -> bool:
-
-@dp.message(F.text, check_state)
-@db_exception_handler
-async def handle_text(message: types.Message, state: FSMContext):
-
-@dp.message(F.content_type.in_({'photo', 'document', 'text'}))
-@db_exception_handler
-async def handle_homework(message: types.Message):
 
 # НАДО 17-04
 @db_exception_handler
@@ -112,45 +283,61 @@ async def update_homework_status(user_id: int, course_id: str, lesson_num: int, 
 # 16-04 ночер сделаем клаву отдельно
 def create_admin_keyboard(user_id: int, course_id: int, lesson_num: int, message_id: int) -> InlineKeyboardMarkup:
 
-# 14-04
-@dp.message(F.text, IsAdmin())
-async def handle_text_homework(message: types.Message):
-
-
-
-async def get_admin_homework_data(user_id: int) -> tuple:
-
 
 
 async def send_message_to_user(user_id: int, text: str, reply_markup: InlineKeyboardMarkup = None):
 
-# НАДО 17-04
-@dp.callback_query(AdminHomeworkCallback.filter(F.action == "approve_hw"))
-async def approve_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
-
-# НАДО 17-04
-@dp.callback_query(AdminHomeworkCallback.filter(F.action == "reject_hw"))
-async def reject_homework(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback):
 
 
-@dp.callback_query(ApproveFinalCallback.filter())
-async def approve_final(callback_query: types.CallbackQuery, callback_data: ApproveFinalCallback):
+def get_tariff_name(version_id: str) -> str:
+
+# НАДО 18-04
+@dp.callback_query(AdminHomeworkCallback.filter(F.action.in_(["approve_hw", "reject_hw", "approve_reason", "reject_reason"])))
+async def process_homework_action(callback_query: types.CallbackQuery, callback_data: AdminHomeworkCallback, state: FSMContext):
+
+# Обработка callback-запроса для оставления отзыва
+@dp.callback_query(F.data == "menu_feedback")
+async def cmd_feedback(query: types.CallbackQuery, state: FSMContext):
 
 
-@dp.callback_query(RejectFinalCallback.filter())
-async def reject_final(callback_query: types.CallbackQuery, callback_data: RejectFinalCallback):
-
-
-@dp.callback_query(ApproveWithFeedbackCallback.filter())
-async def approve_with_feedback(callback_query: types.CallbackQuery, callback_data: ApproveWithFeedbackCallback, state: FSMContext):
-
-
-@dp.callback_query(RejectWithFeedbackCallback.filter())
-async def reject_with_feedback(callback_query: types.CallbackQuery, callback_data: RejectWithFeedbackCallback, state: FSMContext):
-
-# Обработчик получения текста причины отказа и завершения процесса
 @dp.message(Form.feedback)
-async def process_rejection_feedback(message: types.Message, state: FSMContext):
+async def process_feedback(message: types.Message, state: FSMContext):
+
+
+# вызывается из process_feedback - вверху функция
+async def handle_homework_result(user_id: int, course_id: str, course_numeric_id: int, lesson_num: int, admin_id: int, feedback_text: str, is_approved: bool, callback_query: types.CallbackQuery):
+
+
+
+async def get_user_name(user_id: int) -> str:
+
+@dp.message(F.chat.id == ADMIN_GROUP_ID, SupportRequest.waiting_for_response)
+@db_exception_handler
+async def admin_response_handler(message: types.Message, state: FSMContext):
+
+
+@dp.message(SupportRequest.waiting_for_message)
+async def handle_support_message(message: types.Message, state: FSMContext):
+
+@dp.message(F.text, check_state)
+@db_exception_handler
+async def handle_text(message: types.Message, state: FSMContext):
+
+# смайлики из "поддержки" кнопки пользователя
+@dp.callback_query(F.data.startswith("support_eval:"))
+async def process_support_evaluation(callback: types.CallbackQuery):
+
+
+# --- Database Retry Utility ---
+async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, delay=DB_RETRY_DELAY):
+
+@dp.message(F.content_type.in_({'photo', 'document', 'text'}), F.chat.type == "private")
+@db_exception_handler
+async def handle_homework(message: types.Message):
+
+logger.error(f"Ошибка отправки домашки админам: {e}", exc_info=True)
+
+async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_id: str,
 
 # Обработчик последний - чтобы не мешал другим обработчикам работать. Порядок имеет значение
 @dp.message(F.text)  # Фильтр только для текстовых сообщений
@@ -163,3 +350,24 @@ async def handle_user_content(message: types.Message):
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
+
+
+@dp.message(F.video)
+async def handle_video(message: types.Message):
+
+
+@dp.message(F.document)
+async def handle_document(message: types.Message):
+
+
+@dp.message()
+async def default_handler(message: types.Message):
+
+
+@dp.callback_query()
+async def default_callback_handler(query: types.CallbackQuery):
+
+
+
+async def main():
+
