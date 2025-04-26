@@ -970,6 +970,8 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
 
                 elif content_type == "photo":
                     await bot.send_photo(user_id, file_id, caption=text, parse_mode=None)  # Correct usage for MarkdownV2
+                elif content_type == "audio":
+                    await bot.send_audio(user_id, file_id, caption=text, parse_mode=None)
                 elif content_type == "video":
                     await bot.send_video(user_id, file_id, caption=text, parse_mode=None)  # Correct usage for MarkdownV2
                 elif content_type == "document":
@@ -1117,8 +1119,13 @@ async def get_next_lesson_time(user_id: int, course_id: str):
             # по новому - от самой первой отправки
             next_lesson_time = first_lesson_time + timedelta(hours=lesson_interval_hours)*(current_lesson-1)
 
-            # Форматируем время для отображения пользователю
-            formatted_time = next_lesson_time.strftime("%H:%M  %a (%d %B)")
+            MONTHS_GENITIVE = [
+                "января", "февраля", "марта", "апреля", "мая", "июня",
+                "июля", "августа", "сентября", "октября", "ноября", "декабря"
+            ]
+            month_genitive = MONTHS_GENITIVE[next_lesson_time.month - 1]
+
+            formatted_time = next_lesson_time.strftime(f"%H:%M  %a (%d {month_genitive})")
             logger.info(f"400 new next_lesson_time: {formatted_time}")
             return formatted_time
 
