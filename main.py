@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import asyncio, logging, json, random, os, re, shutil, sys
+import asyncio, logging, json, random, os, re, shutil, sys, locale
 import functools, sqlite3, aiosqlite, pytz
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
@@ -30,6 +30,9 @@ load_dotenv()
 # Инициализация определителя часовых поясов
 tf = TimezoneFinder()
 DEFAULT_TIMEZONE = "Europe/Moscow"  # Установка часового пояса по умолчанию
+
+# Установка локали для русского языка
+locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
 MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
 LOG_BACKUP_COUNT = 3
@@ -1115,7 +1118,7 @@ async def get_next_lesson_time(user_id: int, course_id: str):
             next_lesson_time = first_lesson_time + timedelta(hours=lesson_interval_hours)*(current_lesson-1)
 
             # Форматируем время для отображения пользователю
-            formatted_time = next_lesson_time.strftime("%H:%M  %a (%d %M)")
+            formatted_time = next_lesson_time.strftime("%H:%M  %a (%d %B)")
             logger.info(f"400 new next_lesson_time: {formatted_time}")
             return formatted_time
 
@@ -2460,6 +2463,7 @@ async def show_lesson_content(callback_query: types.CallbackQuery, callback_data
         # Вызываем send_lesson_to_user для отправки контента
         await send_lesson_to_user(user_id, course_id, lesson_num, repeat=True)
         logger.info(f"✅ Lesson sent successfully to {user_id} повторно")
+        await callback_query.answer("✅ повторная отправка текущего урока – OK")
 
     except Exception as e:
         logger.error(f"Error in show_lesson_content: {e}")
