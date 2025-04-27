@@ -812,6 +812,7 @@ async def init_db():
                     hw_status TEXT DEFAULT 'none',
                     hw_type TEXT DEFAULT 'none',
                     current_lesson INTEGER DEFAULT 0,
+                    level integer DEFAULT 1,
                     first_lesson_sent_time DATETIME,
                     last_lesson_sent_time DATETIME,
                     is_completed INTEGER DEFAULT 0,
@@ -917,7 +918,7 @@ async def resolve_user_id(user_identifier):
 
 
 @db_exception_handler
-async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, repeat: bool = False):
+async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, repeat: bool = False, level: int = 1):
     """Отправляет урок, обновляет время отправки и обрабатывает ДЗ. """
     logger.info(f"🚀 send_lesson_to_user: user_id={user_id}, course_id={course_id}, lesson_num={lesson_num}")
 
@@ -926,7 +927,7 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
 
             # Шаг 1: Ищем контент урока (текст, видео, фото)
             cursor = await conn.execute("""
-                SELECT text, content_type, file_id, is_homework, hw_type
+                SELECT text, content_type, file_id, is_homework, hw_type, level
                 FROM group_messages
                 WHERE course_id = ? AND lesson_num = ?
                 ORDER BY id
@@ -943,6 +944,37 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
             logger.info(f"58585858585 {course_id=} {len(lesson_content)=} {total_lessons=}")
             if not lesson_content:
                 logger.warning(f"⚠️ Lesson {lesson_num} not found for course {course_id}.")
+                # Формируем сообщение о завершении курса
+                course_title = await get_course_title(course_id)
+                message_text = (
+                    f"🎉 Поздравляем с успешным завершением курса «{course_title}»! 🎉\n\n"
+                    "Вы прошли все уроки. Что вы хотите сделать дальше?"
+                )
+
+                # Создаем клавиатуру с кнопками
+                builder = InlineKeyboardBuilder()
+                if level == 1: # if has_advanced: пока считаем что есть у любого курса "второе дно"
+                    builder.button(
+                        text=f"Продвинутый курс {course_title}",
+                        callback_data=f"activate_advanced_{course_id}"
+                    )
+                builder.button(text="Выбрать другой курс", callback_data="select_other_course")
+                builder.button(text="Оставить отзыв", callback_data="leave_feedback")
+
+                # Отправляем сообщение
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=message_text,
+                    reply_markup=builder.as_markup()
+                )
+
+                # Обновляем статус курса
+                await conn.execute("""
+                                    UPDATE user_courses 
+                                    SET status = 'completed' 
+                                    WHERE user_id = ? AND course_id = ?
+                                """, (user_id, course_id))
+                await conn.commit()
                 return
 
             # Инициализируем переменные для отслеживания ДЗ
@@ -951,7 +983,7 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
 
             # Шаг 2: Отправляем контент урока пользователю
             k=0
-            for text, content_type, file_id, is_homework, hw_type in lesson_content:
+            for text, content_type, file_id, is_homework, hw_type, group_level in lesson_content:
                 k+=1
                 if text:
                     logger.info(f"есть текст")
@@ -959,6 +991,11 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
                 else:
                     logger.error(f" {k=} без текста")
                     text = ""  # Защита от None
+
+                if group_level>level:
+                    logger.info(f"пропускаем урок с уровнем больше чем оплаченный курс{group_level=} {level=}")
+                    continue
+
                 # Проверяем, что текст не пустой для текстовых сообщений
                 if content_type == "text":
                     if not text:
