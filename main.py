@@ -56,7 +56,7 @@ DEFAULT_TIMEZONE = "Europe/Moscow"  # Установка часового поя
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
 MAX_LOG_SIZE = 1 * 1024 * 1024  # 10 MB
-LOG_BACKUP_COUNT = 3
+LOG_BACKUP_COUNT = 1
 
 def setup_logging():
     """Настройка логирования с ротацией и UTF-8"""
