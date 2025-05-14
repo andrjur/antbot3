@@ -17,7 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
-from timezonefinder import TimezoneFinder
+
 
 # ---- НОВЫЕ ИМПОРТЫ ДЛЯ ВЕБХУКОВ ----
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -49,7 +49,7 @@ WEBHOOK_PATH_CONF: str       # Базовый путь вебхука (BASE_WEBH
 load_dotenv()
 
 # Инициализация определителя часовых поясов
-tf = TimezoneFinder()
+
 DEFAULT_TIMEZONE = "Europe/Moscow"  # Установка часового пояса по умолчанию
 
 # Установка локали для русского языка
@@ -2039,20 +2039,19 @@ async def handle_location(message: types.Message):
 
     try:
         # Определяем часовой пояс по координатам
-        tz_name = tf.timezone_at(lat=lat, lng=lng)
 
-        if not tz_name or not is_valid_timezone(tz_name):
-            raise ValueError("Не удалось определить часовой пояс")
+
+
 
         # Сохраняем в БД (пример для SQLite)
         async with aiosqlite.connect(DB_FILE) as conn:
             await conn.execute("""
                 UPDATE users SET timezone = ? WHERE user_id = ?
-            """, (tz_name, user_id))
+            """, (DEFAULT_TIMEZONE, user_id))
             await conn.commit()
 
         await message.answer(
-            f"✅ Часовой пояс установлен: {tz_name}",
+            f"✅ Часовой пояс установлен: {DEFAULT_TIMEZONE}",
             reply_markup=types.ReplyKeyboardRemove()  # Убираем клавиатуру
         )
 
