@@ -3730,8 +3730,8 @@ async def main():
 
     # Передаем актуальные значения в лямбду для on_startup
     # Имена аргументов в лямбде могут быть любыми, главное порядок и что они передаются в on_startup
-    dp.startup.register()
-    dp.shutdown.register()
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
 
     app = web.Application()
 
