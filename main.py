@@ -19,10 +19,31 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
 from timezonefinder import TimezoneFinder
 
+# ---- НОВЫЕ ИМПОРТЫ ДЛЯ ВЕБХУКОВ ----
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
+
 # Фикс кодировки для консоли Windows
 if sys.stdout.encoding != 'utf-8':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
+# Глобальные переменные уровня модуля (объявляем типы для ясности)
+bot: Bot
+dp: Dispatcher
+settings: dict
+COURSE_GROUPS: list
+
+# Конфигурационные переменные, которые станут глобальными после загрузки
+# Они будут загружены из os.getenv() в функции main()
+BOT_TOKEN_CONF: str
+ADMIN_IDS_CONF: list[int] = []
+ADMIN_GROUP_ID_CONF: int
+# Имена ниже соответствуют вашему .env
+WEBHOOK_HOST_CONF: str       # Публичный URL (BASE_PUBLIC_URL)
+WEBAPP_PORT_CONF: int        # Внутренний порт приложения (INTERNAL_APP_PORT)
+WEBAPP_HOST_CONF: str        # Внутренний хост приложения (INTERNAL_APP_HOST)
+WEBHOOK_PATH_CONF: str       # Базовый путь вебхука (BASE_WEBHOOK_PATH)
 
 # Загрузка переменных из .env
 load_dotenv()
@@ -71,6 +92,15 @@ SETTINGS_FILE = "settings.json"
 DB_FILE = "bot.db"
 MAX_LESSONS_PER_PAGE = 7  # пагинация для view_completed_course
 DEFAULT_COUNT_MESSAGES = 7  # макс количество сообщений при выводе курсов
+
+
+# ---- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ВЕБХУКА (из .env или напрямую) ----
+# Эти значения лучше брать из переменных окружения
+WEB_SERVER_HOST = "0.0.0.0"  # Слушать на всех интерфейсах
+WEB_SERVER_PORT = int(os.getenv("WEB_SERVER_PORT", 8080))  # Порт, на котором будет слушать ваше приложение
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"  # Секретный путь для вебхука
+BASE_WEBHOOK_URL = os.getenv("BASE_WEBHOOK_URL")  # Например, "https://your.domain.com"
+
 
 
 # --- Constants ---
@@ -3567,44 +3597,184 @@ async def default_handler(message: types.Message):
 async def default_callback_handler(query: types.CallbackQuery):
     logger.warning(f"Получен необработанный callback_query: {query.data}")
 
+# ---- ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ ВЕБХУКОМ ----
+async def on_startup(bot_instance: Bot, public_url: str, base_path: str, token_for_path: str):
+    # Используем параметры, переданные в лямбде
+    final_webhook_path = f"{base_path.rstrip('/')}/{token_for_path}"
+    webhook_url = f"{public_url.rstrip('/')}{final_webhook_path}"
 
+    await bot_instance.set_webhook(webhook_url, drop_pending_updates=True)
+    logger.info(f"Webhook set to: {webhook_url}")
 
+    # ADMIN_GROUP_ID_CONF теперь глобальная переменная модуля, доступная здесь
+    if ADMIN_GROUP_ID_CONF:
+        await send_startup_message(bot_instance, ADMIN_GROUP_ID_CONF)
+    else:
+        logger.warning("ADMIN_GROUP_ID не установлен, стартовое сообщение не отправлено.")
+
+    logger.info("Запуск фоновых задач для пользователей (таймеры)...")
+    async with aiosqlite.connect(DB_FILE) as conn: # DB_FILE должен быть определен
+        cursor = await conn.execute("SELECT user_id FROM users")
+        users_rows = await cursor.fetchall()
+        for user_row in users_rows:
+            user_id = user_row[0]
+            # lesson_check_tasks должен быть определен глобально
+            if user_id not in lesson_check_tasks or lesson_check_tasks[user_id].done():
+                asyncio.create_task(start_lesson_schedule_task(user_id))
+            else:
+                logger.info(f"Task for user {user_id} already running or scheduled.")
+    logger.info("Фоновые задачи запущены.")
+
+async def on_shutdown(bot_instance: Bot):
+    logger.warning("Shutting down..")
+    await bot_instance.delete_webhook()
+    logger.info("Webhook deleted.")
+
+    logger.info("Cancelling background tasks...")
+    if 'lesson_check_tasks' in globals() and lesson_check_tasks: # Проверка на существование
+        active_tasks = [task for task in lesson_check_tasks.values() if task and not task.done()]
+        if active_tasks:
+            for task in active_tasks:
+                task.cancel()
+            # Ожидание завершения задач
+            results = await asyncio.gather(*active_tasks, return_exceptions=True)
+            # Логирование результатов отмены (опционально)
+            for i, result in enumerate(results):
+                task_id_for_log = "unknown" # Попытка найти ID задачи для лога
+                try:
+                    # Это сработает, если ключи - user_id, а значения - task
+                    task_id_for_log = list(lesson_check_tasks.keys())[list(lesson_check_tasks.values()).index(active_tasks[i])]
+                except (ValueError, IndexError):
+                    pass # Не удалось найти, останется "unknown"
+
+                if isinstance(result, asyncio.CancelledError):
+                    logger.info(f"Task for ID {task_id_for_log} was cancelled successfully.")
+                elif isinstance(result, Exception):
+                    logger.error(f"Task for ID {task_id_for_log} raised an exception during shutdown: {result}")
+    logger.info("All background tasks processed for shutdown.")
+    await bot_instance.session.close()
+    logger.info("Bot session closed.")
 
 
 async def main():
-    logger.info("Запуск main()...")
-    global settings, COURSE_GROUPS
-    # Инициализация базы данных
+    # Делаем переменные модуля доступными для присваивания
+    global settings, COURSE_GROUPS, dp, bot
+    global BOT_TOKEN_CONF, ADMIN_IDS_CONF, ADMIN_GROUP_ID_CONF
+    global WEBHOOK_HOST_CONF, WEBAPP_PORT_CONF, WEBAPP_HOST_CONF, WEBHOOK_PATH_CONF
+
+    setup_logging()
+    logger.info("Запуск main() в режиме вебхука...")
+
+    load_dotenv()
+
+    # Загрузка переменных с именами из вашего .env
+    BOT_TOKEN_CONF = os.getenv("BOT_TOKEN")
+    admin_ids_str = os.getenv("ADMIN_IDS")
+    admin_group_id_str = os.getenv("ADMIN_GROUP_ID")
+    WEBHOOK_HOST_CONF = os.getenv("WEBHOOK_HOST")
+    webapp_port_str = os.getenv("WEBAPP_PORT")
+    WEBAPP_HOST_CONF = os.getenv("WEBAPP_HOST", "::") # '::' как дефолт, если не указано
+    WEBHOOK_PATH_CONF = os.getenv("WEBHOOK_PATH", "/bot/") # '/bot/' как дефолт
+
+    # Валидация обязательных переменных
+    if not BOT_TOKEN_CONF:
+        logger.critical("BOT_TOKEN не найден. Завершение.")
+        raise ValueError("BOT_TOKEN не найден.")
+    if not WEBHOOK_HOST_CONF:
+        logger.critical("WEBHOOK_HOST не найден. Завершение.")
+        raise ValueError("WEBHOOK_HOST не найден.")
+
+    # Парсинг и установка значений
+    if admin_ids_str:
+        try:
+            ADMIN_IDS_CONF = [int(admin_id.strip()) for admin_id in admin_ids_str.split(',')]
+        except ValueError:
+            logger.warning(f"Некорректный формат ADMIN_IDS: '{admin_ids_str}'. Оставляем пустым.")
+            ADMIN_IDS_CONF = []
+    else:
+        ADMIN_IDS_CONF = []
+
+    try:
+        ADMIN_GROUP_ID_CONF = int(admin_group_id_str) if admin_group_id_str else 0
+    except ValueError:
+        logger.warning(f"Некорректный формат ADMIN_GROUP_ID: '{admin_group_id_str}'. Устанавливаем 0.")
+        ADMIN_GROUP_ID_CONF = 0
+
+    try:
+        WEBAPP_PORT_CONF = int(webapp_port_str) if webapp_port_str else 8349 # Дефолт из вашего .env
+    except ValueError:
+        logger.warning(f"Некорректный формат WEBAPP_PORT: '{webapp_port_str}'. Устанавливаем 8349.")
+        WEBAPP_PORT_CONF = 8349
+
+
+    bot = Bot(
+        token=BOT_TOKEN_CONF,
+        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2)
+    )
+    dp = Dispatcher()
+
+    # Регистрация хэндлеров (убедитесь, что они импортированы или определены)
+    # from .handlers import register_all_my_handlers
+    # register_all_my_handlers(dp)
+
     await init_db()
-    settings = await load_settings()  # Загрузка настроек при запуске
-    logger.info(f"444 load_settings {settings.get('groups')=}")
-
-    COURSE_GROUPS = list(map(int, settings.get("groups", {}).keys()))
-    logger.info(f"555  {COURSE_GROUPS=}")
-
+    settings = await load_settings()
+    if settings and "groups" in settings: # Более безопасная проверка
+        COURSE_GROUPS = list(map(int, settings.get("groups", {}).keys()))
+    else:
+        COURSE_GROUPS = []
+        logger.warning("Настройки 'groups' не загружены или отсутствуют, COURSE_GROUPS пуст.")
     await import_settings_to_db()
 
-    await send_startup_message(bot, ADMIN_GROUP_ID)
-    # asyncio.create_task(check_and_schedule_lessons())
+    # Передаем актуальные значения в лямбду для on_startup
+    # Имена аргументов в лямбде могут быть любыми, главное порядок и что они передаются в on_startup
+    dp.startup.register(lambda: on_startup(bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF))
+    dp.shutdown.register(lambda: on_shutdown(bot))
 
-    # Запуск бота
-    logger.info(f"Бот успешно запущен.")
+    app = web.Application()
 
-    logger.info("пускаем таймеры")
-    async with aiosqlite.connect(DB_FILE) as conn:
-        cursor = await conn.execute("SELECT user_id FROM users")
-        users = await cursor.fetchall()
+    # Формируем финальный путь для регистрации в aiohttp
+    # Он должен быть таким же, как формируется в on_startup
+    final_webhook_path_for_aiohttp = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
 
-        for user in users:
-            await start_lesson_schedule_task(user[0])
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        # secret_token="YOUR_SECRET_TOKEN" # Если используется
+    )
+    webhook_requests_handler.register(app, path=final_webhook_path_for_aiohttp)
+    setup_application(app, dp, bot=bot) # Передаем bot для доступа к нему через app['bot'] если нужно
 
-    logger.info("Начинаем dp.start_polling()...")
-    await dp.start_polling(bot)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host=WEBAPP_HOST_CONF, port=WEBAPP_PORT_CONF)
 
+    try:
+        await site.start()
+        actual_host_log = "всех интерфейсах (IPv4/IPv6)" if WEBAPP_HOST_CONF in ('::', '0.0.0.0') else WEBAPP_HOST_CONF
+        logger.info(
+            f"Bot webhook server started on {actual_host_log}, port {WEBAPP_PORT_CONF}. Listening on path: {final_webhook_path_for_aiohttp}")
+        await asyncio.Event().wait() # Поддерживает работу приложения
+    except Exception as e:
+        logger.critical(f"Не удалось запустить веб-сервер: {e}", exc_info=True)
+    finally:
+        logger.info("Остановка веб-сервера...")
+        await runner.cleanup()
+        logger.info("Веб-сервер остановлен.")
 
 if __name__ == "__main__":
-    setup_logging()
-    asyncio.run(main())
+    # setup_logging() # Уже вызывается в начале main
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.warning("Bot stopped by user (KeyboardInterrupt/SystemExit)!")
+    except ValueError as e: # Ловим ValueError от проверок переменных окружения
+        logger.critical(f"Ошибка конфигурации: {e}")
+    except Exception as e:
+        # Настройка базового логирования, если setup_logging() в main не успел отработать или упал
+        if not logging.getLogger().hasHandlers():
+             logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+        logging.critical(f"Критическая ошибка при запуске или работе бота: {e}", exc_info=True)
 
 
 # Осознание обработчиков:
