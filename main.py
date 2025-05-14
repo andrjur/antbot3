@@ -3730,8 +3730,8 @@ async def main():
 
     # Передаем актуальные значения в лямбду для on_startup
     # Имена аргументов в лямбде могут быть любыми, главное порядок и что они передаются в on_startup
-    dp.startup.register(lambda: on_startup(bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF))
-    dp.shutdown.register(lambda: on_shutdown(bot))
+    dp.startup.register()
+    dp.shutdown.register()
 
     app = web.Application()
 
