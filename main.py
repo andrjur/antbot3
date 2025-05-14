@@ -3597,17 +3597,19 @@ async def default_callback_handler(query: types.CallbackQuery):
     logger.warning(f"Получен необработанный callback_query: {query.data}")
 
 # ---- ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ ВЕБХУКОМ ----
-async def on_startup(bot_instance: Bot, public_url: str, base_path: str, token_for_path: str):
-    # Используем параметры, переданные в лямбде
-    final_webhook_path = f"{base_path.rstrip('/')}/{token_for_path}"
-    webhook_url = f"{public_url.rstrip('/')}{final_webhook_path}"
+async def on_startup():
+    global bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF, ADMIN_GROUP_ID_CONF
+    # Явное указание global здесь не обязательно, если они уже определены на уровне модуля
+    # и вы их только читаете
 
-    await bot_instance.set_webhook(webhook_url, drop_pending_updates=True)
+    final_webhook_path = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
+    webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{final_webhook_path}"
+    await bot.set_webhook(webhook_url, drop_pending_updates=True)
     logger.info(f"Webhook set to: {webhook_url}")
 
     # ADMIN_GROUP_ID_CONF теперь глобальная переменная модуля, доступная здесь
     if ADMIN_GROUP_ID_CONF:
-        await send_startup_message(bot_instance, ADMIN_GROUP_ID_CONF)
+        await send_startup_message(bot, ADMIN_GROUP_ID_CONF)
     else:
         logger.warning("ADMIN_GROUP_ID не установлен, стартовое сообщение не отправлено.")
 
@@ -3624,9 +3626,10 @@ async def on_startup(bot_instance: Bot, public_url: str, base_path: str, token_f
                 logger.info(f"Task for user {user_id} already running or scheduled.")
     logger.info("Фоновые задачи запущены.")
 
-async def on_shutdown(bot_instance: Bot):
+async def on_shutdown():
+    global bot
     logger.warning("Shutting down..")
-    await bot_instance.delete_webhook()
+    await bot.delete_webhook()
     logger.info("Webhook deleted.")
 
     logger.info("Cancelling background tasks...")
@@ -3651,7 +3654,7 @@ async def on_shutdown(bot_instance: Bot):
                 elif isinstance(result, Exception):
                     logger.error(f"Task for ID {task_id_for_log} raised an exception during shutdown: {result}")
     logger.info("All background tasks processed for shutdown.")
-    await bot_instance.session.close()
+    await bot.session.close()
     logger.info("Bot session closed.")
 
 
