@@ -38,7 +38,7 @@ COURSE_GROUPS: list
 # Они будут загружены из os.getenv() в функции main()
 BOT_TOKEN_CONF: str
 ADMIN_IDS_CONF: list[int] = []
-ADMIN_GROUP_ID_CONF: int
+
 # Имена ниже соответствуют вашему .env
 WEBHOOK_HOST_CONF: str       # Публичный URL (BASE_PUBLIC_URL)
 WEBAPP_PORT_CONF: int        # Внутренний порт приложения (INTERNAL_APP_PORT)
@@ -86,7 +86,7 @@ if not BOT_TOKEN:
 logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
 
 ADMIN_GROUP_ID = int(os.getenv('ADMIN_GROUP_ID', 0))
-
+logger.info(f"ADMIN_GROUP_ID: {ADMIN_GROUP_ID}")
 SETTINGS_FILE = "settings.json"
 
 DB_FILE = "bot.db"
@@ -1036,7 +1036,12 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
                     await bot.send_message(user_id, text, parse_mode=None)  # Correct usage for MarkdownV2
 
                 elif content_type == "photo":
-                    await bot.send_photo(user_id, file_id, caption=text, parse_mode=None)  # Correct usage for MarkdownV2
+                    if file_id:  # <--- ВАЖНАЯ ПРОВЕРКА
+                        await bot.send_photo(user_id, file_id, caption=text, parse_mode=None)  # Correct usage for MarkdownV2
+                    else:
+                        logger.error(
+                            f"Пропуск отправки фото для урока {lesson_num}, курс {course_id}: отсутствует или некорректный file_id. Текст был: '{text}'")
+                    # ... и для других медиатипов ...
                 elif content_type == "audio":
                     await bot.send_audio(user_id, file_id, caption=text, parse_mode=None)
                 elif content_type == "video":
@@ -1806,6 +1811,7 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
         report = await check_groups_access(bot, raw_id, gr_name)
         channel_reports.append(report)
 
+    logger.warning("перед отправкой сообщения админам")
     # Формирование текста сообщения для администраторов
     message_text = escape_md("Бот запущен\n\nСтатус групп курсов:\n" + "\n".join(channel_reports) + \
                    "\nможно: /add_course <group_id> <course_id> <code1> <code2> <code3>")
@@ -2182,6 +2188,7 @@ async def process_support_response(message: types.Message, state: FSMContext):
 @db_exception_handler
 async def cmd_start(message: types.Message):
     """Обработчик команды /start."""
+    logger.info(f"!!!!!!!!!! CMD_START ВЫЗВАН для пользователя {message.from_user.id} !!!!!!!!!!")
     user = message.from_user
     user_id = user.id
     first_name = user.first_name or "Пользователь"
@@ -3598,7 +3605,7 @@ async def default_callback_handler(query: types.CallbackQuery):
 
 # ---- ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ ВЕБХУКОМ ----
 async def on_startup():
-    global bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF, ADMIN_GROUP_ID_CONF
+    global bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF
     # Явное указание global здесь не обязательно, если они уже определены на уровне модуля
     # и вы их только читаете
 
@@ -3607,11 +3614,7 @@ async def on_startup():
     await bot.set_webhook(webhook_url, drop_pending_updates=True)
     logger.info(f"Webhook set to: {webhook_url}")
 
-    # ADMIN_GROUP_ID_CONF теперь глобальная переменная модуля, доступная здесь
-    if ADMIN_GROUP_ID_CONF:
-        await send_startup_message(bot, ADMIN_GROUP_ID_CONF)
-    else:
-        logger.warning("ADMIN_GROUP_ID не установлен, стартовое сообщение не отправлено.")
+
 
     logger.info("Запуск фоновых задач для пользователей (таймеры)...")
     async with aiosqlite.connect(DB_FILE) as conn: # DB_FILE должен быть определен
@@ -3661,7 +3664,7 @@ async def on_shutdown():
 async def main():
     # Делаем переменные модуля доступными для присваивания
     global settings, COURSE_GROUPS, dp, bot
-    global BOT_TOKEN_CONF, ADMIN_IDS_CONF, ADMIN_GROUP_ID_CONF
+    global BOT_TOKEN_CONF, ADMIN_IDS_CONF
     global WEBHOOK_HOST_CONF, WEBAPP_PORT_CONF, WEBAPP_HOST_CONF, WEBHOOK_PATH_CONF
 
     setup_logging()
@@ -3672,7 +3675,6 @@ async def main():
     # Загрузка переменных с именами из вашего .env
     BOT_TOKEN_CONF = os.getenv("BOT_TOKEN")
     admin_ids_str = os.getenv("ADMIN_IDS")
-    admin_group_id_str = os.getenv("ADMIN_GROUP_ID")
     WEBHOOK_HOST_CONF = os.getenv("WEBHOOK_HOST")
     webapp_port_str = os.getenv("WEBAPP_PORT")
     WEBAPP_HOST_CONF = os.getenv("WEBAPP_HOST", "::") # '::' как дефолт, если не указано
@@ -3696,11 +3698,7 @@ async def main():
     else:
         ADMIN_IDS_CONF = []
 
-    try:
-        ADMIN_GROUP_ID_CONF = int(admin_group_id_str) if admin_group_id_str else 0
-    except ValueError:
-        logger.warning(f"Некорректный формат ADMIN_GROUP_ID: '{admin_group_id_str}'. Устанавливаем 0.")
-        ADMIN_GROUP_ID_CONF = 0
+
 
     try:
         WEBAPP_PORT_CONF = int(webapp_port_str) if webapp_port_str else 8349 # Дефолт из вашего .env
@@ -3713,7 +3711,7 @@ async def main():
         token=BOT_TOKEN_CONF,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2)
     )
-    dp = Dispatcher()
+    # dp = Dispatcher() # <--- УБЕРИТЕ ЭТУ СТРОКУ
 
     # Регистрация хэндлеров (убедитесь, что они импортированы или определены)
     # from .handlers import register_all_my_handlers
@@ -3745,6 +3743,14 @@ async def main():
         # secret_token="YOUR_SECRET_TOKEN" # Если используется
     )
     webhook_requests_handler.register(app, path=final_webhook_path_for_aiohttp)
+
+    logger.info(f"Зарегистрированные обработчики сообщений: {len(dp.message.handlers)}")
+    logger.info(f"Зарегистрированные обработчики колбэков: {len(dp.callback_query.handlers)}")
+
+    #Можно даже вывести их подробнее, если нужно глубоко копать:
+    #for handler_obj in dp.message.handlers:
+     #   logger.info(f"Message Handler: {handler_obj.callback.__name__ if hasattr(handler_obj.callback, '__name__') else handler_obj.callback}, filters: {handler_obj.filters}")
+
     setup_application(app, dp, bot=bot) # Передаем bot для доступа к нему через app['bot'] если нужно
 
     runner = web.AppRunner(app)
