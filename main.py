@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import asyncio, logging, json, random, os, re, shutil, sys, locale
+import asyncio, logging, json, os, re, shutil, sys, locale
 import functools, sqlite3, aiosqlite, pytz
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
@@ -536,137 +536,187 @@ async def deactivate_course(user_id: int, course_id: str):
         logger.error(f"Ошибка при деактивации курса: {e}")
         return False, "⚠️ Произошла ошибка при деактивации курса. Попробуйте позже."
 
-@db_exception_handler
-async def check_lesson_schedule(user_id: int, hours = 24, minutes = 0):
+
+@db_exception_handler  # Ваш существующий декоратор
+async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
     """Проверяет расписание уроков и отправляет урок, если пришло время."""
     logger.info(f"🔄 Проверка расписания для пользователя 🔄 {user_id=} {hours=} {minutes=}")
+
     try:
-        # Шаг 1: Получаем данные пользователя из базы данных
-        try:
-            async with aiosqlite.connect(DB_FILE) as conn:
-                logger.info(f"✅ Успешно подключились к базе данных")
-                cursor = await conn.execute("""
-                    SELECT course_id, current_lesson, version_id, 
-                           first_lesson_sent_time, last_lesson_sent_time, hw_status, last_menu_message_id
-                    FROM user_courses 
-                    WHERE user_id = ? AND status = 'active'
-                """, (user_id,))
-                user_data = await cursor.fetchone()
-        except aiosqlite.Error as e:
-            logger.error(f"❌ Ошибка при подключении к базе данных: {e}")
-            return  # Выходим из функции при ошибке подключения к БД
+        async with aiosqlite.connect(DB_FILE) as conn:  # Единое соединение для всех операций
+            logger.info(f"Подключились к БД для проверки расписания user_id={user_id}")
 
-        # Проверяем, что данные пользователя были получены
-        if not user_data:
-            logger.warning(f"У пользователя {user_id} нет активных курсов.")
-            return  # Выходим из функции, если нет данных
+            # 1. Получаем данные пользователя и его активного курса
+            cursor_user_data = await conn.execute("""
+                SELECT course_id, current_lesson, version_id, 
+                       first_lesson_sent_time, last_lesson_sent_time, 
+                       hw_status, last_menu_message_id, status
+                FROM user_courses 
+                WHERE user_id = ? AND status = 'active' 
+            """, (user_id,))
+            user_data = await cursor_user_data.fetchone()
 
-        course_id, current_lesson, version_id, first_sent_time, last_sent_time, hw_status, menu_message_id = user_data
-        logger.info(f"✅: {first_sent_time=} {course_id=}, {current_lesson=}, {version_id=}, {last_sent_time=}, {hw_status=}, {menu_message_id=}")
-
-        # ---- НОВАЯ ПРОВЕРКА ----
-        cursor_status = await conn.execute("SELECT status FROM user_courses WHERE user_id = ? AND course_id = ?",
-                                           (user_id, course_id))
-        status_row = await cursor_status.fetchone()
-        if status_row and status_row[0] == 'completed':
-            logger.info(f"Курс {course_id} уже завершен для пользователя {user_id}. Проверка расписания не требуется.")
-            # Можно остановить задачу для этого пользователя, если у него нет других активных курсов
-            # user_active_courses_count = await get_user_courses_count(user_id, status='active')
-            # if user_active_courses_count == 0:
-            #    await stop_lesson_schedule_task(user_id)
-            return
-            # ---- КОНЕЦ НОВОЙ ПРОВЕРКИ ----
-
-        # Шаг 2: Проверка статуса ДЗ
-        if hw_status not in ('approved', 'not_required', "none"):
-            logger.info(f"🔄⏳ Ожидаем ДЗ или проверку: {hw_status=}")
-            return  # Выходим, если ждем ДЗ
-
-        # Шаг 3: Получение интервала отправки сообщений
-        message_interval = settings.get("message_interval", 24) # из настроек берем
-
-        logger.info(f"🔄⏳✅⏳ 13 message_interval={message_interval=}") # выводим
-
-
-        # Шаг 4: Проверка времени отправки последнего сообщения
-        if last_sent_time: # если есть последнее время отправки
-            logger.info(f"✅ 2 14 last_sent_time={last_sent_time=}")
-            try:
-                # Преобразуем строку времени в объект datetime
-                # first_sent = datetime.strptime(first_sent_time, '%Y-%m-%d %H:%M:%S') # Это "наивный" объект
-                # Преобразуем в "aware" UTC
-                first_sent_naive_utc = datetime.strptime(first_sent_time, '%Y-%m-%d %H:%M:%S')
-                first_sent_aware_utc = pytz.utc.localize(first_sent_naive_utc)
-                # или, если вы уверены, что в БД всегда UTC: first_sent_naive_utc.replace(tzinfo=pytz.utc)
-                next_time  = first_sent_aware_utc + timedelta(hours=message_interval)*current_lesson
-
-                time_left = next_time  - datetime.now(pytz.utc) # считаем разницу.  Теперь оба "aware" UTC
-                logger.info(f"✅ 315 time_left.total_seconds()={time_left.total_seconds()=}")
-                # Если время еще не пришло
-                if time_left.total_seconds() > 10  and not(hours == 0 and minutes == 0): # 0 0 = принудительно отправить
-                    hours = time_left.seconds // 3600 # часы
-                    minutes = (time_left.seconds % 3600) // 60 # минуты
-                    time_message = f"⏳ Следующий урок через {hours}ч {minutes}мин\n" # формируем сообщение
-                    # Используем get_next_lesson_time для получения времени следующего урока
-                    next_lesson_time = await get_next_lesson_time(user_id, course_id, current_lesson)
-                    time_message = f"⏳ Следующий урок {next_lesson_time}\n" # todo выбрать можно это
-                    logger.info(f"✅ 14 {time_message=}")
-
-                    course_numeric_id = await get_course_id_int(course_id) # инт id курса
-                    # Получаем клавиатуру
-                    keyboard = get_main_menu_inline_keyboard(
-                        course_numeric_id=course_numeric_id, #course_numeric_id
-                        lesson_num=current_lesson,
-                        user_tariff=version_id,
-                    )
-                    logger.info(f"✅14.5 {menu_message_id=}")
-                    # Пытаемся обновить сообщение todo сделать эту штуку
-                    if menu_message_id: # если id сообщения есть
-                        try:
-                            logger.info(f"✅ 15 перед await bot.edit_message_text(")
-                            await asyncio.sleep(0.1)  # Дадим базе данных передохнуть!
-                            await bot.edit_message_text(
-                                chat_id=user_id,
-                                message_id=menu_message_id,
-                                text=time_message,
-                                reply_markup=keyboard,
-                                parse_mode=None
-                            )
-                            logger.info(f"500 Тихо обновили сообщение для {user_id}") # Обновили
-
-                        except TelegramBadRequest as e: # если не вышло
-                            logger.warning(f"325 Не удалось обновить сообщение: {e}")
-
-                            # Если сообщение не найдено, сбрасываем ID
-                            try:
-                                async with aiosqlite.connect(DB_FILE) as conn:
-
-                                    await conn.execute("""
-                                        UPDATE user_courses 
-                                        SET last_menu_message_id = NULL 
-                                        WHERE user_id = ?
-                                    """, (user_id,))
-                                    await conn.commit()
-                            except sqlite3.OperationalError as e:
-                                logger.error(f"❌ Ошибка при обновлении menu_message_id: {e}") # если и тут не получилось
-
-                else:  # Если пора отправлять
-                    logger.info(f"🔄🔄🔄 время пришло отправляем след урок: {course_id=} {current_lesson=} {user_id=}")
-                    await send_lesson_to_user(user_id, course_id, current_lesson+1) # отправляем
-                    logger.info(f"✅ 555 после  await send_lesson_to_user(user_id, course_id, current_lesson+1) ")
-
-
-            except ValueError as e:
-                logger.error(f"⚠️ Ошибка преобразования времени: {e}")
-                await bot.send_message(user_id, "📛 Ошибка времени урока!", parse_mode=None)
+            if not user_data:
+                logger.warning(f"У пользователя {user_id} нет активных курсов. Проверка расписания завершена.")
+                cursor_active_count = await conn.execute(
+                    "SELECT COUNT(*) FROM user_courses WHERE user_id = ? AND status = 'active'", (user_id,))
+                active_count_data = await cursor_active_count.fetchone()
+                active_count = active_count_data[0] if active_count_data else 0
+                if active_count == 0:
+                    logger.info(
+                        f"У пользователя {user_id} больше нет активных курсов, попытка остановить задачу шедулера.")
+                    await stop_lesson_schedule_task(user_id)
                 return
 
-        logger.info(f"✅ 166 выходим из функции") # логи
-        return  # ВЫХОДИМ ИЗ ФУНКЦИИ
+            (course_id, current_lesson_db, version_id,
+             first_sent_time_str, last_sent_time_str,
+             hw_status, menu_message_id, course_status_db) = user_data
 
-    except Exception as e: # общая ошибка
-        logger.error(f"💥 Бот немного захворал: {e}", exc_info=True)
-        await bot.send_message(user_id, "📛 Ошибка расписания. Мы уже чиним робота!", parse_mode=None)
+            logger.info(
+                f"Данные для {user_id}: {course_id=}, current_lesson_db={current_lesson_db}, {version_id=}, "
+                f"first_sent_time_str='{first_sent_time_str}', last_sent_time_str='{last_sent_time_str}', "
+                f"{hw_status=}, {menu_message_id=}, course_status_db='{course_status_db}'"
+            )
+
+            # 2. Проверка статуса ДЗ
+            if hw_status not in ('approved', 'not_required', 'none'):
+                logger.info(
+                    f"Для {user_id} (курс {course_id}) ожидаем ДЗ или проверку: {hw_status=}. Следующий урок не отправляем.")
+                return
+
+            # 3. Получение интервала отправки сообщений
+            message_interval_hours = float(settings.get("message_interval", 24.0))
+            logger.info(f"Для {user_id} (курс {course_id}): message_interval_hours={message_interval_hours}")
+
+            # 4. Логика отправки урока
+            if last_sent_time_str:  # Если уроки уже отправлялись
+                logger.info(f"Для {user_id} (курс {course_id}): last_sent_time_str='{last_sent_time_str}'")
+
+                if not first_sent_time_str:
+                    logger.error(
+                        f"Критическая ошибка: отсутствует first_lesson_sent_time для user_id={user_id}, "
+                        f"course_id={course_id}, хотя last_sent_time есть. Невозможно рассчитать время."
+                    )
+                    return
+
+                try:
+                    first_sent_naive_utc = datetime.strptime(first_sent_time_str, '%Y-%m-%d %H:%M:%S')
+                    first_sent_aware_utc = pytz.utc.localize(first_sent_naive_utc)
+
+                    next_lesson_event_time_utc = first_sent_aware_utc + timedelta(
+                        hours=message_interval_hours) * current_lesson_db
+                    current_time_aware_utc = datetime.now(pytz.utc)
+                    time_left = next_lesson_event_time_utc - current_time_aware_utc
+
+                    logger.info(
+                        f"Для {user_id} (курс {course_id}): first_sent_aware_utc={first_sent_aware_utc}, "
+                        f"next_lesson_event_time_utc={next_lesson_event_time_utc}, "
+                        f"current_time_aware_utc={current_time_aware_utc}, time_left_seconds={time_left.total_seconds()}"
+                    )
+
+                    if time_left.total_seconds() > 10 and not (hours == 0 and minutes == 0):
+                        display_next_lesson_time = await get_next_lesson_time(user_id, course_id, current_lesson_db)
+                        status_time_message = f"⏳ Следующий урок: {display_next_lesson_time}\n"
+                        logger.info(f"Для {user_id} (курс {course_id}): {status_time_message.strip()}")
+
+                        if menu_message_id:
+                            try:
+                                course_numeric_id = await get_course_id_int(course_id)
+                                keyboard = get_main_menu_inline_keyboard(
+                                    course_numeric_id=course_numeric_id,
+                                    lesson_num=current_lesson_db,
+                                    user_tariff=version_id,
+                                    homework_pending=(hw_status == 'pending')
+                                )
+                                logger.info(f"Попытка обновить menu_message_id={menu_message_id} для user_id={user_id}")
+                                await asyncio.sleep(0.1)
+                                await bot.edit_message_text(
+                                    chat_id=user_id,
+                                    message_id=menu_message_id,
+                                    text=escape_md(status_time_message),
+                                    reply_markup=keyboard,
+                                    parse_mode=ParseMode.MARKDOWN_V2
+                                )
+                                logger.info(f"Сообщение меню {menu_message_id} обновлено для user_id={user_id}")
+                            except TelegramBadRequest as e_edit:
+                                logger.warning(
+                                    f"Не удалось обновить сообщение меню {menu_message_id} для user_id={user_id}: {e_edit}")
+                                if "message to edit not found" in str(e_edit).lower() or \
+                                        "message is not modified" in str(e_edit).lower():
+                                    logger.info(
+                                        f"Сбрасываем last_menu_message_id для user_id={user_id} из-за ошибки редактирования.")
+                                    await conn.execute(
+                                        "UPDATE user_courses SET last_menu_message_id = NULL WHERE user_id = ? AND course_id = ?",
+                                        (user_id, course_id)
+                                    )
+                                    await conn.commit()
+                            except Exception as e_update_menu:
+                                logger.error(
+                                    f"Неожиданная ошибка при обновлении меню для user {user_id}: {e_update_menu}",
+                                    exc_info=True)
+                        else:
+                            logger.info(
+                                f"Для {user_id} (курс {course_id}) нет menu_message_id для обновления, время до урока еще не вышло.")
+
+                    else:  # Время пришло отправлять следующий урок
+                        next_lesson_to_send = current_lesson_db + 1
+                        logger.info(
+                            f"Время пришло! Отправляем урок {next_lesson_to_send} курса {course_id} для user_id={user_id}")
+                        await send_lesson_to_user(user_id, course_id, next_lesson_to_send)
+                        logger.info(
+                            f"✅ Урок {next_lesson_to_send} (попытка отправки) для {user_id} завершена из check_lesson_schedule.")
+
+                except ValueError as e_parse:
+                    logger.error(
+                        f"⚠️ Ошибка преобразования времени в check_lesson_schedule: {e_parse} для "
+                        f"first_sent_time_str='{first_sent_time_str}' или last_sent_time_str='{last_sent_time_str}'",
+                        exc_info=True)
+                    await bot.send_message(user_id, escape_md(
+                        "📛 Ошибка времени урока (неверный формат в базе)! Свяжитесь с поддержкой."),
+                                           parse_mode=ParseMode.MARKDOWN_V2)
+                    return
+                except Exception as e_time_calc:
+                    logger.error(
+                        f"💥 Неожиданная ошибка в расчете времени урока в check_lesson_schedule для user_id={user_id}: {e_time_calc}",
+                        exc_info=True)
+                    await bot.send_message(user_id, escape_md("📛 Ошибка при расчете времени урока! Мы уже чиним."),
+                                           parse_mode=ParseMode.MARKDOWN_V2)
+                    return
+
+            else:  # last_sent_time_str отсутствует
+                if current_lesson_db == 0 and first_sent_time_str:
+                    logger.info(
+                        f"Отправка первого урока (урок 1), так как current_lesson_db=0 и last_sent_time_str отсутствует. user_id={user_id}, course_id={course_id}")
+                    await send_lesson_to_user(user_id, course_id, 1)
+                elif current_lesson_db == 0 and not first_sent_time_str:  # Этого не должно быть, если активация прошла корректно
+                    logger.error(
+                        f"Критично: current_lesson_db=0, и отсутствует first_sent_time_str для user_id={user_id}, course_id={course_id}. Невозможно начать курс.")
+                else:  # current_lesson_db > 0, но last_sent_time_str почему-то пуст
+                    logger.warning(
+                        f"Нелогичное состояние: last_sent_time_str отсутствует, но current_lesson_db={current_lesson_db} для user_id={user_id}, course_id={course_id}. "
+                        "Возможно, это первый урок после миграции данных или сбоя. Попытка отправить урок current_lesson_db + 1."
+                    )
+                    # Можно попробовать отправить следующий урок, но это рискованно без last_sent_time.
+                    # Или просто ничего не делать и ждать, пока данные исправятся или ситуация прояснится.
+                    # Для безопасности, пока просто логируем.
+                    # await send_lesson_to_user(user_id, course_id, current_lesson_db + 1)
+
+    # Блоки except для ошибок БД и глобальных ошибок остаются на этом уровне
+    except sqlite3.OperationalError as e_sqlite_op:
+        logger.error(
+            f"Database is locked (OperationalError) в check_lesson_schedule для user_id={user_id}: {e_sqlite_op}")
+    except aiosqlite.Error as e_aiosqlite:
+        logger.error(f"Database error (aiosqlite) в check_lesson_schedule для user_id={user_id}: {e_aiosqlite}")
+    except Exception as e_global:
+        logger.error(f"💥 Общая неизвестная ошибка в check_lesson_schedule для user_id={user_id}: {e_global}",
+                     exc_info=True)
+        # Consider not spamming user for generic background errors unless critical for them
+        # await bot.send_message(user_id, "📛 Общая ошибка расписания. Мы уже чиним робота!", parse_mode=None)
+    finally:
+        logger.info(f"🏁🏁 Функция check_lesson_schedule для user_id={user_id} полностью завершена.")
+
+
+
 
 async def scheduled_lesson_check(user_id: int):
     """Запускает проверку расписания уроков для пользователя каждые 7 минут."""
@@ -1216,9 +1266,14 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
             # Если это повтор, то hw_status берем из базы (hw_status_db)
             final_homework_pending_for_menu = (not repeat and is_homework_local) or \
                                               (repeat and hw_status_db == 'pending')
-            final_hw_type_for_menu = hw_type_local if not repeat and is_homework_local else \
-                (await (await conn.execute("SELECT hw_type FROM user_courses WHERE user_id=? AND course_id=?",
-                                           (user_id, course_id))).fetchone() or (None,))[0]
+
+            # В send_lesson_to_user, перед вызовом send_main_menu
+            db_hw_type_row = await (
+                await conn.execute("SELECT hw_type FROM user_courses WHERE user_id=? AND course_id=?",
+                                   (user_id, course_id))).fetchone()
+            db_hw_type = db_hw_type_row[0] if db_hw_type_row else None
+
+            final_hw_type_for_menu = hw_type_local if not repeat and is_homework_local else db_hw_type
 
             logger.info(
                 f"Перед send_main_menu: homework_pending={final_homework_pending_for_menu}, hw_status в БД={new_hw_status_for_db if not repeat else hw_status_db}, hw_type для меню={final_hw_type_for_menu}")
@@ -1564,6 +1619,7 @@ async def save_message_to_db(group_id: int, message: Message):
     cleaned_text = re.sub(r"\*START_LESSON (\d+)", "", text)  # Удаляем маркеры начала урока
     cleaned_text = re.sub(r"\*END_LESSON (\d+)", "", cleaned_text)  # Удаляем маркеры конца урока
     cleaned_text = re.sub(r"\*HW_START", "", cleaned_text)  # Удаляем маркеры начала ДЗ
+    cleaned_text = re.sub(r"\*HW_END", "", cleaned_text)  # Удаляем маркеры начала ДЗ
     cleaned_text = re.sub(r"\*HW_TYPE\s*(\w+)", "", cleaned_text)  # Удаляем маркеры типа ДЗ
     cleaned_text = re.sub(r"\*COURSE_END", "", cleaned_text)
 
@@ -2661,8 +2717,8 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
             course_numeric_id=id,  # Определите course_id
             lesson_num=lesson_num,  # Определите lesson_num
             user_tariff=version_id,  # Определите version_id
-            homework_pending=False,  # disable_button=True
-            courses_button_text=f"📚 Мои курсы"
+            homework_pending=False  # disable_button=True
+
         )
 
         # Отправляем сообщение с прогрессом
@@ -2761,7 +2817,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
 
             admin_message = (
                 f"📝 Новый отзыв о курсе\\!\n"
-                f"👤 Пользователь: {escape_md(user_details)} (ID: {user_id})\n"
+                f"👤 Пользователь: {escape_md(user_details)} ID: {user_id}\n"
                 f"📚 Курс: {escape_md(str(course_id_for_review))}\n"
                 f"💬 Отзыв:\n{escape_md(review_text_raw)}"
             )
@@ -3199,8 +3255,8 @@ async def process_self_approve_hw(callback: types.CallbackQuery, callback_data: 
                 course_numeric_id=course_numeric_id,
                 lesson_num=lesson_num,
                 user_tariff=version_id,
-                homework_pending=False, #disable_button=True
-                courses_button_text=f"📚 Мои курсы"
+                homework_pending=False #disable_button=True
+
             )
             await callback.message.edit_text(  # TODO: Добавить текст
                 text="🎉 ДЗ cамоодобрено! Так держать! 🔥",
@@ -3851,9 +3907,42 @@ async def handle_homework(message: types.Message):
                     WHERE user_id = ? AND course_id = ?
                 """, (user_id, course_id))
                 await conn.commit()
-            # Выводим меню. Домашка не ожидается - homework_pending=False
-            await send_main_menu(user_id, course_id, current_lesson, version_id, homework_pending=False)
 
+                # ---- НОВАЯ ЛОГИКА ЗДЕСЬ для v1 ----
+                cursor_total = await conn.execute(
+                    "SELECT MAX(lesson_num) FROM group_messages WHERE course_id = ? AND lesson_num > 0",
+                    (course_id,))
+                total_lessons_data = await cursor_total.fetchone()
+                total_lessons = total_lessons_data[0] if total_lessons_data and total_lessons_data[0] is not None else 0
+
+                if current_lesson >= total_lessons and total_lessons > 0:
+                    logger.info(
+                        f"Курс {course_id} (v1) завершен для {user_id} после самоодобрения ДЗ урока {current_lesson}.")
+                    course_title_safe = escape_md(await get_course_title(course_id))
+                    message_text_completion = (
+                        f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
+                        "Вы прошли все уроки. Что вы хотите сделать дальше?"
+                    )
+                    builder_completion = InlineKeyboardBuilder()
+                    builder_completion.button(text=escape_md("Выбрать другой курс"),
+                                              callback_data="select_other_course")
+                    builder_completion.button(text=escape_md("Оставить отзыв"), callback_data="leave_feedback")
+
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=message_text_completion,
+                        reply_markup=builder_completion.as_markup(),
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+                    await conn.execute(
+                        "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
+                        (user_id, course_id)
+                    )
+                    await conn.commit()
+                else:
+                    # Если курс не завершен, выводим обычное меню
+                    await send_main_menu(user_id, course_id, current_lesson, version_id, homework_pending=False)
+                    # ---- КОНЕЦ НОВОЙ ЛОГИКИ для v1 ----
         except Exception as e:
             logger.error(f"Ошибка при отправке сообщения об авто-аппруве: {e}", exc_info=True)
         return
@@ -3948,11 +4037,12 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         logger.info(f"400223 send_main_menu: {next_lesson_time=} next_lesson_display_text {next_lesson_display_text=}")
 
         # Форматируем текст меню
+        domashka_status_text = f"Ожидаю {escape_md(str(hw_type))}" if homework_pending and hw_type else "принята, урок придёт по расписанию"
         text = (f"🎓 *Курс:* {md.quote(course_title)}\n"
                 f"🔑 *Тариф:* {md.quote(tariff_name)}\n"
                 f"📚 *Урок:* {lesson_num}\n"
                 f"⏳ *Интервал:* {escape_md(str(interval))} ч\n"
-                f"⏳ *Домашка:* {f"Ожидаю {escape_md(hw_type)}" if homework_pending else "не жду"}\n"
+                f"⏳ *Домашка:* {domashka_status_text}\n"
         )
 
         text += f"🕒 *Следующий урок:* {escape_md(next_lesson_display_text)}\n"
@@ -4053,8 +4143,7 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
                 course_numeric_id=course_numeric_id,
                 lesson_num=0,  # Для описания курса ставим урок 0
                 user_tariff=version_id,
-                homework_pending=False,
-                courses_button_text=courses_button_text
+                homework_pending=False
             )
 
             # Отправляем сообщение
