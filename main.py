@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 from aiogram.exceptions import TelegramBadRequest
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F, md
-from aiogram.filters import Command, CommandStart, BaseFilter
+from aiogram.filters import Command, CommandStart, BaseFilter, CommandObject
 from aiogram.filters.callback_data import CallbackData
 #from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery, ForceReply
@@ -24,10 +24,10 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 # Для генерации подписи Robokassa (примерный, нужно проверить актуальность)
-import decimal
+#import decimal
 import hashlib
-from urllib import parse
-from urllib.parse import urlparse
+#from urllib import parse
+#from urllib.parse import urlparse
 
 # Фикс кодировки для консоли Windows
 if sys.stdout.encoding != 'utf-8':
@@ -187,8 +187,8 @@ class BuyCourseCallback(CallbackData, prefix="buy_course"):
     course_id_str: str # Текстовый ID курса для покупки
 
 class RestartCourseCallback(CallbackData, prefix="restart_course"):
-    course_id_str: str # Текстовый ID курса для повторного прохождения
-
+    course_id_str: str
+    action: str # "next_level" или "restart_current_level"
 
 class AwaitingPaymentConfirmation(StatesGroup):
     waiting_for_activation_code_after_payment = State()
@@ -566,6 +566,8 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
     except Exception as e:
         logger.error(f"Ошибка при активации курса (код {activation_code}) для user_id={user_id}: {e}", exc_info=True)
         return False, "⚠️ Произошла серьезная ошибка при активации курса. Пожалуйста, свяжитесь с поддержкой."
+
+
 # 14-04
 async def deactivate_course(user_id: int, course_id: str):
     """Деактивирует курс для пользователя."""
@@ -1581,18 +1583,51 @@ async def _update_user_course_after_lesson(conn, user_id: int, course_id: str, l
     return version_id, new_hw_status_for_db if not repeat else hw_status_db, final_hw_type_for_menu
 
 
-async def _handle_course_completion(conn, user_id: int, course_id: str, requested_lesson_num: int, total_lessons: int):
+async def _handle_course_completion(conn, user_id: int, course_id: str, requested_lesson_num: int,
+                                    total_lessons_current_level: int):
     """Обрабатывает завершение курса: отправляет сообщение и обновляет статус в БД."""
     logger.info(
-        f"Курс {course_id} завершен для user_id={user_id}. Последний урок был {total_lessons}, запрошен {requested_lesson_num}.")
+        f"Курс {course_id} завершен для user_id={user_id}. Последний урок был {total_lessons_current_level}, запрошен {requested_lesson_num}.")
     course_title_safe = escape_md(await get_course_title(course_id))
+
     message_text = (
         f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
-        f"{escape_md('Вы прошли все уроки. Что вы хотите сделать дальше?')}"  # Экранируем всю вторую часть
+        f"{escape_md('Вы прошли все уроки текущего уровня. Что вы хотите сделать дальше?')}"
     )
+
     builder = InlineKeyboardBuilder()
+
+    # Проверяем, есть ли следующий уровень для этого курса и какой текущий уровень у пользователя
+    cursor_user_level = await conn.execute(
+        "SELECT level FROM user_courses WHERE user_id = ? AND course_id = ?",
+        (user_id, course_id)
+    )
+    user_level_data = await cursor_user_level.fetchone()
+    current_user_level = user_level_data[0] if user_level_data else 1  # По умолчанию 1, если вдруг нет записи
+
+    next_level_to_check = current_user_level + 1
+    cursor_next_level_lessons = await conn.execute(
+        "SELECT 1 FROM group_messages WHERE course_id = ? AND level = ? LIMIT 1",
+        (course_id, next_level_to_check)
+    )
+    has_next_level_lessons = await cursor_next_level_lessons.fetchone()
+
+    if has_next_level_lessons:
+        builder.button(
+            text=escape_md(f"🚀 Начать {next_level_to_check}-й уровень!"),
+            callback_data=RestartCourseCallback(course_id_str=course_id, action="next_level").pack()  # Добавим action
+        )
+
+    # Кнопка повторить ТЕКУЩИЙ уровень (если он не первый, или если хотим всегда давать возможность)
+    # Можно добавить условие, if current_user_level > 0 или просто всегда показывать
+    builder.button(
+        text=escape_md(f"🔁 Повторить {current_user_level}-й уровень"),
+        callback_data=RestartCourseCallback(course_id_str=course_id, action="restart_current_level").pack()
+    )
+
     builder.button(text=escape_md("Выбрать другой курс"), callback_data="select_other_course")
     builder.button(text=escape_md("Оставить отзыв"), callback_data="leave_feedback")
+    builder.adjust(1)  # Все кнопки в один столбец
 
     await bot.send_message(
         chat_id=user_id,
@@ -1600,14 +1635,17 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
         reply_markup=builder.as_markup(),
         parse_mode=ParseMode.MARKDOWN_V2
     )
+    # Статус 'completed' теперь будет означать, что завершен ТЕКУЩИЙ УРОВЕНЬ КУРСА.
+    # Если пользователь перейдет на следующий уровень, статус снова станет 'active'.
     await conn.execute(
         "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
+        # is_completed для текущего уровня
         (user_id, course_id)
     )
     await conn.commit()
-    await log_action(user_id, "COURSE_COMPLETED", course_id,
-                     details=f"Запрошен урок {requested_lesson_num} из {total_lessons}")
-
+    await log_action(user_id, "COURSE_LEVEL_COMPLETED", course_id, lesson_num=requested_lesson_num,
+                     # lesson_num - это current_lesson
+                     details=f"Завершен уровень {current_user_level}. Всего уроков на уровне (примерно): {total_lessons_current_level}")
 
 async def _handle_missing_lesson_content(user_id: int, course_id: str, lesson_num: int, total_lessons: int):
     """Обрабатывает ситуацию, когда контент урока не найден."""
@@ -2380,7 +2418,8 @@ async def export_db(message: types.Message):  # types.Message instead of Message
         async with aiosqlite.connect(DB_FILE) as conn:
             # Экспорт таблиц
             tables = ["users", "courses", "course_versions", "user_courses", "group_messages",
-                      "course_activation_codes"]
+                      "course_activation_codes", "user_actions_log", "course_reviews", # ДОБАВЛЕНО
+                "homework_gallery", "admin_context", "user_states"] # Добавил остальные из вашего init_db
             export_data = {}
 
             for table in tables:
@@ -2428,7 +2467,8 @@ async def import_db(message: types.Message):  # types.Message instead of Message
         async with aiosqlite.connect(DB_FILE) as conn:
             # Очистка существующих данных (опционально)
             tables = ["users", "courses", "course_versions", "user_courses", "group_messages",
-                      "course_activation_codes"]
+                      "course_activation_codes", "user_actions_log", "course_reviews",  # ДОБАВЛЕНО
+                      "homework_gallery", "admin_context", "user_states"]  # Добавил остальные из вашего init_db
             for table in tables:
                 await conn.execute(f"DELETE FROM {table}")
 
@@ -2478,6 +2518,329 @@ async def update_settings_file():
         logger.error(f"Ошибка при обновлении файла settings.json: {e}")
 
 
+
+# ===============================  команды ИИ для работы с ДЗ  ===============================================================
+# Вспомогательная функция для извлечения данных из сообщения по ID
+async def get_homework_context_by_message_id(admin_group_message_id: int) -> tuple | None:
+    try:
+        # Пытаемся получить сообщение из админ-группы
+        message = await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID, message_id=admin_group_message_id,
+                                                      reply_markup=None)  # Пробное редактирование, чтобы убедиться, что сообщение существует и это сообщение бота
+        # await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID_CONF, message_id=admin_group_message_id, reply_markup=message.reply_markup) # Возвращаем клавиатуру, если нужно
+
+        if message and message.reply_markup and message.reply_markup.inline_keyboard:
+            for row in message.reply_markup.inline_keyboard:
+                for button in row:
+                    if button.callback_data:
+                        try:
+                            cb_data = AdminHomeworkCallback.unpack(button.callback_data)
+                            return cb_data.user_id, cb_data.course_id, cb_data.lesson_num
+                        except:
+                            continue
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка при получении контекста ДЗ по message_id {admin_group_message_id}: {e}")
+        return None
+
+
+async def extract_homework_context_from_reply(message: types.Message) -> tuple | None:
+    """
+    Пытается извлечь контекст ДЗ (user_id, course_numeric_id, lesson_num, original_message_id)
+    из сообщения, на которое ответил админ/ИИ.
+    """
+    if not message.reply_to_message:
+        return None
+
+    original_bot_message = message.reply_to_message
+
+    if original_bot_message.reply_markup and original_bot_message.reply_markup.inline_keyboard:
+        for row in original_bot_message.reply_markup.inline_keyboard:
+            for button in row:
+                if button.callback_data:
+                    try:
+                        cb_data = AdminHomeworkCallback.unpack(button.callback_data)
+                        # Возвращаем user_id, course_id (числовой), lesson_num, и ID сообщения бота с ДЗ
+                        return cb_data.user_id, cb_data.course_id, cb_data.lesson_num, original_bot_message.message_id
+                    except Exception as e:
+                        logger.debug(
+                            f"Не удалось распаковать callback_data из кнопки в extract_homework_context_from_reply: {e}")
+                        continue
+    logger.warning("Не удалось извлечь контекст ДЗ из ответного сообщения (нет подходящих callback_data).")
+    return None
+
+
+async def get_homework_context_by_message_id(admin_group_message_id: int) -> tuple | None:
+    """
+    Пытается извлечь контекст ДЗ (user_id, course_numeric_id, lesson_num)
+    из сообщения в админ-группе по его ID, анализируя callback_data кнопок.
+    """
+    try:
+        # Получаем сообщение из админ-группы.
+        # bot.edit_message_reply_markup(..., reply_markup=None) вернет объект Message, если успешно.
+        # Это немного хак, чтобы просто получить объект сообщения, не меняя его видимого состояния надолго.
+        # Более прямой способ - если бы был метод get_message_by_id, но его нет в чистом виде для бота.
+        # Однако, если сообщение не имеет клавиатуры или если мы не хотим ее трогать, этот метод не идеален.
+        # Проще будет, если ИИ передаст все нужные ID в аргументах команды.
+        # Но если мы хотим сделать команду /approve <message_id> более универсальной для админов:
+
+        # Временное решение для получения reply_markup без его изменения:
+        # К сожалению, нет прямого метода "get_message_reply_markup".
+        # Этот подход с edit_message_reply_markup(None) и потом восстановлением - рискованный.
+        # Лучше, если ИИ передает все данные, или мы храним связь message_id с контекстом ДЗ в БД/кэше.
+
+        # Давайте упростим: эта функция будет работать, если ИИ сможет предоставить все данные.
+        # Для админа, отвечающего на сообщение, extract_homework_context_from_reply более подходит.
+        # Если же админ использует /approve <message_id>, то ему проще указать все данные.
+
+        # Пока оставим эту функцию как заглушку или для будущего, если найдем способ безопасно получить сообщение
+        # и его reply_markup по ID без его изменения.
+        logger.warning(
+            f"Функция get_homework_context_by_message_id ({admin_group_message_id}) пока не реализована надежно для извлечения callback_data.")
+        return None
+
+        # Если бы у нас был доступ к объекту Message по ID:
+        # if target_message and target_message.reply_markup and target_message.reply_markup.inline_keyboard:
+        #     for row in target_message.reply_markup.inline_keyboard:
+        #         for button in row:
+        #             if button.callback_data:
+        #                 try:
+        #                     cb_data = AdminHomeworkCallback.unpack(button.callback_data)
+        #                     return cb_data.user_id, cb_data.course_id, cb_data.lesson_num
+        #                 except:
+        #                     continue
+        # return None
+    except Exception as e:
+        logger.error(f"Ошибка при получении контекста ДЗ по message_id {admin_group_message_id}: {e}")
+        return None
+
+
+@dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)  # Используем ADMIN_GROUP_ID
+async def cmd_approve_homework(message: types.Message, command: CommandObject):  # Убрал state, если не нужен
+    admin_id = message.from_user.id
+    args_str = command.args if command.args else ""
+
+    user_id_student = None
+    course_numeric_id_hw = None
+    lesson_num_hw = None
+    feedback_text_hw = ""
+    original_bot_message_id = None
+
+    # Сценарий 1: Команда дана в ответ на сообщение бота с ДЗ
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
+        context_from_reply = await extract_homework_context_from_reply(message)
+        if context_from_reply:
+            user_id_student, course_numeric_id_hw, lesson_num_hw, original_bot_message_id = context_from_reply
+            feedback_text_hw = args_str
+            logger.info(
+                f"/approve по reply от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
+
+    # Сценарий 2: Команда с аргументами (для ИИ или прямого вызова админом)
+    # /approve <user_id_студента> <course_numeric_id> <lesson_num> [комментарий]
+    if not user_id_student:  # Если контекст не извлечен из reply
+        args = args_str.split(maxsplit=3)  # Разделяем на 3 или 4 части
+        if len(args) >= 3:
+            try:
+                user_id_student = int(args[0])
+                course_numeric_id_hw = int(args[1])
+                lesson_num_hw = int(args[2])
+                feedback_text_hw = args[3] if len(args) > 3 else ""
+                logger.info(
+                    f"/approve по аргументам от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
+            except (ValueError, IndexError):
+                user_id_student = None  # Сбрасываем, если парсинг не удался
+
+    if user_id_student and course_numeric_id_hw is not None and lesson_num_hw is not None:
+        course_id_str = await get_course_id_str(course_numeric_id_hw)
+        await handle_homework_result(
+            user_id=user_id_student, course_id=course_id_str, course_numeric_id=course_numeric_id_hw,
+            lesson_num=lesson_num_hw, admin_id=admin_id, feedback_text=feedback_text_hw,
+            is_approved=True, callback_query=None,
+            original_admin_message_id_to_delete=original_bot_message_id
+        )
+        await message.reply("✅ ДЗ одобрено командой.")
+    else:
+        await message.reply(
+            "Не удалось определить ДЗ для одобрения.\n"
+            "Используйте: `/approve [комментарий]` в ответ на сообщение с ДЗ\n"
+            "Или: `/approve <user_id> <course_num_id> <lesson_num> [комментарий]`"
+        )
+
+
+@dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)  # Используем ADMIN_GROUP_ID
+async def cmd_reject_homework(message: types.Message, command: CommandObject):  # Убрал state
+    admin_id = message.from_user.id
+    args_str = command.args if command.args else ""
+
+    user_id_student = None
+    course_numeric_id_hw = None
+    lesson_num_hw = None
+    feedback_text_hw = ""
+    original_bot_message_id = None
+
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
+        context_from_reply = await extract_homework_context_from_reply(message)
+        if context_from_reply:
+            user_id_student, course_numeric_id_hw, lesson_num_hw, original_bot_message_id = context_from_reply
+            feedback_text_hw = args_str if args_str else "Домашнее задание требует доработки."
+            logger.info(
+                f"/reject по reply от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
+
+    if not user_id_student:
+        args = args_str.split(maxsplit=3)
+        if len(args) >= 3:
+            try:
+                user_id_student = int(args[0])
+                course_numeric_id_hw = int(args[1])
+                lesson_num_hw = int(args[2])
+                feedback_text_hw = args[3] if len(args) > 3 else "Домашнее задание требует доработки."
+                logger.info(
+                    f"/reject по аргументам от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
+            except (ValueError, IndexError):
+                user_id_student = None
+
+    if user_id_student and course_numeric_id_hw is not None and lesson_num_hw is not None:
+        course_id_str = await get_course_id_str(course_numeric_id_hw)
+        await handle_homework_result(
+            user_id=user_id_student, course_id=course_id_str, course_numeric_id=course_numeric_id_hw,
+            lesson_num=lesson_num_hw, admin_id=admin_id, feedback_text=feedback_text_hw,
+            is_approved=False, callback_query=None,
+            original_admin_message_id_to_delete=original_bot_message_id
+        )
+        await message.reply("❌ ДЗ отклонено командой.")
+    else:
+        await message.reply(
+            "Не удалось определить ДЗ для отклонения.\n"
+            "Используйте: `/reject [причина]` в ответ на сообщение с ДЗ\n"
+            "Или: `/reject <user_id> <course_num_id> <lesson_num> [причина]`"
+        )
+
+
+# Модифицируем cmd_approve_homework и cmd_reject_homework
+@dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)
+async def old_cmd_approve_homework(message: types.Message, command: CommandObject, state: FSMContext):
+    admin_id = message.from_user.id
+    args_str = command.args if command.args else ""
+
+    user_id = None
+    course_numeric_id = None
+    lesson_num = None
+    feedback_text = ""
+    original_message_id_to_process = None
+
+    # Сценарий 1: Команда дана в ответ на сообщение бота с ДЗ
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
+        context_from_reply = await extract_homework_context_from_reply(message)
+        if context_from_reply:
+            user_id, course_numeric_id, lesson_num, original_message_id_to_process = context_from_reply
+            feedback_text = args_str  # Весь args - это фидбэк
+            logger.info(f"/approve по reply: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
+
+    # Сценарий 2: Команда с аргументами (для ИИ или прямого вызова админом)
+    # /approve <user_id_студента> <course_numeric_id> <lesson_num> [комментарий]
+    # ИЛИ /approve <original_bot_message_id> [комментарий]
+    if not user_id:  # Если контекст не извлечен из reply
+        args = args_str.split(maxsplit=3)  # Разделяем на 3 или 4 части
+        if len(args) >= 1 and args[0].isdigit():
+            # Пытаемся сначала как /approve <original_bot_message_id> [комментарий]
+            try:
+                temp_msg_id = int(args[0])
+                context_from_msg_id = await get_homework_context_by_message_id(temp_msg_id)
+                if context_from_msg_id:
+                    user_id, course_numeric_id, lesson_num = context_from_msg_id
+                    original_message_id_to_process = temp_msg_id
+                    feedback_text = args[1] if len(args) > 1 else ""
+                    logger.info(f"/approve по msg_id: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
+            except ValueError:  # Первый аргумент не число, значит это не msg_id
+                pass
+
+        if not user_id and len(
+                args) >= 3:  # Если все еще не нашли, пытаемся как /approve <user_id> <course_id> <lesson_num>
+            try:
+                user_id = int(args[0])
+                course_numeric_id = int(args[1])
+                lesson_num = int(args[2])
+                feedback_text = args[3] if len(args) > 3 else ""
+                # В этом случае original_message_id_to_process остается None, если только ИИ не передаст его отдельно
+                logger.info(f"/approve по аргументам: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
+            except (ValueError, IndexError):
+                user_id = None  # Сбрасываем, если парсинг не удался
+
+    if user_id and course_numeric_id is not None and lesson_num is not None:
+        course_id_str = await get_course_id_str(course_numeric_id)
+        await handle_homework_result(
+            user_id=user_id, course_id=course_id_str, course_numeric_id=course_numeric_id,
+            lesson_num=lesson_num, admin_id=admin_id, feedback_text=feedback_text,
+            is_approved=True, callback_query=None,
+            original_admin_message_id_to_delete=original_message_id_to_process
+        )
+        await message.reply("✅ ДЗ одобрено командой.")
+    else:
+        await message.reply(
+            "Не удалось определить ДЗ для одобрения.\n"
+            "Используйте: `/approve [комментарий]` в ответ на сообщение с ДЗ\n"
+            "Или: `/approve <id_сообщения_с_ДЗ> [комментарий]`\n"
+            "Или: `/approve <user_id> <course_num_id> <lesson_num> [комментарий]`"
+        )
+
+# Аналогично для cmd_reject_homework
+@dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)
+async def old_cmd_reject_homework(message: types.Message, command: CommandObject, state: FSMContext):
+    admin_id = message.from_user.id
+    args_str = command.args if command.args else ""
+
+    user_id = None
+    course_numeric_id = None
+    lesson_num = None
+    feedback_text = ""
+    original_message_id_to_process = None
+
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
+        context_from_reply = await extract_homework_context_from_reply(message)
+        if context_from_reply:
+            user_id, course_numeric_id, lesson_num, original_message_id_to_process = context_from_reply
+            feedback_text = args_str if args_str else "Домашнее задание требует доработки."
+            logger.info(f"/reject по reply: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
+
+    if not user_id:
+        args = args_str.split(maxsplit=3)
+        if len(args) >= 1 and args[0].isdigit():
+            try:
+                temp_msg_id = int(args[0])
+                context_from_msg_id = await get_homework_context_by_message_id(temp_msg_id)
+                if context_from_msg_id:
+                    user_id, course_numeric_id, lesson_num = context_from_msg_id
+                    original_message_id_to_process = temp_msg_id
+                    feedback_text = args[1] if len(args) > 1 else "Домашнее задание требует доработки."
+                    logger.info(f"/reject по msg_id: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
+            except ValueError:
+                pass
+
+        if not user_id and len(args) >= 3:
+            try:
+                user_id = int(args[0])
+                course_numeric_id = int(args[1])
+                lesson_num = int(args[2])
+                feedback_text = args[3] if len(args) > 3 else "Домашнее задание требует доработки."
+                logger.info(f"/reject по аргументам: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
+            except (ValueError, IndexError):
+                user_id = None
+
+    if user_id and course_numeric_id is not None and lesson_num is not None:
+        course_id_str = await get_course_id_str(course_numeric_id)
+        await handle_homework_result(
+            user_id=user_id, course_id=course_id_str, course_numeric_id=course_numeric_id,
+            lesson_num=lesson_num, admin_id=admin_id, feedback_text=feedback_text,
+            is_approved=False, callback_query=None,
+            original_admin_message_id_to_delete=original_message_id_to_process
+        )
+        await message.reply("❌ ДЗ отклонено командой.")
+    else:
+        await message.reply(
+            "Не удалось определить ДЗ для отклонения.\n"
+            "Используйте: `/reject [причина]` в ответ на сообщение с ДЗ\n"
+            "Или: `/reject <id_сообщения_с_ДЗ> [причина]`\n"
+            "Или: `/reject <user_id> <course_num_id> <lesson_num> [причина]`"
+        )
 
 
 # Команды для взаимодействия с пользователем - в конце, аминь.
@@ -3266,53 +3629,75 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
 
 #  Обработчик для RestartCourseCallback:
 @dp.callback_query(RestartCourseCallback.filter())
-async def cb_restart_course(query: types.CallbackQuery, callback_data: RestartCourseCallback):
+async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_data: RestartCourseCallback,
+                                          state: FSMContext):
     user_id = query.from_user.id
-    course_id_to_restart = callback_data.course_id_str
-    logger.info(f"Пользователь {user_id} хочет повторно пройти курс {course_id_to_restart}")
+    course_id_to_process = callback_data.course_id_str
+    action = callback_data.action
+
+    logger.info(f"Пользователь {user_id} выбрал действие '{action}' для курса {course_id_to_process}")
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Сбрасываем прогресс: current_lesson=0, hw_status='none', status='active'
-            # Обновляем даты, чтобы расписание началось заново
-            now_utc_str = datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S')
-
-            # Получаем version_id для этого курса у пользователя, чтобы не менять тариф
-            cursor_ver = await conn.execute(
-                "SELECT version_id FROM user_courses WHERE user_id = ? AND course_id = ?",
-                (user_id, course_id_to_restart)
+            cursor_current_info = await conn.execute(
+                "SELECT version_id, level FROM user_courses WHERE user_id = ? AND course_id = ?",
+                (user_id, course_id_to_process)
             )
-            row_ver = await cursor_ver.fetchone()
-            if not row_ver:
-                await query.answer("Не удалось найти информацию о вашем тарифе для этого курса.", show_alert=True)
+            current_info = await cursor_current_info.fetchone()
+            if not current_info:
+                await query.answer("Не удалось найти информацию о вашем курсе.", show_alert=True)
                 return
-            version_id = row_ver[0]
 
+            version_id, current_user_level_db = current_info
+            new_level_for_user = current_user_level_db
+
+            if action == "next_level":
+                new_level_for_user = current_user_level_db + 1
+                # Дополнительно можно проверить, существует ли вообще контент для new_level_for_user,
+                # хотя кнопка должна была появиться только если он есть.
+                cursor_check_level = await conn.execute(
+                    "SELECT 1 FROM group_messages WHERE course_id = ? AND level = ? LIMIT 1",
+                    (course_id_to_process, new_level_for_user)
+                )
+                if not await cursor_check_level.fetchone():
+                    await query.answer(f"Контент для {new_level_for_user}-го уровня пока не готов.", show_alert=True)
+                    return
+                log_details = f"Переход на уровень {new_level_for_user}"
+                user_message_feedback = f"Вы перешли на {new_level_for_user}-й уровень курса '{escape_md(await get_course_title(course_id_to_process))}'. Уроки начнутся заново."
+            elif action == "restart_current_level":
+                # new_level_for_user остается current_user_level_db
+                log_details = f"Повторное прохождение уровня {current_user_level_db}"
+                user_message_feedback = f"Прогресс по текущему уровню ({current_user_level_db}) курса '{escape_md(await get_course_title(course_id_to_process))}' сброшен. Уроки начнутся заново."
+            else:
+                await query.answer("Неизвестное действие.", show_alert=True)
+                return
+
+            now_utc_str = datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S')
             await conn.execute(
                 """UPDATE user_courses 
                    SET current_lesson = 0, hw_status = 'none', hw_type = NULL, 
-                       status = 'active', is_completed = 0,
+                       status = 'active', is_completed = 0, level = ?,
                        first_lesson_sent_time = ?, last_lesson_sent_time = ?,
                        activation_date = ? 
                    WHERE user_id = ? AND course_id = ?""",
-                (now_utc_str, now_utc_str, now_utc_str, user_id, course_id_to_restart)
+                (new_level_for_user, now_utc_str, now_utc_str, now_utc_str, user_id, course_id_to_process)
             )
             await conn.commit()
 
-        await query.answer(
-            f"Прогресс по курсу '{escape_md(await get_course_title(course_id_to_restart))}' сброшен. Уроки начнут приходить заново.",
-            show_alert=True)
+        await log_action(user_id, action.upper(), course_id_to_process, new_value=str(new_level_for_user),
+                         details=log_details)
+        await query.answer(user_message_feedback, show_alert=True)
 
-        # Отправляем описание курса и новое меню
-        await query.message.delete()  # Удаляем сообщение со списком курсов
-        await send_course_description(user_id, course_id_to_restart)
-        numeric_id = await get_course_id_int(course_id_to_restart)
-        await send_main_menu(user_id, course_id_to_restart, 0, version_id)  # lesson_num=0
+        await query.message.delete()
+        await send_course_description(user_id, course_id_to_process)  # Отправляем описание (урок 0)
+        # Меню для 0-го урока, но с новым уровнем пользователя
+        await send_main_menu(user_id, course_id_to_process, 0, version_id,
+                             user_course_level_for_menu=new_level_for_user)
+
 
     except Exception as e:
-        logger.error(f"Ошибка при сбросе прогресса курса {course_id_to_restart} для {user_id}: {e}")
-        await query.answer("Не удалось начать курс заново.", show_alert=True)
-
+        logger.error(f"Ошибка при '{action}' для курса {course_id_to_process}, user {user_id}: {e}", exc_info=True)
+        await query.answer("Произошла ошибка при обработке вашего запроса.", show_alert=True)
 
 # Заглушка для ROBOKASSA_MERCHANT_LOGIN и ROBOKASSA_PASSWORD1
 ROBOKASSA_MERCHANT_LOGIN = os.getenv("ROBOKASSA_MERCHANT_LOGIN", "your_robokassa_login")
@@ -4359,11 +4744,11 @@ async def handle_homework(message: types.Message):
     except Exception as e:
         logger.error(f"Ошибка отправки домашки админам: {e}", exc_info=True)
 
-# единое главное меню для пользователя
+# единое главное меню для пользователя. Теперь с левелами
 async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_id: str,
-                         homework_pending: bool = False, hw_type: str = 'none'):
+                         homework_pending: bool = False, hw_type: str = 'none', user_course_level_for_menu: int = 1):
     """Отправляет главное меню."""
-    logger.info(f"send_main_menu: {course_id=}, {lesson_num=}, {version_id=}, {homework_pending=}")
+    logger.info(f"send_main_menu: {course_id=}, {lesson_num=}, {version_id=}, {homework_pending=} {user_course_level_for_menu=}")
     try:
         course_title = await get_course_title(course_id)
         tariff_name = settings["tariff_names"].get(version_id, "Базовый")
