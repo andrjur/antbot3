@@ -2614,106 +2614,94 @@ async def get_homework_context_by_message_id(admin_group_message_id: int) -> tup
         return None
 
 
-@dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)  # Используем ADMIN_GROUP_ID
-async def cmd_approve_homework(message: types.Message, command: CommandObject):  # Убрал state, если не нужен
+# Вспомогательная функция для извлечения данных из callback_data кнопок сообщения
+def get_context_from_admin_message_markup(message_with_buttons: types.Message) -> tuple | None:
+    if message_with_buttons and message_with_buttons.reply_markup and message_with_buttons.reply_markup.inline_keyboard:
+        for row in message_with_buttons.reply_markup.inline_keyboard:
+            for button in row:
+                if button.callback_data:
+                    try:
+                        # Предполагаем, что хотя бы одна кнопка содержит AdminHomeworkCallback
+                        # и все нужные данные (user_id, course_id, lesson_num) там одинаковы
+                        cb_data = AdminHomeworkCallback.unpack(button.callback_data)
+                        return cb_data.user_id, cb_data.course_id, cb_data.lesson_num
+                    except Exception:
+                        continue  # Пробуем следующую кнопку
+    return None
+
+
+async def process_homework_command(
+        message: types.Message,
+        command_args: str | None,
+        is_approval: bool
+):
+    """Общая логика для обработки команд /approve и /reject."""
     admin_id = message.from_user.id
-    args_str = command.args if command.args else ""
 
     user_id_student = None
     course_numeric_id_hw = None
     lesson_num_hw = None
     feedback_text_hw = ""
-    original_bot_message_id = None
+    original_bot_message_id_in_admin_group = None  # ID сообщения, которое нужно будет изменить/удалить
 
     # Сценарий 1: Команда дана в ответ на сообщение бота с ДЗ
     if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
-        context_from_reply = await extract_homework_context_from_reply(message)
-        if context_from_reply:
-            user_id_student, course_numeric_id_hw, lesson_num_hw, original_bot_message_id = context_from_reply
-            feedback_text_hw = args_str
+        original_bot_message_in_admin_group = message.reply_to_message
+        context_from_reply_markup = get_context_from_admin_message_markup(original_bot_message_in_admin_group)
+        if context_from_reply_markup:
+            user_id_student, course_numeric_id_hw, lesson_num_hw = context_from_reply_markup
+            original_bot_message_id_in_admin_group = original_bot_message_in_admin_group.message_id
+            feedback_text_hw = command_args if command_args else \
+                ("Домашнее задание требует доработки." if not is_approval else "")  # Дефолтный фидбэк
             logger.info(
-                f"/approve по reply от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
+                f"Команда ({'/approve' if is_approval else '/reject'}) по REPLY от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
 
     # Сценарий 2: Команда с аргументами (для ИИ или прямого вызова админом)
-    # /approve <user_id_студента> <course_numeric_id> <lesson_num> [комментарий]
-    if not user_id_student:  # Если контекст не извлечен из reply
-        args = args_str.split(maxsplit=3)  # Разделяем на 3 или 4 части
+    # /cmd <user_id_студента> <course_numeric_id> <lesson_num> [комментарий/причина]
+    if not user_id_student and command_args:  # Если контекст не извлечен из reply и есть аргументы
+        args = command_args.split(maxsplit=3)  # user_id, course_id, lesson_num, остальное - текст
         if len(args) >= 3:
             try:
                 user_id_student = int(args[0])
                 course_numeric_id_hw = int(args[1])
                 lesson_num_hw = int(args[2])
-                feedback_text_hw = args[3] if len(args) > 3 else ""
+                feedback_text_hw = args[3] if len(args) > 3 else \
+                    ("Домашнее задание требует доработки." if not is_approval else "")
+                # В этом сценарии мы не знаем original_bot_message_id_in_admin_group, если только ИИ его не передаст
+                # как дополнительный аргумент, что усложнит команду. Пока оставляем None.
                 logger.info(
-                    f"/approve по аргументам от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
+                    f"Команда ({'/approve' if is_approval else '/reject'}) по АРГУМЕНТАМ от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
             except (ValueError, IndexError):
-                user_id_student = None  # Сбрасываем, если парсинг не удался
+                user_id_student = None  # Сбрасываем, если парсинг аргументов не удался
 
     if user_id_student and course_numeric_id_hw is not None and lesson_num_hw is not None:
         course_id_str = await get_course_id_str(course_numeric_id_hw)
         await handle_homework_result(
             user_id=user_id_student, course_id=course_id_str, course_numeric_id=course_numeric_id_hw,
             lesson_num=lesson_num_hw, admin_id=admin_id, feedback_text=feedback_text_hw,
-            is_approved=True, callback_query=None,
-            original_admin_message_id_to_delete=original_bot_message_id
+            is_approved=is_approval, callback_query=None,
+            original_admin_message_id_to_delete=original_bot_message_id_in_admin_group
         )
-        await message.reply("✅ ДЗ одобрено командой.")
+        action_verb = "одобрено" if is_approval else "отклонено"
+        await message.reply(f"✅ ДЗ для user {user_id_student} было {action_verb} командой.")
     else:
+        cmd_name = "approve" if is_approval else "reject"
         await message.reply(
-            "Не удалось определить ДЗ для одобрения.\n"
-            "Используйте: `/approve [комментарий]` в ответ на сообщение с ДЗ\n"
-            "Или: `/approve <user_id> <course_num_id> <lesson_num> [комментарий]`"
+            f"Не удалось определить ДЗ для команды `/{cmd_name}`.\n"
+            f"Используйте: `/{cmd_name} [комментарий]` в ответ на сообщение с ДЗ\n"
+            f"Или: `/{cmd_name} <user_id> <course_num_id> <lesson_num> [комментарий]`",
+            parse_mode=ParseMode.MARKDOWN_V2
         )
 
 
-@dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)  # Используем ADMIN_GROUP_ID
-async def cmd_reject_homework(message: types.Message, command: CommandObject):  # Убрал state
-    admin_id = message.from_user.id
-    args_str = command.args if command.args else ""
+@dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
+async def cmd_approve_homework_handler(message: types.Message, command: CommandObject):
+    await process_homework_command(message, command.args, is_approval=True)
 
-    user_id_student = None
-    course_numeric_id_hw = None
-    lesson_num_hw = None
-    feedback_text_hw = ""
-    original_bot_message_id = None
 
-    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
-        context_from_reply = await extract_homework_context_from_reply(message)
-        if context_from_reply:
-            user_id_student, course_numeric_id_hw, lesson_num_hw, original_bot_message_id = context_from_reply
-            feedback_text_hw = args_str if args_str else "Домашнее задание требует доработки."
-            logger.info(
-                f"/reject по reply от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
-
-    if not user_id_student:
-        args = args_str.split(maxsplit=3)
-        if len(args) >= 3:
-            try:
-                user_id_student = int(args[0])
-                course_numeric_id_hw = int(args[1])
-                lesson_num_hw = int(args[2])
-                feedback_text_hw = args[3] if len(args) > 3 else "Домашнее задание требует доработки."
-                logger.info(
-                    f"/reject по аргументам от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
-            except (ValueError, IndexError):
-                user_id_student = None
-
-    if user_id_student and course_numeric_id_hw is not None and lesson_num_hw is not None:
-        course_id_str = await get_course_id_str(course_numeric_id_hw)
-        await handle_homework_result(
-            user_id=user_id_student, course_id=course_id_str, course_numeric_id=course_numeric_id_hw,
-            lesson_num=lesson_num_hw, admin_id=admin_id, feedback_text=feedback_text_hw,
-            is_approved=False, callback_query=None,
-            original_admin_message_id_to_delete=original_bot_message_id
-        )
-        await message.reply("❌ ДЗ отклонено командой.")
-    else:
-        await message.reply(
-            "Не удалось определить ДЗ для отклонения.\n"
-            "Используйте: `/reject [причина]` в ответ на сообщение с ДЗ\n"
-            "Или: `/reject <user_id> <course_num_id> <lesson_num> [причина]`"
-        )
-
+@dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
+async def cmd_reject_homework_handler(message: types.Message, command: CommandObject):
+    await process_homework_command(message, command.args, is_approval=False)
 
 # Модифицируем cmd_approve_homework и cmd_reject_homework
 @dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)
@@ -4270,7 +4258,7 @@ async def handle_homework_result(
             # ---- КОНЕЦ НОВОЙ ЛОГИКИ ----
 
             # Уведомление администратора/ИИ, совершившего действие (остается как было)
-            admin_actor_name = "Система (автоодобрение v1?)"  # Дефолт, если нет информации
+            admin_actor_name = "Система "  # Дефолт, если нет информации
             if callback_query and callback_query.from_user:
                 admin_actor_name = escape_md(
                     callback_query.from_user.full_name or f"ID:{callback_query.from_user.id}")
@@ -4307,21 +4295,71 @@ async def handle_homework_result(
                              new_value=hw_status,  # 'approved' или 'rejected'
                              details=f"Проверил: {admin_id}. Результат: {action_details}")
 
-        # Удаление исходного сообщения с кнопками в админ-группе
-        message_id_to_delete = None
+        # В handle_homework_result, после отправки уведомления пользователю и админу
+        # РЕДАКТИРОВАНИЕ исходного сообщения с кнопками в админ-группе
+        # Блок удаления/редактирования сообщения в админ-группе
+        message_id_to_modify = None
         if callback_query and callback_query.message:
-            message_id_to_delete = callback_query.message.message_id
+            message_id_to_modify = callback_query.message.message_id
         elif original_admin_message_id_to_delete:
-            message_id_to_delete = original_admin_message_id_to_delete
+            message_id_to_modify = original_admin_message_id_to_delete
 
-        if message_id_to_delete and ADMIN_GROUP_ID:  # Проверяем, что ID админ группы есть
-            try:
-                await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=message_id_to_delete)
-            except TelegramBadRequest as e:
-                logger.warning(f"Не удалось удалить сообщение {message_id_to_delete} в админ-группе: {e}")
+        if message_id_to_modify and ADMIN_GROUP_ID:  # Убедитесь, что ADMIN_GROUP_ID используется правильно
+            try:  # Вложенный try для операции с сообщением в админ-группе
+                action_text_for_admin_msg = "✅ ОДОБРЕНО" if is_approved else "❌ ОТКЛОНЕНО"
+                admin_actor_name_for_status = "Неизвестный"  # Получите имя актора, как делали выше
+                if callback_query and callback_query.from_user:
+                    admin_actor_name_for_status = escape_md(
+                        callback_query.from_user.full_name or f"ID:{callback_query.from_user.id}")
+                elif admin_id:
+                    try:
+                        actor_chat = await bot.get_chat(admin_id)
+                        admin_actor_name_for_status = escape_md(actor_chat.full_name or f"ID:{admin_id}")
+                    except Exception:
+                        admin_actor_name_for_status = f"Актор ID:{admin_id}"
+
+                await bot.edit_message_reply_markup(
+                    chat_id=ADMIN_GROUP_ID,
+                    message_id=message_id_to_modify,
+                    reply_markup=None  # Убираем кнопки
+                )
+                logger.info(f"Убрана клавиатура с сообщения {message_id_to_modify} в админ-группе.")
+
+                # Отправляем новое сообщение в ответ, указывая статус
+                status_update_text = f"Статус ДЗ (сообщение выше): {action_text_for_admin_msg} (by {admin_actor_name_for_status})."
+                if feedback_text:
+                    status_update_text += f"\nКомментарий: {escape_md(feedback_text)}"
+
+                await bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text=status_update_text,
+                    reply_to_message_id=message_id_to_modify,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            except TelegramBadRequest as e_tg_edit:  # Ловим ошибку конкретно для изменения сообщения
+                logger.warning(
+                    f"Не удалось изменить/ответить на сообщение {message_id_to_modify} в админ-группе: {e_tg_edit}")
+            except Exception as e_inner:  # Другие ошибки во вложенном try
+                logger.error(f"Неожиданная ошибка при модификации сообщения в админ-группе: {e_inner}", exc_info=True)
 
         if callback_query:
             await callback_query.answer()
+
+        # Удаление исходного сообщения с кнопками в админ-группе
+        # message_id_to_delete = None
+        # if callback_query and callback_query.message:
+        #     message_id_to_delete = callback_query.message.message_id
+        # elif original_admin_message_id_to_delete:
+        #     message_id_to_delete = original_admin_message_id_to_delete
+        #
+        # if message_id_to_delete and ADMIN_GROUP_ID:  # Проверяем, что ID админ группы есть
+        #     try:
+        #         await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=message_id_to_delete)
+        #     except TelegramBadRequest as e:
+        #         logger.warning(f"Не удалось удалить сообщение {message_id_to_delete} в админ-группе: {e}")
+        #
+        # if callback_query:
+        #     await callback_query.answer()
 
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_homework_result: {e}", exc_info=True)
@@ -4672,12 +4710,17 @@ async def handle_homework(message: types.Message):
             logger.error(f"Ошибка при отправке сообщения об авто-аппруве: {e}", exc_info=True)
         return
 
+    # Формируем сообщение для админа
+    course_title_from_db = await get_course_title(course_numeric_id)  # Получаем название по числовому ID
+    # Защита, если курс еще не имеет названия в БД или course_numeric_id=0
+    display_course_title = course_title_from_db if course_title_from_db != "Неизвестный курс" else course_id  # course_id здесь строковый от user_course_data
 
-    # Получаем имя пользователя для отображения в сообщении админам
-    user_name = md.quote(message.from_user.full_name)
+    user_display_name = message.from_user.full_name  # Имя пользователя
+    if message.from_user.username:
+        user_display_name += f" @{message.from_user.username}"
 
     # Создаем клавиатуру для админа (ДО формирования сообщения)
-    keyboard = create_admin_keyboard(
+    admin_keyboard = create_admin_keyboard(
         user_id=user_id,
         course_id=course_numeric_id,
         lesson_num=current_lesson,
@@ -4704,18 +4747,13 @@ async def handle_homework(message: types.Message):
         await message.answer("Неподдерживаемый тип контента.")
         return
 
-
-
-
-    # Формируем сообщение для админа
-    course_title = await get_course_title(course_numeric_id)
-    admin_message = (
-        f"📝 Новое ДЗ ({homework_type})\n"
-        f"👤 Пользователь: {user_name}\n"
-        f"📚 Курс: {md.quote(course_title)}\n"
-        f"⚡ Тариф: {version_id}\n"
+    # Добавляем ID пользователя в сообщение админам
+    admin_message_text = (
+        f"📝 Новое ДЗ {homework_type}\n"
+        f"👤 Пользователь: {escape_md(user_display_name)} ID: {user_id}\n"  # Добавили user_id
+        f"📚 Курс: {escape_md(display_course_title)}\n"  # Используем display_course_title
+        f"⚡ Тариф: {escape_md(version_id)}\n"
         f"📖 Урок: {current_lesson}\n"
-        f"{admin_message_content}"  # Добавляем контент в сообщение
     )
 
     try:
@@ -4728,21 +4766,106 @@ async def handle_homework(message: types.Message):
             await conn.commit()
 
         # Отправляем сообщение админам
-        await bot.send_message(
-            ADMIN_GROUP_ID,
-            admin_message,
-            reply_markup=keyboard,
-            parse_mode=None  # если нет форматирования, иначе ParseMode.MARKDOWN_V2 если нужно
-        )
+        sent_admin_message = None  # Для отслеживания отправленного сообщения, если понадобится его ID
 
-        # Отправляем сообщение пользователю
+        # Формируем базовый caption (без описания из ДЗ, оно добавится ниже если есть)
+        base_caption_for_media = admin_message_text
+
+        # Добавляем описание из ДЗ к caption, если оно есть
+        # text здесь - это message.caption из входящего сообщения с ДЗ
+        description_from_homework = text if text else ""  # text = message.caption or ""
+        if description_from_homework:
+            caption_with_description = base_caption_for_media + f"\n✏️ Описание: {escape_md(description_from_homework)}"
+        else:
+            caption_with_description = base_caption_for_media
+
+        if message.photo:
+            sent_admin_message = await bot.send_photo(
+                chat_id=ADMIN_GROUP_ID,
+                photo=message.photo[-1].file_id,
+                caption=caption_with_description,
+                reply_markup=admin_keyboard,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        elif message.video:
+            sent_admin_message = await bot.send_video(
+                chat_id=ADMIN_GROUP_ID,
+                video=message.video.file_id,
+                caption=caption_with_description,
+                reply_markup=admin_keyboard,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        elif message.document:
+            sent_admin_message = await bot.send_document(
+                chat_id=ADMIN_GROUP_ID,
+                document=message.document.file_id,
+                caption=caption_with_description,
+                reply_markup=admin_keyboard,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        elif message.audio:  # Новый тип
+            sent_admin_message = await bot.send_audio(
+                chat_id=ADMIN_GROUP_ID,
+                audio=message.audio.file_id,
+                caption=caption_with_description,
+                reply_markup=admin_keyboard,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        elif message.voice:  # Новый тип
+            sent_admin_message = await bot.send_voice(
+                chat_id=ADMIN_GROUP_ID,
+                voice=message.voice.file_id,
+                caption=caption_with_description,
+                # Для voice caption обычно не отображается клиентами, но API его принимает
+                reply_markup=admin_keyboard,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        elif message.animation:  # Новый тип (GIF)
+            sent_admin_message = await bot.send_animation(
+                chat_id=ADMIN_GROUP_ID,
+                animation=message.animation.file_id,
+                caption=caption_with_description,
+                reply_markup=admin_keyboard,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        elif message.text:  # Если это текстовая домашка
+            # text здесь - это message.text.strip()
+            final_admin_text = admin_message_text + f"\n✏️ Текст ДЗ:\n{escape_md(text)}"  # text уже взят из message.text.strip()
+            sent_admin_message = await bot.send_message(
+                ADMIN_GROUP_ID,
+                final_admin_text,
+                reply_markup=admin_keyboard,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        else:
+            logger.warning(f"Получен неподдерживаемый тип контента для ДЗ от user {user_id}: {message.content_type}")
+            await message.answer(escape_md("Неподдерживаемый тип файла для домашнего задания."),
+                                 parse_mode=ParseMode.MARKDOWN_V2)
+            return  # Выходим, если тип не поддерживается
+
+        # Если нужно обновить callback_data кнопок с ID отправленного сообщения:
+        # if sent_admin_message:
+        #     new_keyboard = create_admin_keyboard(
+        #         user_id=user_id,
+        #         course_id=course_numeric_id,
+        #         lesson_num=current_lesson,
+        #         message_id=sent_admin_message.message_id # <--- Новый ID
+        #     )
+        #     await bot.edit_message_reply_markup(
+        #         chat_id=ADMIN_GROUP_ID,
+        #         message_id=sent_admin_message.message_id,
+        #         reply_markup=new_keyboard
+        #     )
+
         await message.answer(
-            md.quote(f"✅ {homework_type} на проверке!"),
+            escape_md(f"✅ {homework_type} на проверке!"),
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
     except Exception as e:
         logger.error(f"Ошибка отправки домашки админам: {e}", exc_info=True)
+        await message.answer(escape_md("Произошла ошибка при отправке вашего ДЗ. Попробуйте позже."),
+                             parse_mode=ParseMode.MARKDOWN_V2)
 
 # единое главное меню для пользователя. Теперь с левелами
 async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_id: str,
