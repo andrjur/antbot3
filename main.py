@@ -2569,51 +2569,6 @@ async def extract_homework_context_from_reply(message: types.Message) -> tuple |
     return None
 
 
-async def get_homework_context_by_message_id(admin_group_message_id: int) -> tuple | None:
-    """
-    Пытается извлечь контекст ДЗ (user_id, course_numeric_id, lesson_num)
-    из сообщения в админ-группе по его ID, анализируя callback_data кнопок.
-    """
-    try:
-        # Получаем сообщение из админ-группы.
-        # bot.edit_message_reply_markup(..., reply_markup=None) вернет объект Message, если успешно.
-        # Это немного хак, чтобы просто получить объект сообщения, не меняя его видимого состояния надолго.
-        # Более прямой способ - если бы был метод get_message_by_id, но его нет в чистом виде для бота.
-        # Однако, если сообщение не имеет клавиатуры или если мы не хотим ее трогать, этот метод не идеален.
-        # Проще будет, если ИИ передаст все нужные ID в аргументах команды.
-        # Но если мы хотим сделать команду /approve <message_id> более универсальной для админов:
-
-        # Временное решение для получения reply_markup без его изменения:
-        # К сожалению, нет прямого метода "get_message_reply_markup".
-        # Этот подход с edit_message_reply_markup(None) и потом восстановлением - рискованный.
-        # Лучше, если ИИ передает все данные, или мы храним связь message_id с контекстом ДЗ в БД/кэше.
-
-        # Давайте упростим: эта функция будет работать, если ИИ сможет предоставить все данные.
-        # Для админа, отвечающего на сообщение, extract_homework_context_from_reply более подходит.
-        # Если же админ использует /approve <message_id>, то ему проще указать все данные.
-
-        # Пока оставим эту функцию как заглушку или для будущего, если найдем способ безопасно получить сообщение
-        # и его reply_markup по ID без его изменения.
-        logger.warning(
-            f"Функция get_homework_context_by_message_id ({admin_group_message_id}) пока не реализована надежно для извлечения callback_data.")
-        return None
-
-        # Если бы у нас был доступ к объекту Message по ID:
-        # if target_message and target_message.reply_markup and target_message.reply_markup.inline_keyboard:
-        #     for row in target_message.reply_markup.inline_keyboard:
-        #         for button in row:
-        #             if button.callback_data:
-        #                 try:
-        #                     cb_data = AdminHomeworkCallback.unpack(button.callback_data)
-        #                     return cb_data.user_id, cb_data.course_id, cb_data.lesson_num
-        #                 except:
-        #                     continue
-        # return None
-    except Exception as e:
-        logger.error(f"Ошибка при получении контекста ДЗ по message_id {admin_group_message_id}: {e}")
-        return None
-
-
 # Вспомогательная функция для извлечения данных из callback_data кнопок сообщения
 def get_context_from_admin_message_markup(message_with_buttons: types.Message) -> tuple | None:
     if message_with_buttons and message_with_buttons.reply_markup and message_with_buttons.reply_markup.inline_keyboard:
@@ -2652,7 +2607,7 @@ async def process_homework_command(
             user_id_student, course_numeric_id_hw, lesson_num_hw = context_from_reply_markup
             original_bot_message_id_in_admin_group = original_bot_message_in_admin_group.message_id
             feedback_text_hw = command_args if command_args else \
-                ("Домашнее задание требует доработки." if not is_approval else "")  # Дефолтный фидбэк
+                ("Домашнее задание требует доработки" if not is_approval else "")  # Дефолтный фидбэк
             logger.info(
                 f"Команда ({'/approve' if is_approval else '/reject'}) по REPLY от {admin_id}: user={user_id_student}, c_id={course_numeric_id_hw}, l_num={lesson_num_hw}")
 
@@ -2666,7 +2621,7 @@ async def process_homework_command(
                 course_numeric_id_hw = int(args[1])
                 lesson_num_hw = int(args[2])
                 feedback_text_hw = args[3] if len(args) > 3 else \
-                    ("Домашнее задание требует доработки." if not is_approval else "")
+                    ("Домашнее задание требует доработки" if not is_approval else "")
                 # В этом сценарии мы не знаем original_bot_message_id_in_admin_group, если только ИИ его не передаст
                 # как дополнительный аргумент, что усложнит команду. Пока оставляем None.
                 logger.info(
@@ -2683,7 +2638,7 @@ async def process_homework_command(
             original_admin_message_id_to_delete=original_bot_message_id_in_admin_group
         )
         action_verb = "одобрено" if is_approval else "отклонено"
-        await message.reply(f"✅ ДЗ для user {user_id_student} было {action_verb} командой.")
+        await message.reply(f"✅ ДЗ для user {user_id_student} было {action_verb} командой")
     else:
         cmd_name = "approve" if is_approval else "reject"
         await message.reply(
@@ -2696,11 +2651,13 @@ async def process_homework_command(
 
 @dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
 async def cmd_approve_homework_handler(message: types.Message, command: CommandObject):
+    logger.info(f"Получена команда /approve от админа {message.from_user.id}")
     await process_homework_command(message, command.args, is_approval=True)
 
 
 @dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
 async def cmd_reject_homework_handler(message: types.Message, command: CommandObject):
+    logger.info(f"Получена команда /reject от админа {message.from_user.id}")
     await process_homework_command(message, command.args, is_approval=False)
 
 # Модифицируем cmd_approve_homework и cmd_reject_homework
@@ -3084,7 +3041,7 @@ async def cmd_start(message: types.Message):
     logger.info(f"!!!!!!!!!! CMD_START ВЫЗВАН для пользователя {message.from_user.id} !!!!!!!!!!")
     user = message.from_user
     user_id = user.id
-    first_name = user.first_name or "Пользователь"
+    first_name = user.first_name or user.username or "Пользователь"
     logger.info(f"cmd_start {user_id=}")
 
     try:
@@ -3189,7 +3146,6 @@ async def cmd_start(message: types.Message):
             logger.info(f"Старт задачи для шедулера для {user_id=}")
             await start_lesson_schedule_task(user_id)
             # Генерация клавиатуры
-            # пока выключим - вроде ненад todo разобраться
             #homework_pending = await check_homework_pending(user_id, course_id, lesson_num)
             logger.info(f"перед созданием клавиатуры {course_numeric_id=}")
             keyboard = get_main_menu_inline_keyboard(  # await убрали
