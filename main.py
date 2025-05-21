@@ -184,11 +184,13 @@ class CourseReviewForm(StatesGroup):
 
 
 class BuyCourseCallback(CallbackData, prefix="buy_course"):
-    course_id_str: str # Текстовый ID курса для покупки
+    # course_id_str: str # ЗАМЕНЯЕМ
+    course_numeric_id: int # Используем числовой ID
 
 class RestartCourseCallback(CallbackData, prefix="restart_course"):
-    course_id_str: str
-    action: str # "next_level" или "restart_current_level"
+    # course_id_str: str # ЗАМЕНЯЕМ
+    course_numeric_id: int # Используем числовой ID
+    action: str
 
 class AwaitingPaymentConfirmation(StatesGroup):
     waiting_for_activation_code_after_payment = State()
@@ -201,9 +203,10 @@ class MainMenuAction(CallbackData, prefix="main_menu"):
 
 # Определим CallbackData для кнопок "Описание" и "Перейти к активному курсу"
 class CourseDetailsCallback(CallbackData, prefix="course_details"):
-    action: str # "show_description" или "view_lessons_list"
-    course_id_str: str
-    # page: int = 1 # Для пагинации списка уроков, если нужно
+    action: str
+    # course_id_str: str # ЗАМЕНЯЕМ
+    course_numeric_id: int # Используем числовой ID
+    page: int = 1 # Для пагинации списка уроков, если нужно
 
 class ShowActiveCourseMenuCallback(CallbackData, prefix="show_active_menu"):
     course_numeric_id: int
@@ -942,7 +945,7 @@ async def init_db():
         async with aiosqlite.connect(DB_FILE) as conn:
             # Создаем таблицу users
             await conn.execute("PRAGMA journal_mode = WAL")
-            await conn.execute("PRAGMA busy_timeout = 310")  #
+            await conn.execute("PRAGMA busy_timeout = 620")  #
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -1394,7 +1397,7 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
     logger.info(
         f"Курс {course_id} завершен для user_id={user_id}. Последний урок был {total_lessons_current_level}, запрошен {requested_lesson_num}.")
     course_title_safe = escape_md(await get_course_title(course_id))
-
+    course_numeric_id=await get_course_id_int(course_id)
     message_text = (
         f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
         f"{escape_md('Вы прошли все уроки текущего уровня. Что вы хотите сделать дальше?')}"
@@ -1420,14 +1423,14 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
     if has_next_level_lessons:
         builder.button(
             text=escape_md(f"🚀 Начать {next_level_to_check}-й уровень!"),
-            callback_data=RestartCourseCallback(course_id_str=course_id, action="next_level").pack()  # Добавим action
+            callback_data=RestartCourseCallback(course_numeric_id = course_numeric_id, action="next_level").pack()  # Добавим action
         )
 
     # Кнопка повторить ТЕКУЩИЙ уровень (если он не первый, или если хотим всегда давать возможность)
     # Можно добавить условие, if current_user_level > 0 или просто всегда показывать
     builder.button(
         text=escape_md(f"🔁 Повторить {current_user_level}-й уровень"),
-        callback_data=RestartCourseCallback(course_id_str=course_id, action="restart_current_level").pack()
+        callback_data=RestartCourseCallback(course_numeric_id = course_numeric_id, action="restart_current_level").pack()
     )
 
     builder.button(text=escape_md("Выбрать другой курс"), callback_data="select_other_course")
@@ -2724,7 +2727,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
     user_id = query.from_user.id
     course_numeric_id = callback_data.course_numeric_id
     course_id_str = await get_course_id_str(course_numeric_id)
-    await query.answer("Загружаю содержание курса...")
+    await query.answer("Загружаю содержание курса")
 
     if not course_id_str or course_id_str == "Неизвестный курс":
         await query.message.edit_text(escape_md("Ошибка: курс не найден."), parse_mode=ParseMode.MARKDOWN_V2)
@@ -2959,7 +2962,7 @@ async def cb_stop_current_course(query: types.CallbackQuery, callback_data: Main
 
     except Exception as e:
         logger.error(f"Ошибка при остановке курса {course_id_to_stop_str} для {user_id}: {e}")
-        await query.answer("Не удалось остановить курс.", show_alert=True)
+        await query.answer("Не удалось остановить курс", show_alert=True)
 
 
 @dp.message(Command("timezone"))
@@ -3518,7 +3521,7 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
         await query.answer("✅ Курсы")
     except Exception as e3375:
         logger.error(f"Error in cmd_mycourses: {e3375}")
-        await query.answer("Произошла ошибка при обработке запроса.", show_alert=True)
+        await query.answer("Произошла ошибка при обработке запроса", show_alert=True)
 
 
 # 11-04
@@ -3683,7 +3686,7 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     message_text_parts = ["*Доступные курсы и действия:*"]  # Общий заголовок
 
-    for course_id_str, title, course_num_id_sys, min_price, base_version_id_sys in all_system_courses:
+    for i, (course_id_str, title, course_num_id_sys, min_price, base_version_id_sys) in enumerate(all_system_courses,1):
         course_title_safe = escape_md(title)
         user_course_info = user_courses_data.get(course_id_str)
 
@@ -3695,45 +3698,51 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
             current_lesson_user = user_course_info["current_lesson"]
 
             if status == 'active':
-                course_block_text = f"▶️ *{course_title_safe}* \\(активен\\)"
+                course_block_text = f"{i}▶️ *{course_title_safe}* \\(активен\\)"
                 buttons_for_this_course_row.append(
                     InlineKeyboardButton(text="🚀 Перейти",
                                          callback_data=ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
                                                                                     lesson_num=current_lesson_user).pack())
                 )
             elif status == 'completed':
-                course_block_text = f"✅ *{course_title_safe}* \\(пройден\\)"
+                course_block_text = f"{i}✅ *{course_title_safe}* \\(пройден\\)"
                 buttons_for_this_course_row.append(
                     InlineKeyboardButton(text="🔁 Повтор/Обнов.",
-                                         callback_data=RestartCourseCallback(course_id_str=course_id_str,
+                                         callback_data=RestartCourseCallback(course_numeric_id=course_num_id_sys,
                                                                              action="restart_current_level").pack())
                 )
             elif status == 'inactive':
-                course_block_text = f"⏸️ *{course_title_safe}* \\(остановлен\\)"
+                course_block_text = f"{i}⏸️ *{course_title_safe}* \\(остановлен\\)"
                 buttons_for_this_course_row.append(
                     InlineKeyboardButton(text="🔄 Возобновить",
                                          callback_data=ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
                                                                                     lesson_num=current_lesson_user).pack())
                 )
             else:  # Другой статус, предлагаем купить/активировать
-                price_str = f"{min_price} руб." if min_price is not None and min_price > 0 else "По коду"
-                course_block_text = f"✨ *{course_title_safe}* \\({escape_md(price_str)}\\)"
+                price_str = f"{min_price} руб" if min_price is not None and min_price > 0 else "По коду"
+                course_block_text = f"{i}✨ *{course_title_safe}* \\({escape_md(price_str)}\\)"
                 buttons_for_this_course_row.append(
                     InlineKeyboardButton(text="💰 Купить/Инфо",
-                                         callback_data=BuyCourseCallback(course_id_str=course_id_str).pack())
+                                         callback_data=BuyCourseCallback(course_numeric_id=course_num_id_sys).pack())
                 )
         else:  # Курс не взаимодействовал с пользователем
-            price_str = f"{min_price} руб." if min_price is not None and min_price > 0 else "Инфо по активации"
-            course_block_text = f"🆕 *{course_title_safe}* \\({escape_md(price_str)}\\)"
+            price_str = f"{min_price} руб" if min_price is not None and min_price > 0 else "Инфо по активации"
+            course_block_text = f"{i}🆕 *{course_title_safe}* \\({escape_md(price_str)}\\)"
             buttons_for_this_course_row.append(
                 InlineKeyboardButton(text="💰 Купить/Инфо",
-                                     callback_data=BuyCourseCallback(course_id_str=course_id_str).pack())
+                                     callback_data=BuyCourseCallback(course_numeric_id=course_num_id_sys).pack())
             )
 
-        # Кнопка "Описание" (только значок) для всех
+        # Кнопка "Описание"
+        short_title_for_button = title[:18] + '…' if len(title) > 18 else title
         buttons_for_this_course_row.append(
-            InlineKeyboardButton(text="ℹ️", callback_data=CourseDetailsCallback(action="show_description",
-                                                                                course_id_str=course_id_str).pack())
+            InlineKeyboardButton(
+                text=f"ℹ️ {escape_md(short_title_for_button)}",  #  название
+                callback_data=CourseDetailsCallback(
+                    action="show_description",
+                    course_numeric_id=course_num_id_sys
+                ).pack()
+            )
         )
 
         message_text_parts.append(f"\n{course_block_text}")  # Добавляем текстовое описание курса
@@ -3770,13 +3779,20 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
         )
     except Exception as e_cb_select_other_v2:
         logger.error(f"Общая ошибка в cb_select_other_course_v2: {e_cb_select_other_v2}", exc_info=True)
-        await query.answer("Произошла ошибка при отображении списка курсов.", show_alert=True)
+        await query.answer("Произошла ошибка при отображении списка курсов", show_alert=True)
 
 
 # Обработчики для новых CallbackData
 @dp.callback_query(CourseDetailsCallback.filter(F.action == "show_description"))
 async def cb_show_course_description(query: types.CallbackQuery, callback_data: CourseDetailsCallback):
-    await query.answer("Загружаю описание...")
+    course_numeric_id = callback_data.course_numeric_id  # <--- ИЗМЕНЕНИЕ
+    course_id_str = await get_course_id_str(course_numeric_id)
+
+    if not course_id_str or course_id_str == "Неизвестный курс":
+        await query.answer("Ошибка: курс не найден", show_alert=True)
+        return
+
+    await query.answer("Загружаю описание")
     await send_course_description(query.from_user.id, callback_data.course_id_str)
     # После описания можно вернуть пользователя к списку курсов или в главное меню
     # await cb_select_other_course(query, state) # Вернуть к списку курсов (нужен state)
@@ -3791,7 +3807,7 @@ async def cb_show_active_course_main_menu(query: types.CallbackQuery, callback_d
 
     course_id_str = await get_course_id_str(course_numeric_id)
     if not course_id_str or course_id_str == "Неизвестный курс":
-        await query.answer("Ошибка: не удалось найти курс.", show_alert=True)
+        await query.answer("Ошибка: не удалось найти курс", show_alert=True)
         return
 
     async with aiosqlite.connect(DB_FILE) as conn:
@@ -3803,7 +3819,7 @@ async def cb_show_active_course_main_menu(query: types.CallbackQuery, callback_d
         course_user_details = await cursor.fetchone()
 
     if not course_user_details:
-        await query.answer("Информация о вашем прогрессе по этому курсу не найдена.", show_alert=True)
+        await query.answer("Информация о вашем прогрессе по этому курсу не найдена", show_alert=True)
         await cb_select_other_course(query, state)
         return
 
@@ -3823,9 +3839,9 @@ async def cb_show_active_course_main_menu(query: types.CallbackQuery, callback_d
             )
             await conn_reactivate.commit()
         await start_lesson_schedule_task(user_id)  # Запускаем шедулер для пользователя
-        await query.answer(f"Курс «{escape_md(await get_course_title(course_id_str))}» возобновлен!", show_alert=True)
+        await query.answer(f"Курс «{escape_md(await get_course_title(course_id_str))}» возобновлен", show_alert=True)
     else:
-        await query.answer(f"Перехожу в меню курса «{escape_md(await get_course_title(course_id_str))}»...")
+        await query.answer(f"Перехожу в меню курса «{escape_md(await get_course_title(course_id_str))}»")
 
     if query.message:
         try:
@@ -3854,9 +3870,9 @@ async def cb_show_active_course_main_menu(query: types.CallbackQuery, callback_d
 async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_data: RestartCourseCallback,
                                           state: FSMContext):
     user_id = query.from_user.id
-    course_id_to_process = callback_data.course_id_str
+    course_numeric_id_to_process = callback_data.course_numeric_id # <--- ИЗМЕНЕНИЕ
     action = callback_data.action
-
+    course_id_to_process = await get_course_id_str(course_numeric_id_to_process)  # Получаем строковый ID для работы с БД
     logger.info(f"Пользователь {user_id} выбрал действие '{action}' для курса {course_id_to_process}")
 
     try:
@@ -3867,7 +3883,7 @@ async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_d
             )
             current_info = await cursor_current_info.fetchone()
             if not current_info:
-                await query.answer("Не удалось найти информацию о вашем курсе.", show_alert=True)
+                await query.answer("Не удалось найти информацию о вашем курсе", show_alert=True)
                 return
 
             version_id, current_user_level_db = current_info
@@ -3882,16 +3898,16 @@ async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_d
                     (course_id_to_process, new_level_for_user)
                 )
                 if not await cursor_check_level.fetchone():
-                    await query.answer(f"Контент для {new_level_for_user}-го уровня пока не готов.", show_alert=True)
+                    await query.answer(f"Контент для {new_level_for_user}-го уровня пока не готов", show_alert=True)
                     return
                 log_details = f"Переход на уровень {new_level_for_user}"
-                user_message_feedback = f"Вы перешли на {new_level_for_user}-й уровень курса '{escape_md(await get_course_title(course_id_to_process))}'. Уроки начнутся заново."
+                user_message_feedback = f"Вы перешли на {new_level_for_user}-й уровень курса '{escape_md(await get_course_title(course_id_to_process))}' Уроки начнутся заново"
             elif action == "restart_current_level":
                 # new_level_for_user остается current_user_level_db
                 log_details = f"Повторное прохождение уровня {current_user_level_db}"
-                user_message_feedback = f"Прогресс по текущему уровню ({current_user_level_db}) курса '{escape_md(await get_course_title(course_id_to_process))}' сброшен. Уроки начнутся заново."
+                user_message_feedback = f"Прогресс по текущему уровню ({current_user_level_db}) курса '{escape_md(await get_course_title(course_id_to_process))}' сброшен Уроки начнутся заново"
             else:
-                await query.answer("Неизвестное действие.", show_alert=True)
+                await query.answer("Неизвестное действие", show_alert=True)
                 return
 
             now_utc_str = datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -3919,7 +3935,7 @@ async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_d
 
     except Exception as e3645:
         logger.error(f"Ошибка при '{action}' для курса {course_id_to_process}, user {user_id}: {e3645}", exc_info=True)
-        await query.answer("Произошла ошибка при обработке вашего запроса.", show_alert=True)
+        await query.answer("Произошла ошибка при обработке вашего запроса", show_alert=True)
 
 # Заглушка для ROBOKASSA_MERCHANT_LOGIN и ROBOKASSA_PASSWORD1
 ROBOKASSA_MERCHANT_LOGIN = os.getenv("ROBOKASSA_MERCHANT_LOGIN", "your_robokassa_login")
@@ -3936,7 +3952,14 @@ def calculate_robokassa_signature(*args) -> str:
 @dp.callback_query(BuyCourseCallback.filter())
 async def cb_buy_course_prompt(query: types.CallbackQuery, callback_data: BuyCourseCallback, state: FSMContext):
     user_id = query.from_user.id
-    course_id_to_buy_str = callback_data.course_id_str  # Текстовый ID курса
+    course_numeric_id_to_buy = callback_data.course_numeric_id  # <--- ИЗМЕНЕНИЕ
+    course_id_to_buy_str = await get_course_id_str(course_numeric_id_to_buy)  # Получаем строковый ID
+
+    if not course_id_to_buy_str or course_id_to_buy_str == "Неизвестный курс":
+        await query.answer("Ошибка: курс не найден", show_alert=True)
+        return
+    logger.info(
+        f"Пользователь {user_id} нажал 'Купить/Узнать' для курса {course_id_to_buy_str} (ID: {course_numeric_id_to_buy})")
 
     logger.info(f"Пользователь {user_id} инициировал 'покупку' курса {course_id_to_buy_str}")
 
@@ -3989,7 +4012,15 @@ async def cb_buy_course_prompt(query: types.CallbackQuery, callback_data: BuyCou
         reply_markup=builder.as_markup(),
         parse_mode=ParseMode.MARKDOWN_V2
     )
-    await state.set_state(AwaitingPaymentConfirmation.waiting_for_activation_code_after_payment)
+
+
+    """ То есть, в конце cb_buy_course_prompt не должно быть await state.set_state(...).
+    И обработчики для AwaitingPaymentConfirmation и AwaitingPaymentProof становятся ненужными в этом простом сценарии.
+    Пользователь увидит:
+    "После оплаты с вами свяжутся... Полученный код нужно будет отправить в этот чат..."
+    И когда он отправит код, сработает handle_homework (в той его части, где if not user_course_data), который вызовет activate_course. """
+
+    #await state.set_state(AwaitingPaymentConfirmation.waiting_for_activation_code_after_payment)
     await query.answer()
 
 
@@ -4095,7 +4126,7 @@ async def cmd_progress_callback(query: types.CallbackQuery):
             courses = await cursor.fetchall()
 
             if not courses:
-                await query.answer("Вы не записаны ни на один активный курс.", show_alert=True)
+                await query.answer("Вы не записаны ни на один активный курс", show_alert=True)
                 return
 
             progress_text = ""
@@ -4158,7 +4189,7 @@ async def cmd_progress_callback(query: types.CallbackQuery):
 
     except Exception as e3882:
         logger.error(f"Ошибка в cmd_progress_callback: {e3882}", exc_info=True)
-        await query.answer("⚠️ Произошла ошибка при получении прогресса.", show_alert=True)
+        await query.answer("⚠️ Произошла ошибка при получении прогресса", show_alert=True)
 
 
 
@@ -5286,14 +5317,16 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 else:
                     expected_hw_type_for_this_lesson = "любое"
 
-
-
-        domashka_text = escape_md("не требуется или уже принята")
+        domashka_text = escape_md("не требуется")  # Экранируем сразу
         if lesson_has_homework_defined:  # Если для этого урока в принципе есть ДЗ
             if homework_pending:  # Если текущий статус в user_courses - pending или rejected
                 domashka_text = f"ожидается \\({expected_hw_type_for_this_lesson}\\)"
-            else:  # ДЗ для этого урока было, но сейчас оно принято (или еще не было отправлено после активации)
-                domashka_text = f"принята \\(тип: {expected_hw_type_for_this_lesson}\\) или еще не отправлялось"
+            else:  # ДЗ для этого урока было, и сейчас оно принято (hw_status = 'approved' или 'none'/'not_required' и т.п.)
+                # Или это урок 0, для которого ДЗ не бывает pending.
+                if lesson_num == 0:  # Для урока-описания
+                    domashka_text = escape_md("не предусмотрена")
+                else:
+                    domashka_text = f"принята \\(тип: {expected_hw_type_for_this_lesson}\\)"
 
         # Узнаем общее количество уроков на текущем уровне
         total_lessons_on_level = 0
