@@ -3793,7 +3793,7 @@ async def cb_show_course_description(query: types.CallbackQuery, callback_data: 
         return
 
     await query.answer("Загружаю описание")
-    await send_course_description(query.from_user.id, callback_data.course_id_str)
+    await send_course_description(query.from_user.id, course_id_str)
     # После описания можно вернуть пользователя к списку курсов или в главное меню
     # await cb_select_other_course(query, state) # Вернуть к списку курсов (нужен state)
 
