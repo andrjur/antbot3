@@ -3311,25 +3311,34 @@ async def cmd_start(message: types.Message):
 async def send_course_description(user_id: int, course_id: str):
     """Отправляет описание курса пользователю."""
     logger.info(f"send_course_description {user_id=} {course_id=}")
+    description_text = None  # Инициализируем
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute("""
-                SELECT text
-                FROM group_messages
-                WHERE course_id = ? AND lesson_num = 0
-            """, (course_id,))
-            description = await cursor.fetchone()
-            logger.info(f"Описание курса description {course_id=} = {len(description)}")
-            if description:
-                await bot.send_message(user_id, description[0], parse_mode=None)
+                  SELECT text
+                  FROM group_messages
+                  WHERE course_id = ? AND lesson_num = 0
+                  ORDER BY id ASC LIMIT 1 
+              """, (course_id,))  # Добавил ORDER BY и LIMIT 1 на всякий случай
+            description_row = await cursor.fetchone()
+
+            if description_row and description_row[0]:
+                description_text = description_row[0]
+                logger.info(f"Найдено описание для курса '{course_id}', длина: {len(description_text)}")
+                # Экранируем, если планируем использовать Markdown где-то (лучше всегда)
+                await bot.send_message(user_id, escape_md(description_text), parse_mode=ParseMode.MARKDOWN_V2,
+                                       disable_web_page_preview=True)
             else:
-                await bot.send_message(user_id, "Описание курса не найдено.", parse_mode=None)
+                logger.warning(f"Описание курса (урок 0) не найдено для course_id='{course_id}'.")
+                # Отправляем сообщение, что описание не найдено, или ничего не отправляем
+                # await bot.send_message(user_id, escape_md("Описание для этого курса не найдено."), parse_mode=ParseMode.MARKDOWN_V2)
+                # Пока что, если нет описания, ничего не будем отправлять, чтобы не спамить.
+                # Но главное меню после активации все равно должно прийти.
 
-    except Exception as e2968:
-        logger.error(f"Error sending course description: {e2968}")
-        await bot.send_message(user_id, "Ошибка при получении описания курса. Или этот курс секретный и тогда вы знаете что делать!", parse_mode=None)
-
-
+    except Exception as e_scd:  # Уникальный идентификатор
+        logger.error(f"Ошибка в send_course_description для course_id='{course_id}': {e_scd}", exc_info=True)
+        # Не отправляем сообщение об ошибке пользователю отсюда, чтобы не дублировать,
+        # если ошибка более общего характера обрабатывается выше.
 
 # help
 @dp.message(Command("help"))
@@ -5255,12 +5264,36 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         interval_value = settings.get("message_interval", 24)
         interval_safe_str = escape_md(str(interval_value)) + " ч"
         next_lesson_display_text_safe = escape_md(await get_next_lesson_time(user_id, course_id, lesson_num))
+
+
+        # добавочка 21 мая
+        # Проверяем, есть ли в принципе ДЗ для текущего lesson_num на этом уровне
+        lesson_has_homework_defined = False
+        expected_hw_type_for_this_lesson = "не определен"
+        async with aiosqlite.connect(DB_FILE) as conn_hw_check:
+            cursor_hw_def = await conn_hw_check.execute(
+                """SELECT hw_type 
+                   FROM group_messages 
+                   WHERE course_id = ? AND lesson_num = ? AND level = ? AND is_homework = 1
+                   LIMIT 1""",
+                (course_id, lesson_num, user_course_level_for_menu)
+            )
+            hw_def_row = await cursor_hw_def.fetchone()
+            if hw_def_row:
+                lesson_has_homework_defined = True
+                if hw_def_row[0] and isinstance(hw_def_row[0], str) and hw_def_row[0].strip().lower() != 'none':
+                    expected_hw_type_for_this_lesson = escape_md(hw_def_row[0])
+                else:
+                    expected_hw_type_for_this_lesson = "любое"
+
+
+
         domashka_text = escape_md("не требуется или уже принята")
-        if homework_pending:
-            hw_type_display = "ДЗ"
-            if hw_type and isinstance(hw_type, str) and hw_type.strip().lower() != 'none':
-                hw_type_display = escape_md(hw_type)
-            domashka_text = f"ожидается \\({hw_type_display}\\)"
+        if lesson_has_homework_defined:  # Если для этого урока в принципе есть ДЗ
+            if homework_pending:  # Если текущий статус в user_courses - pending или rejected
+                domashka_text = f"ожидается \\({expected_hw_type_for_this_lesson}\\)"
+            else:  # ДЗ для этого урока было, но сейчас оно принято (или еще не было отправлено после активации)
+                domashka_text = f"принята \\(тип: {expected_hw_type_for_this_lesson}\\) или еще не отправлялось"
 
         # Узнаем общее количество уроков на текущем уровне
         total_lessons_on_level = 0
