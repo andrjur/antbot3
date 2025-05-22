@@ -3311,37 +3311,96 @@ async def cmd_start(message: types.Message):
         await message.answer("Произошла ошибка при обработке команды. Пожалуйста, попробуйте позже.", parse_mode=None)
 
 
-async def send_course_description(user_id: int, course_id: str):
-    """Отправляет описание курса пользователю."""
-    logger.info(f"send_course_description {user_id=} {course_id=}")
-    description_text = None  # Инициализируем
+async def send_course_description(user_id: int, course_id_str: str):  # Принимаем строковый ID
+    """Отправляет описание курса пользователю, пробуя разные источники.
+        courses.description.
+        group_messages с lesson_num = 0.
+        group_messages с lesson_num IS NULL.
+        Если ничего из вышеперечисленного, берется текст первой текстовой части урока №1 (если есть)."""
+    logger.info(f"send_course_description START: user_id={user_id}, course_id_str='{course_id_str}'")
+    description_to_send = None
+
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute("""
-                  SELECT text
-                  FROM group_messages
-                  WHERE course_id = ? AND lesson_num = 0
-                  ORDER BY id ASC LIMIT 1 
-              """, (course_id,))  # Добавил ORDER BY и LIMIT 1 на всякий случай
-            description_row = await cursor.fetchone()
-
-            if description_row and description_row[0]:
-                description_text = description_row[0]
-                logger.info(f"Найдено описание для курса '{course_id}', длина: {len(description_text)}")
-                # Экранируем, если планируем использовать Markdown где-то (лучше всегда)
-                await bot.send_message(user_id, escape_md(description_text), parse_mode=ParseMode.MARKDOWN_V2,
-                                       disable_web_page_preview=True)
+            # 1. Попытка получить описание из courses.description
+            cursor_courses_desc = await conn.execute(
+                "SELECT description FROM courses WHERE course_id = ?",
+                (course_id_str,)
+            )
+            row_courses_desc = await cursor_courses_desc.fetchone()
+            if row_courses_desc and row_courses_desc[0] and row_courses_desc[0].strip():
+                description_to_send = row_courses_desc[0].strip()
+                logger.info(f"Найдено описание для курса '{course_id_str}' в таблице 'courses'.")
             else:
-                logger.warning(f"Описание курса (урок 0) не найдено для course_id='{course_id}'.")
-                # Отправляем сообщение, что описание не найдено, или ничего не отправляем
-                # await bot.send_message(user_id, escape_md("Описание для этого курса не найдено."), parse_mode=ParseMode.MARKDOWN_V2)
-                # Пока что, если нет описания, ничего не будем отправлять, чтобы не спамить.
-                # Но главное меню после активации все равно должно прийти.
+                # 2. Если в courses.description пусто, ищем урок 0 в group_messages
+                cursor_gm_lesson0 = await conn.execute(
+                    "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num = 0 ORDER BY id ASC LIMIT 1",
+                    (course_id_str,)
+                )
+                row_gm_lesson0 = await cursor_gm_lesson0.fetchone()
+                if row_gm_lesson0 and row_gm_lesson0[0] and row_gm_lesson0[0].strip():
+                    description_to_send = row_gm_lesson0[0].strip()
+                    logger.info(f"Найдено описание для курса '{course_id_str}' как урок 0 в 'group_messages'.")
+                else:
+                    # 3. Если и урока 0 нет, ищем урок с lesson_num IS NULL (если такая логика предполагалась)
+                    cursor_gm_lesson_null = await conn.execute(
+                        "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num IS NULL ORDER BY id ASC LIMIT 1",
+                        (course_id_str,)
+                    )
+                    row_gm_lesson_null = await cursor_gm_lesson_null.fetchone()
+                    if row_gm_lesson_null and row_gm_lesson_null[0] and row_gm_lesson_null[0].strip():
+                        description_to_send = row_gm_lesson_null[0].strip()
+                        logger.info(f"Найдено описание для курса '{course_id_str}' как урок NULL в 'group_messages'.")
 
-    except Exception as e_scd:  # Уникальный идентификатор
-        logger.error(f"Ошибка в send_course_description для course_id='{course_id}': {e_scd}", exc_info=True)
-        # Не отправляем сообщение об ошибке пользователю отсюда, чтобы не дублировать,
-        # если ошибка более общего характера обрабатывается выше.
+            # 4. Если ничего не найдено, ищем первую текстовую часть первого реального урока (lesson_num=1)
+            if not description_to_send:
+                logger.info(
+                    f"Описание не найдено в courses.description, lesson_num=0 или lesson_num IS NULL для '{course_id_str}'. Ищем текст урока 1.")
+                cursor_gm_lesson1_text = await conn.execute(
+                    """SELECT text FROM group_messages 
+                       WHERE course_id = ? AND lesson_num = 1 AND content_type = 'text' AND text IS NOT NULL AND TRIM(text) != ''
+                       ORDER BY id ASC LIMIT 1""",
+                    (course_id_str,)
+                )
+                row_gm_lesson1_text = await cursor_gm_lesson1_text.fetchone()
+                if row_gm_lesson1_text and row_gm_lesson1_text[0]:
+                    description_to_send = row_gm_lesson1_text[0].strip()
+                    # Возможно, добавить префикс, что это начало первого урока
+                    description_to_send = "Из первого урока:\n" + description_to_send
+                    logger.info(f"В качестве описания для '{course_id_str}' взят текст урока 1.")
+
+            if description_to_send:
+                # Удаляем HTML-теги, если они есть (простая очистка)
+                # cleaned_description = re.sub(r'<[^>]+>', '', description_to_send)
+                # Для MarkdownV2 специфичные HTML теги не работают, так что re.sub может быть не нужен,
+                # если только в тексте нет непреднамеренных < >.
+                # Главное - правильно экранировать для MarkdownV2.
+
+                # Разбиваем на части, если описание слишком длинное
+                max_len = 4000  # Максимальная длина сообщения Telegram (с запасом)
+                escaped_desc = escape_md(description_to_send)  # Экранируем один раз весь текст
+
+                for i in range(0, len(escaped_desc), max_len):
+                    part = escaped_desc[i:i + max_len]
+                    await bot.send_message(
+                        user_id,
+                        part,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        disable_web_page_preview=True
+                    )
+                logger.info(
+                    f"Описание для '{course_id_str}' (длина {len(escaped_desc)}) успешно отправлено пользователю {user_id}.")
+            else:
+                logger.warning(
+                    f"Полное описание курса (courses.description, урок 0, урок NULL, урок 1) не найдено для course_id='{course_id_str}'.")
+                await bot.send_message(user_id, escape_md("Подробное описание для этого курса сейчас недоступно."),
+                                       parse_mode=ParseMode.MARKDOWN_V2)
+
+    except Exception as e_scd_v2:
+        logger.error(f"Ошибка в send_course_description v2 для course_id='{course_id_str}': {e_scd_v2}", exc_info=True)
+        await bot.send_message(user_id, escape_md("Не удалось загрузить описание курса. Попробуйте позже."),
+                               parse_mode=ParseMode.MARKDOWN_V2)
+
 
 # help
 @dp.message(Command("help"))
@@ -3665,16 +3724,12 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
 
         for uc_course_id_str, uc_status, uc_lesson, uc_version, uc_numeric_id in user_courses_raw:
             user_courses_data[uc_course_id_str] = {
-                "status": uc_status,
-                "current_lesson": uc_lesson,
-                "version_id": uc_version,
-                "numeric_id": uc_numeric_id
+                "status": uc_status, "current_lesson": uc_lesson,
+                "version_id": uc_version, "numeric_id": uc_numeric_id
             }
             if uc_status == 'active' and not active_course_for_back_button: # Запоминаем первый активный для кнопки "Назад"
                 active_course_for_back_button = {
-                    "numeric_id": uc_numeric_id,
-                    "current_lesson": uc_lesson,
-                    "version_id": uc_version
+                    "numeric_id": uc_numeric_id, "current_lesson": uc_lesson,
                 }
 
 
@@ -3684,74 +3739,70 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
         return
 
     builder = InlineKeyboardBuilder()
-    message_text_parts = ["*Доступные курсы и действия:*"]  # Общий заголовок
+    message_text_parts = [escape_md("Переключайте курсы или читайте их описания:")]
 
-    for i, (course_id_str, title, course_num_id_sys, min_price, base_version_id_sys) in enumerate(all_system_courses,1):
+    for i, (course_id_str, title, course_num_id_sys, min_price, base_version_id_sys) in enumerate(all_system_courses,
+                                                                                                  1):
         course_title_safe = escape_md(title)
         user_course_info = user_courses_data.get(course_id_str)
 
-        course_block_text = ""  # Текст для этого блока курса
-        buttons_for_this_course_row = []  # Кнопки для этого курса будут в один ряд
+        course_block_header = ""
+        action_button_text = ""
+        action_button_callback_data = None
 
+        # Определяем текст и callback для основной кнопки действия
         if user_course_info:
             status = user_course_info["status"]
             current_lesson_user = user_course_info["current_lesson"]
 
             if status == 'active':
-                course_block_text = f"{i}▶️ *{course_title_safe}* \\(активен\\)"
-                buttons_for_this_course_row.append(
-                    InlineKeyboardButton(text="🚀 Перейти",
-                                         callback_data=ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
-                                                                                    lesson_num=current_lesson_user).pack())
-                )
+                course_block_header = f"\n{i}\\. ▶️ *{course_title_safe}* \\(активен\\)"
+                action_button_text = f"{i}. 🚀 Перейти"
+                action_button_callback_data = ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
+                                                                           lesson_num=current_lesson_user).pack()
             elif status == 'completed':
-                course_block_text = f"{i}✅ *{course_title_safe}* \\(пройден\\)"
-                buttons_for_this_course_row.append(
-                    InlineKeyboardButton(text="🔁 Повтор/Обнов.",
-                                         callback_data=RestartCourseCallback(course_numeric_id=course_num_id_sys,
-                                                                             action="restart_current_level").pack())
-                )
+                course_block_header = f"\n{i}\\. ✅ *{course_title_safe}* \\(пройден\\)"
+                action_button_text = f"{i}. 🔁 Повтор/Уровни"
+                action_button_callback_data = RestartCourseCallback(course_numeric_id=course_num_id_sys,
+                                                                    action="restart_current_level").pack()
             elif status == 'inactive':
-                course_block_text = f"{i}⏸️ *{course_title_safe}* \\(остановлен\\)"
-                buttons_for_this_course_row.append(
-                    InlineKeyboardButton(text="🔄 Возобновить",
-                                         callback_data=ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
-                                                                                    lesson_num=current_lesson_user).pack())
-                )
-            else:  # Другой статус, предлагаем купить/активировать
-                price_str = f"{min_price} руб" if min_price is not None and min_price > 0 else "По коду"
-                course_block_text = f"{i}✨ *{course_title_safe}* \\({escape_md(price_str)}\\)"
-                buttons_for_this_course_row.append(
-                    InlineKeyboardButton(text="💰 Купить/Инфо",
-                                         callback_data=BuyCourseCallback(course_numeric_id=course_num_id_sys).pack())
-                )
-        else:  # Курс не взаимодействовал с пользователем
-            price_str = f"{min_price} руб" if min_price is not None and min_price > 0 else "Инфо по активации"
-            course_block_text = f"{i}🆕 *{course_title_safe}* \\({escape_md(price_str)}\\)"
+                course_block_header = f"\n{i}\\. ⏸️ *{course_title_safe}* \\(остановлен\\)"
+                action_button_text = f"{i}. 🔄 Возобновить"
+                action_button_callback_data = ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
+                                                                           lesson_num=current_lesson_user).pack()
+            else:
+                price_str = f"{min_price} руб." if min_price is not None and min_price > 0 else "По коду"
+                course_block_header = f"\n{i}\\. ✨ *{course_title_safe}* \\({escape_md(price_str)}\\)"
+                action_button_text = f"{i}. 💰 Купить/Инфо"
+                action_button_callback_data = BuyCourseCallback(course_numeric_id=course_num_id_sys).pack()
+        else:
+            price_str = f"{min_price} руб." if min_price is not None and min_price > 0 else "Инфо по активации"
+            course_block_header = f"\n{i}\\. 🆕 *{course_title_safe}* \\({escape_md(price_str)}\\)"
+            action_button_text = f"{i}. 💰 Купить/Инфо"
+            action_button_callback_data = BuyCourseCallback(course_numeric_id=course_num_id_sys).pack()
+
+        message_text_parts.append(course_block_header)
+
+        # Формируем ряд кнопок
+        buttons_for_this_course_row = []
+        if action_button_text and action_button_callback_data:
             buttons_for_this_course_row.append(
-                InlineKeyboardButton(text="💰 Купить/Инфо",
-                                     callback_data=BuyCourseCallback(course_numeric_id=course_num_id_sys).pack())
+                InlineKeyboardButton(text=action_button_text, callback_data=action_button_callback_data)
             )
 
-        # Кнопка "Описание"
-        short_title_for_button = title[:18] + '…' if len(title) > 18 else title
+        # Кнопка "Описание" с номером и названием
+        short_title_for_desc_button = title[:18] + '…' if len(title) > 18 else title
         buttons_for_this_course_row.append(
             InlineKeyboardButton(
-                text=f"ℹ️ {escape_md(short_title_for_button)}",  #  название
-                callback_data=CourseDetailsCallback(
-                    action="show_description",
-                    course_numeric_id=course_num_id_sys
-                ).pack()
+                text=f"{i}. ℹ️ {escape_md(short_title_for_desc_button)}",
+                callback_data=CourseDetailsCallback(action="show_description",
+                                                    course_numeric_id=course_num_id_sys).pack()
             )
         )
+        builder.row(*buttons_for_this_course_row)
 
-        message_text_parts.append(f"\n{course_block_text}")  # Добавляем текстовое описание курса
-        builder.row(*buttons_for_this_course_row)  # Добавляем ряд кнопок для этого курса
-
-    # Кнопка "Вернуться в меню активного курса"
     if active_course_for_back_button:
-        # Добавляем пустую строку для визуального разделения
-        message_text_parts.append("")  # Создаст дополнительный \n при join
+        message_text_parts.append("")
         builder.row(InlineKeyboardButton(
             text="⬅️ В меню активного курса",
             callback_data=ShowActiveCourseMenuCallback(
@@ -3761,6 +3812,11 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
         ))
 
     final_message_text = "\n".join(message_text_parts)
+
+    # Пагинация (пока не реализована, но можно добавить логику здесь, если all_system_courses большой)
+    # if len(all_system_courses) > COURSES_PER_PAGE:
+    #     # Добавить кнопки пагинации
+    #     pass
 
     try:
         # ... (логика edit_text / send_message как была) ...
@@ -4364,24 +4420,50 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
             )
 
             prompt_text = "Пожалуйста, введите ваш комментарий для студента (одобрение):" if action == "approve_reason" else "Пожалуйста, введите причину отклонения для студента:"
+            # Определяем исходный текст/caption сообщения, к которому добавим prompt_text
+            original_message_content = ""
+            if callback_query.message.text:
+                original_message_content = callback_query.message.text
+            elif callback_query.message.caption:
+                original_message_content = callback_query.message.caption
+
+            current_message_text_or_caption = callback_query.message.caption if callback_query.message.photo or callback_query.message.document or callback_query.message.video else callback_query.message.text
+            if current_message_text_or_caption is None:
+                current_message_text_or_caption = ""  # На случай, если и caption и text None (хотя для ДЗ это маловероятно)
+
+            new_text_for_admin_message = current_message_text_or_caption + f"\n\n⏳ {escape_md(prompt_text)}"  # Экранируем prompt_text
+
             try:
-                # Убираем кнопки и пишем, что ждем текст
-                await bot.edit_message_text(  # Используем edit_message_text, чтобы изменить и текст и убрать кнопки
-                    chat_id=callback_query.message.chat.id,
-                    message_id=admin_message_id_with_buttons,
-                    text=escape_md(callback_query.message.text + f"\n\n⏳ {prompt_text}"),
-                    # Добавляем к существующему тексту
-                    reply_markup=None,  # Убираем кнопки
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-                await callback_query.answer()  # Отвечаем на колбэк только после успешного редактирования
-            except TelegramBadRequest as e:
-                logger.error(f"Не удалось отредактировать сообщение для запроса причины: {e}")
+                # Если это сообщение с медиа, мы должны использовать edit_message_caption
+                # Если это текстовое сообщение, то edit_message_text
+                if callback_query.message.photo or callback_query.message.document or \
+                        callback_query.message.video or callback_query.message.audio or \
+                        callback_query.message.voice or callback_query.message.animation:
+                    await bot.edit_message_caption(
+                        chat_id=callback_query.message.chat.id,
+                        message_id=admin_message_id_with_buttons,
+                        caption=new_text_for_admin_message,  # Не забыть про лимиты на длину caption
+                        reply_markup=None,  # Убираем кнопки
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+                else:  # Текстовое сообщение
+                    await bot.edit_message_text(
+                        chat_id=callback_query.message.chat.id,
+                        message_id=admin_message_id_with_buttons,
+                        text=new_text_for_admin_message,
+                        reply_markup=None,
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+                await callback_query.answer()
+            except TelegramBadRequest as e_edit_prompt:  # Уникальный идентификатор
+                logger.error(
+                    f"Не удалось отредактировать сообщение для запроса причины (ID: {admin_message_id_with_buttons}): {e_edit_prompt}")
                 await callback_query.answer("Ошибка при запросе причины.", show_alert=True)
-                await state.clear()  # Очищаем состояние, если не удалось запросить причину
+                await state.clear()
                 return
 
             await state.set_state(Form.feedback)
+
     except Exception as e:
         logger.error(f"❌ Ошибка в process_homework_action: {e}", exc_info=True)
         await callback_query.answer("Произошла внутренняя ошибка.", show_alert=True)
