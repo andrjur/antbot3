@@ -4004,6 +4004,62 @@ def calculate_robokassa_signature(*args) -> str:
     return hashlib.md5(":".join(str(a) for a in args).encode()).hexdigest()
 
 
+# Команда для отправки сообщения конкретному пользователю от имени бота
+# Доступна только администраторам (или по специальному ключу, если вызывает другой бот)
+
+@dp.message(Command("send_to_user"), F.from_user.id.in_(ADMIN_IDS_CONF))  # ADMIN_IDS_CONF - ваш список ID админов
+async def cmd_send_to_user_handler(message: types.Message, command: CommandObject, bot: Bot): # Добавил bot в аргументы
+    if not command.args:
+        await message.reply("Использование: /send_to_user <user_id> <текст сообщения>\n"
+                            "Или ответьте на сообщение пользователя этой командой, указав только текст: /send_to_user <текст сообщения>")
+        return
+
+    args_str = command.args
+    target_user_id = None
+    text_to_send = ""
+
+    # Вариант 1: Команда дана как reply на сообщение пользователя (которое было переслано в админ-чат)
+    # и мы хотим извлечь ID пользователя из этого reply.
+    # Это полезно, если в админ-чате есть пересланные сообщения от пользователей.
+    # Однако, это усложняет, так как нужно понять, что это именно пересланное сообщение.
+    # Проще всего, если команда /send_to_user всегда ожидает user_id первым аргументом.
+
+    # Основной вариант: /send_to_user <user_id> <текст>
+    args_list = args_str.split(maxsplit=1)
+    if len(args_list) == 2 and args_list[0].isdigit():
+        try:
+            target_user_id = int(args_list[0])
+            text_to_send = args_list[1]
+        except ValueError:
+            await message.reply("Ошибка: User ID должен быть числом.")
+            return
+    else:
+        await message.reply("Ошибка в формате команды. Используйте: /send_to_user <user_id> <текст сообщения>")
+        return
+
+    if not text_to_send:
+        await message.reply("Ошибка: Текст сообщения не может быть пустым.")
+        return
+
+    try:
+        # Отправляем сообщение пользователю.
+        # Если текст может содержать Markdown от админа, используйте parse_mode.
+        # Для "анонимной" пересылки parse_mode=None или экранирование, если это просто текст.
+        await bot.send_message(target_user_id, text_to_send, parse_mode=None) # Или ParseMode.MARKDOWN_V2, если админ будет использовать разметку
+        await message.reply(f"Сообщение успешно отправлено пользователю {target_user_id}.")
+        logger.info(f"Админ {message.from_user.id} отправил сообщение пользователю {target_user_id}: {text_to_send[:50]}...")
+    except TelegramBadRequest as e:
+        if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower():
+            await message.reply(f"Не удалось отправить сообщение: пользователь {target_user_id} не найден или заблокировал бота.")
+            logger.warning(f"Ошибка отправки сообщения пользователю {target_user_id} от админа {message.from_user.id}: {e}")
+            # Здесь можно добавить логику деактивации пользователя в вашей БД, если он заблокировал бота.
+        else:
+            await message.reply(f"Произошла ошибка Telegram при отправке сообщения пользователю {target_user_id}: {e}")
+            logger.error(f"Ошибка Telegram при отправке сообщения пользователю {target_user_id} от админа {message.from_user.id}: {e}")
+    except Exception as e:
+        await message.reply(f"Произошла неизвестная ошибка при отправке сообщения пользователю {target_user_id}.")
+        logger.error(f"Неизвестная ошибка при отправке сообщения пользователю {target_user_id} от админа {message.from_user.id}: {e}", exc_info=True)
+
 
 @dp.callback_query(BuyCourseCallback.filter())
 async def cb_buy_course_prompt(query: types.CallbackQuery, callback_data: BuyCourseCallback, state: FSMContext):
@@ -5353,7 +5409,6 @@ async def handle_homework(message: types.Message):
         await message.answer(escape_md("Произошла ошибка при отправке вашего ДЗ. Попробуйте позже."),
                              parse_mode=ParseMode.MARKDOWN_V2)
 
-# единое главное меню для пользователя. Теперь с левелами
 # единое главное меню для пользователя. Теперь с левелами
 async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_id: str,
                          homework_pending: bool = False, hw_type: str = 'none', user_course_level_for_menu: int = 1):
