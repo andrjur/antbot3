@@ -22,6 +22,8 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
 # ---- НОВЫЕ ИМПОРТЫ ДЛЯ ВЕБХУКОВ ----
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
+import aiohttp
+from functools import wraps
 
 # Для генерации подписи Robokassa (примерный, нужно проверить актуальность)
 #import decimal
@@ -136,6 +138,27 @@ WEB_SERVER_PORT = int(os.getenv("WEB_SERVER_PORT", 8080))  # Порт, на ко
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"  # Секретный путь для вебхука
 BASE_WEBHOOK_URL = os.getenv("BASE_WEBHOOK_URL")  # Например, "https://your.domain.com"
 
+
+N8N_HOMEWORK_CHECK_WEBHOOK_URL = os.getenv("N8N_HOMEWORK_CHECK_URL")
+N8N_ASK_EXPERT_WEBHOOK_URL = os.getenv("N8N_ASK_EXPERT_URL")
+# Секретный ключ для аутентификации вебхуков n8n (если настроено в n8n)
+N8N_WEBHOOK_SECRET = os.getenv("N8N_WEBHOOK_SECRET")
+N8N_DOMAIN = os.getenv("N8N_DOMAIN")
+
+# Базовый URL вашего бота для callback'ов от n8n
+# Это WEBHOOK_HOST_CONF из вашего конфига + некий путь
+BOT_CALLBACK_BASE_URL = f"{os.getenv('N8N_DOMAIN', 'https://n8n.indikov.ru/')}{os.getenv('WEBHOOK_PATH', '/bot/')}"
+
+# В начале вашего файла main.py, после других os.getenv()
+N8N_CALLBACK_SECRET = os.getenv("N8N_CALLBACK_SECRET")
+if not N8N_CALLBACK_SECRET:
+    logger.warning("N8N_CALLBACK_SECRET не установлен в переменных окружения! Callback-эндпоинты от n8n будут небезопасны или не будут работать, если проверка включена жестко.")
+    # Можно установить значение по умолчанию для разработки, но это не рекомендуется для продакшена
+    # N8N_CALLBACK_SECRET = "super_secret_callback_key_789_dev_only"
+    # Или можно сделать так, чтобы без секрета бот не запускался или не регистрировал эти эндпоинты
+
+CALLBACK_SECRET_HEADER_NAME = "X-CALLBACK-SIGNATURE" # Как вы и предложили
+
 # Загрузка инструкции по оплате
 PAYMENT_INSTRUCTIONS_TEMPLATE = os.getenv("PAYMENT_INSTRUCTIONS", "Инструкции по оплате у поддержки.")
 
@@ -146,8 +169,8 @@ DB_RETRY_DELAY = 0.2  # seconds
 
 # Initialize bot and dispatcher
 bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2)
+    token=BOT_TOKEN
+    #default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2)
 )
 dp = Dispatcher()
 
@@ -182,7 +205,6 @@ class SupportRequest(StatesGroup):
 class CourseReviewForm(StatesGroup):
     waiting_for_review_text = State() # Новое состояние для отзыва о курсе
 
-
 class BuyCourseCallback(CallbackData, prefix="buy_course"):
     # course_id_str: str # ЗАМЕНЯЕМ
     course_numeric_id: int # Используем числовой ID
@@ -195,11 +217,9 @@ class RestartCourseCallback(CallbackData, prefix="restart_course"):
 class AwaitingPaymentConfirmation(StatesGroup):
     waiting_for_activation_code_after_payment = State()
 
-
 class MainMenuAction(CallbackData, prefix="main_menu"):
     action: str # "stop_course", "switch_course" (или "my_courses" как сейчас)
     course_id_numeric: int = 0 # Для действия stop_course, если нужно знать какой курс останавливаем
-
 
 # Определим CallbackData для кнопок "Описание" и "Перейти к активному курсу"
 class CourseDetailsCallback(CallbackData, prefix="course_details"):
@@ -235,6 +255,11 @@ class SelectNewTariffToUpgradeCallback(CallbackData, prefix="sel_tariff_upg"):
 class RepeatLessonForm(StatesGroup):
     waiting_for_lesson_number_to_repeat = State()
 
+
+class AskExpertState(StatesGroup):
+    waiting_for_expert_question = State()
+
+
 # декоратор для обработки ошибок в БД
 def db_exception_handler(func):
     @functools.wraps(func)
@@ -265,6 +290,46 @@ def db_exception_handler(func):
                     await arg.answer("Произошла неизвестная ошибка.")
                     break
             return None
+    return wrapper
+
+
+# В вашем файле main.py, где-нибудь перед определением обработчиков вебхуков
+from functools import wraps
+from aiohttp import web
+
+
+# logger уже должен быть определен
+
+# N8N_CALLBACK_SECRET и CALLBACK_SECRET_HEADER_NAME определены выше
+
+def require_n8n_secret(handler):
+    @wraps(handler)
+    async def wrapper(request: web.Request):
+        # Проверяем, установлен ли секрет в конфигурации бота
+        if not N8N_CALLBACK_SECRET:
+            logger.error(
+                f"N8N_CALLBACK_SECRET не сконфигурирован на стороне бота. Пропускаю проверку для эндпоинта {request.path}, но это НЕБЕЗОПАСНО.")
+            # В продакшене здесь лучше возвращать 500 Internal Server Error или не регистрировать эндпоинт вообще
+            # return web.Response(text="Server configuration error: Callback secret not set", status=500)
+            # Пока для тестирования, если секрет не задан, можем пропустить проверку (но это плохо для безопасности)
+            # Для большей безопасности, если секрет не задан, лучше отклонять запрос:
+            # logger.critical("N8N_CALLBACK_SECRET не установлен! Невозможно проверить callback.")
+            # return web.Response(text="Internal Server Error: Callback security not configured", status=500)
+
+        secret_from_request = request.headers.get(CALLBACK_SECRET_HEADER_NAME)
+
+        if not secret_from_request:
+            logger.warning(f"Callback от n8n на {request.path} БЕЗ секрета. IP: {request.remote}. Запрос отклонен.")
+            return web.Response(text="Forbidden: Missing secret header", status=403)  # 403 Forbidden
+
+        if secret_from_request != N8N_CALLBACK_SECRET:
+            logger.warning(
+                f"Callback от n8n на {request.path} с НЕВЕРНЫМ секретом. IP: {request.remote}. Запрос отклонен. Получен: '{secret_from_request[:10]}...'")  # Логируем только часть секрета на всякий случай
+            return web.Response(text="Forbidden: Invalid secret", status=403)  # 403 Forbidden
+
+        logger.info(f"Callback от n8n на {request.path} с верным секретом. IP: {request.remote}. Обработка...")
+        return await handler(request)
+
     return wrapper
 
 
@@ -959,7 +1024,7 @@ async def init_db():
         async with aiosqlite.connect(DB_FILE) as conn:
             # Создаем таблицу users
             await conn.execute("PRAGMA journal_mode = WAL")
-            await conn.execute("PRAGMA busy_timeout = 620")  #
+            await conn.execute("PRAGMA busy_timeout = 5000")  #
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -1145,6 +1210,154 @@ async def init_db():
     except Exception as e1095:
         logger.error(f"Error initializing database: {e1095}")
         raise  # Allows bot to exit on startup if database cannot be initialized
+
+
+async def send_data_to_n8n(n8n_webhook_url: str, payload: dict):
+    async with aiohttp.ClientSession() as session:
+        headers = {'Content-Type': 'application/json'}
+        if N8N_WEBHOOK_SECRET:
+            headers['X-N8N-Signature'] = N8N_WEBHOOK_SECRET # Или другой заголовок для простой аутентификации
+
+        logger.info(f"Отправка данных в n8n: URL={n8n_webhook_url}, Payload={json.dumps(payload, ensure_ascii=False, indent=2)}")
+        try:
+            async with session.post(n8n_webhook_url, json=payload, headers=headers, timeout=30) as response:
+                response_text = await response.text()
+                if response.status == 200 or response.status == 202: # 202 Accepted тоже хорошо
+                    logger.info(f"Данные успешно отправлены в n8n. Статус: {response.status}. Ответ: {response_text[:200]}")
+                    return True, response_text
+                else:
+                    logger.error(f"Ошибка отправки данных в n8n. Статус: {response.status}. Ответ: {response_text}")
+                    return False, response_text
+        except aiohttp.ClientConnectorError as e_conn:
+            logger.error(f"Ошибка соединения при отправке в n8n: {e_conn}")
+            return False, str(e_conn)
+        except asyncio.TimeoutError:
+            logger.error(f"Тайм-аут при отправке данных в n8n на URL: {n8n_webhook_url}")
+            return False, "Timeout error"
+        except Exception as e_general:
+            logger.error(f"Непредвиденная ошибка при отправке в n8n: {e_general}", exc_info=True)
+            return False, str(e_general)
+
+
+@dp.callback_query(F.data == "ask_expert_question")  # Или ваша CallbackData
+async def cb_ask_expert_start(query: types.CallbackQuery, state: FSMContext):
+    await query.message.answer(escape_md("Напишите ваш вопрос эксперту или ИИ:"))
+    await state.set_state(AskExpertState.waiting_for_expert_question)
+    await query.answer()
+
+
+@dp.message(AskExpertState.waiting_for_expert_question, F.text)
+async def process_expert_question(message: types.Message, state: FSMContext):
+    await state.clear()
+    user_full_name = message.from_user.full_name
+    user_username = message.from_user.username
+
+    payload_for_n8n_expert = {
+        "action": "ask_expert",
+        "user_id": message.from_user.id,
+        "user_fullname": user_full_name,
+        "username": user_username,
+        "question_text": message.text,
+        "admin_group_id": ADMIN_GROUP_ID,  # Куда переслать вопрос, если ИИ не справится
+        "original_user_message_id": message.message_id,  # ID вопроса от пользователя
+        "callback_webhook_url_answer": f"{BOT_CALLBACK_BASE_URL}/n8n_expert_answer/{message.from_user.id}/{message.message_id}"
+    }
+
+    if N8N_ASK_EXPERT_WEBHOOK_URL:
+        # Неблокирующий вызов
+        asyncio.create_task(send_data_to_n8n(N8N_ASK_EXPERT_WEBHOOK_URL, payload_for_n8n_expert))
+        await message.reply(escape_md("Ваш вопрос отправлен. Пожалуйста, ожидайте ответа."))
+    else:
+        await message.reply(escape_md("Сервис ответов на вопросы временно недоступен."))
+
+@require_n8n_secret
+async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
+    bot_instance = request.app['bot']  # Получаем экземпляр бота
+    dp_instance = request.app['dp']  # Получаем экземпляр диспетчера (или FSMContext напрямую, если нужно)
+
+    try:
+        data = await request.json()
+        logger.info(f"Получен callback от n8n (HW Approval): {data}")
+
+        student_user_id = data.get("student_user_id")
+        course_numeric_id = data.get("course_numeric_id")
+        lesson_num = data.get("lesson_num")
+        feedback_text = data.get("feedback_text", "")
+        is_approved = data.get("is_approved", False)  # Важно, чтобы n8n присылал это поле
+        original_admin_message_id = data.get("original_admin_message_id")
+
+        course_id_str = await get_course_id_str(course_numeric_id)
+
+        # Вызываем вашу существующую функцию обработки результата ДЗ
+        # ADMIN_ID для этого случая может быть специальным ID "n8n_bot_actor" или 0
+        await handle_homework_result(
+            user_id=student_user_id,
+            course_id=course_id_str,
+            course_numeric_id=course_numeric_id,
+            lesson_num=lesson_num,
+            admin_id=0,  # Специальный ID для n8n/ИИ как проверяющего
+            feedback_text=feedback_text,
+            is_approved=is_approved,
+            callback_query=None,  # Это не от пользователя
+            original_admin_message_id_to_delete=original_admin_message_id
+        )
+        return web.Response(text="OK", status=200)
+    except Exception as e:
+        logger.error(f"Ошибка обработки n8n_hw_approval callback: {e}", exc_info=True)
+        return web.Response(text="Error processing request", status=500)
+
+@require_n8n_secret
+async def handle_n8n_hw_error(request: web.Request) -> web.Response:
+    bot_instance = request.app['bot']
+    try:
+        data = await request.json()
+        logger.info(f"Получен callback от n8n (HW Error): {data}")
+        original_admin_message_id = data.get("original_admin_message_id")
+        error_message = data.get("error_message", "Неизвестная ошибка в n8n.")
+
+        if ADMIN_GROUP_ID and original_admin_message_id:
+            await bot_instance.send_message(
+                ADMIN_GROUP_ID,
+                text=f"⚠️ Ошибка при автоматической обработке ДЗ (ID сообщения: {original_admin_message_id}):\n`{escape_md(error_message)}`\nПожалуйста, проверьте вручную.",
+                reply_to_message_id=original_admin_message_id,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        return web.Response(text="Error noted", status=200)
+    except Exception as e:
+        logger.error(f"Ошибка обработки n8n_hw_error callback: {e}", exc_info=True)
+        return web.Response(text="Error processing request", status=500)
+
+@require_n8n_secret
+async def handle_n8n_expert_answer(request: web.Request) -> web.Response:
+    bot_instance = request.app['bot']
+    try:
+        data = await request.json()
+        logger.info(f"Получен callback от n8n (Expert Answer): {data}")
+
+        user_id_to_answer = data.get("user_id")
+        answer_text = data.get("answer_text")
+        source = data.get("source", "ai")  # "ai" или "human"
+
+        if user_id_to_answer and answer_text:
+            prefix = "🤖 Ответ ИИ-помощника:\n" if source == "ai_generated" else "👩‍🏫 Ответ эксперта:\n"
+            await bot_instance.send_message(
+                user_id_to_answer,
+                text=prefix + escape_md(answer_text),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        return web.Response(text="OK", status=200)
+    except Exception as e:
+        logger.error(f"Ошибка обработки n8n_expert_answer callback: {e}", exc_info=True)
+        return web.Response(text="Error processing request", status=500)
+
+
+# В функции main(), где настраивается веб-сервер aiohttp:
+# ...
+# app = web.Application()
+# webhook_requests_handler.register(app, path=final_webhook_path_for_aiohttp) # Ваш основной вебхук для Telegram
+# setup_application(app, dp, bot=bot) # Это должно передавать bot и dp в app['bot'] и app['dp']
+
+# Регистрируем новые пути для callback'ов от n8n
 
 
 # Функция для экранирования спецсимволов в тексте для использования в MarkdownV2
@@ -2602,133 +2815,6 @@ async def cmd_approve_homework_handler(message: types.Message, command: CommandO
 async def cmd_reject_homework_handler(message: types.Message, command: CommandObject):
     logger.info(f"Получена команда /reject от админа {message.from_user.id}")
     await process_homework_command(message, command.args, is_approval=False)
-
-# Модифицируем cmd_approve_homework и cmd_reject_homework
-@dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)
-async def old_cmd_approve_homework(message: types.Message, command: CommandObject, state: FSMContext):
-    admin_id = message.from_user.id
-    args_str = command.args if command.args else ""
-
-    user_id = None
-    course_numeric_id = None
-    lesson_num = None
-    feedback_text = ""
-    original_message_id_to_process = None
-
-    # Сценарий 1: Команда дана в ответ на сообщение бота с ДЗ
-    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
-        context_from_reply = await extract_homework_context_from_reply(message)
-        if context_from_reply:
-            user_id, course_numeric_id, lesson_num, original_message_id_to_process = context_from_reply
-            feedback_text = args_str  # Весь args - это фидбэк
-            logger.info(f"/approve по reply: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
-
-    # Сценарий 2: Команда с аргументами (для ИИ или прямого вызова админом)
-    # /approve <user_id_студента> <course_numeric_id> <lesson_num> [комментарий]
-    # ИЛИ /approve <original_bot_message_id> [комментарий]
-    if not user_id:  # Если контекст не извлечен из reply
-        args = args_str.split(maxsplit=3)  # Разделяем на 3 или 4 части
-        if len(args) >= 1 and args[0].isdigit():
-            # Пытаемся сначала как /approve <original_bot_message_id> [комментарий]
-            try:
-                temp_msg_id = int(args[0])
-                context_from_msg_id = await get_homework_context_by_message_id(temp_msg_id)
-                if context_from_msg_id:
-                    user_id, course_numeric_id, lesson_num = context_from_msg_id
-                    original_message_id_to_process = temp_msg_id
-                    feedback_text = args[1] if len(args) > 1 else ""
-                    logger.info(f"/approve по msg_id: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
-            except ValueError:  # Первый аргумент не число, значит это не msg_id
-                pass
-
-        if not user_id and len(
-                args) >= 3:  # Если все еще не нашли, пытаемся как /approve <user_id> <course_id> <lesson_num>
-            try:
-                user_id = int(args[0])
-                course_numeric_id = int(args[1])
-                lesson_num = int(args[2])
-                feedback_text = args[3] if len(args) > 3 else ""
-                # В этом случае original_message_id_to_process остается None, если только ИИ не передаст его отдельно
-                logger.info(f"/approve по аргументам: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
-            except (ValueError, IndexError):
-                user_id = None  # Сбрасываем, если парсинг не удался
-
-    if user_id and course_numeric_id is not None and lesson_num is not None:
-        course_id_str = await get_course_id_str(course_numeric_id)
-        await handle_homework_result(
-            user_id=user_id, course_id=course_id_str, course_numeric_id=course_numeric_id,
-            lesson_num=lesson_num, admin_id=admin_id, feedback_text=feedback_text,
-            is_approved=True, callback_query=None,
-            original_admin_message_id_to_delete=original_message_id_to_process
-        )
-        await message.reply("✅ ДЗ одобрено командой.")
-    else:
-        await message.reply(
-            "Не удалось определить ДЗ для одобрения.\n"
-            "Используйте: `/approve [комментарий]` в ответ на сообщение с ДЗ\n"
-            "Или: `/approve <id_сообщения_с_ДЗ> [комментарий]`\n"
-            "Или: `/approve <user_id> <course_num_id> <lesson_num> [комментарий]`"
-        )
-
-# Аналогично для cmd_reject_homework
-@dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)
-async def old_cmd_reject_homework(message: types.Message, command: CommandObject, state: FSMContext):
-    admin_id = message.from_user.id
-    args_str = command.args if command.args else ""
-
-    user_id = None
-    course_numeric_id = None
-    lesson_num = None
-    feedback_text = ""
-    original_message_id_to_process = None
-
-    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id:
-        context_from_reply = await extract_homework_context_from_reply(message)
-        if context_from_reply:
-            user_id, course_numeric_id, lesson_num, original_message_id_to_process = context_from_reply
-            feedback_text = args_str if args_str else "Домашнее задание требует доработки."
-            logger.info(f"/reject по reply: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
-
-    if not user_id:
-        args = args_str.split(maxsplit=3)
-        if len(args) >= 1 and args[0].isdigit():
-            try:
-                temp_msg_id = int(args[0])
-                context_from_msg_id = await get_homework_context_by_message_id(temp_msg_id)
-                if context_from_msg_id:
-                    user_id, course_numeric_id, lesson_num = context_from_msg_id
-                    original_message_id_to_process = temp_msg_id
-                    feedback_text = args[1] if len(args) > 1 else "Домашнее задание требует доработки."
-                    logger.info(f"/reject по msg_id: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
-            except ValueError:
-                pass
-
-        if not user_id and len(args) >= 3:
-            try:
-                user_id = int(args[0])
-                course_numeric_id = int(args[1])
-                lesson_num = int(args[2])
-                feedback_text = args[3] if len(args) > 3 else "Домашнее задание требует доработки."
-                logger.info(f"/reject по аргументам: user={user_id}, c_id={course_numeric_id}, l_num={lesson_num}")
-            except (ValueError, IndexError):
-                user_id = None
-
-    if user_id and course_numeric_id is not None and lesson_num is not None:
-        course_id_str = await get_course_id_str(course_numeric_id)
-        await handle_homework_result(
-            user_id=user_id, course_id=course_id_str, course_numeric_id=course_numeric_id,
-            lesson_num=lesson_num, admin_id=admin_id, feedback_text=feedback_text,
-            is_approved=False, callback_query=None,
-            original_admin_message_id_to_delete=original_message_id_to_process
-        )
-        await message.reply("❌ ДЗ отклонено командой.")
-    else:
-        await message.reply(
-            "Не удалось определить ДЗ для отклонения.\n"
-            "Используйте: `/reject [причина]` в ответ на сообщение с ДЗ\n"
-            "Или: `/reject <id_сообщения_с_ДЗ> [причина]`\n"
-            "Или: `/reject <user_id> <course_num_id> <lesson_num> [причина]`"
-        )
 
 
 # Команды для взаимодействия с пользователем - в конце, аминь.
@@ -4464,9 +4550,9 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
         )
         new_tariff_info_row = await cursor_new.fetchone()
         if not new_tariff_info_row:
-            await query.answer("Ошибка: выбранный новый тариф не найден.", show_alert=True)
+            await query.answer("Ошибка: выбранный новый тариф не найден", show_alert=True)
             logger.error(
-                f"Новый тариф {new_selected_version_id} для курса {course_id_str} не найден в course_versions.")
+                f"Новый тариф {new_selected_version_id} для курса {course_id_str} не найден в course_versions")
             return
 
         new_tariff_title_raw, new_tariff_price_raw = new_tariff_info_row
@@ -4513,7 +4599,7 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
     else:
         text_parts.append(
             f"Если у вас есть код активации для тарифа «*{new_tariff_title_safe}*», отправьте его в этот чат для смены тарифа\\. Если код не требуется для этого перехода \\(например, бесплатный тариф или автоматическое обновление после подтверждения админом\\), обратитесь в поддержку для завершения смены тарифа\\.")  # Экранируем скобки и точки
-
+    logger.info(f"Проверка текста перед отправкой:\n{text_parts}")
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад к выбору тарифов",
                    callback_data=ChangeTariffCallback(course_id_str=course_id_str).pack())
@@ -4526,8 +4612,9 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
             await query.message.edit_text(final_text, reply_markup=builder.as_markup(),
                                           parse_mode=ParseMode.MARKDOWN_V2)
             await query.answer()  # Answer после успешного edit_text
+            logger.info(f"555Сообщение успешно отредактировано после выбора нового тарифа")
         except TelegramBadRequest as e_edit_confirm_tariff:  # Уникальное имя переменной
-            logger.error(f"Ошибка edit_text в cb_confirm_new_tariff_and_pay_diff: {e_edit_confirm_tariff}")
+            logger.error(f"333Ошибка edit_text в cb_confirm_new_tariff_and_pay_diff: {e_edit_confirm_tariff}")
             # Попробуем отправить новым сообщением
             try:
                 if query.message: await query.message.delete()  # Сначала удаляем старое, если есть
@@ -4539,7 +4626,7 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
         except Exception as e_generic_confirm_tariff:  # Уникальное имя переменной
             logger.error(f"Общая ошибка в cb_confirm_new_tariff_and_pay_diff: {e_generic_confirm_tariff}",
                          exc_info=True)
-            await query.answer("Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+            await query.answer("Произошла ошибка  Попробуйте еще раз", show_alert=True)
     else:
         # Если query.message None, что маловероятно для callback_query
         await bot.send_message(user_id, final_text, reply_markup=builder.as_markup(), parse_mode=ParseMode.MARKDOWN_V2)
@@ -4740,7 +4827,7 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
                         message_id=admin_message_id_with_buttons,
                         caption=new_text_for_admin_message,  # Не забыть про лимиты на длину caption
                         reply_markup=None,  # Убираем кнопки
-                        parse_mode=ParseMode.MARKDOWN_V2
+                        parse_mode = None
                     )
                 else:  # Текстовое сообщение
                     await bot.edit_message_text(
@@ -4748,7 +4835,7 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
                         message_id=admin_message_id_with_buttons,
                         text=new_text_for_admin_message,
                         reply_markup=None,
-                        parse_mode=ParseMode.MARKDOWN_V2
+                        parse_mode=None
                     )
                 await callback_query.answer()
             except TelegramBadRequest as e_edit_prompt:  # Уникальный идентификатор
@@ -5605,6 +5692,47 @@ async def handle_homework(message: types.Message):
         logger.info(f"sent_admin_message: {sent_admin_message}")
 
         if sent_admin_message and ADMIN_GROUP_ID:  # Убедимся, что сообщение отправлено
+            if N8N_HOMEWORK_CHECK_WEBHOOK_URL:
+
+                # Внутри функции handle_homework, после того как определили course_id и current_lesson
+                # --- НАЧАЛО НОВОГО БЛОКА ---
+                async with aiosqlite.connect(DB_FILE) as conn:
+                    # Получаем текст урока, где было само задание (части до is_homework=True)
+                    cursor_lesson_parts = await conn.execute(
+                        """SELECT text FROM group_messages 
+                           WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text'
+                           ORDER BY id ASC""",
+                        (course_id, current_lesson)
+                    )
+                    lesson_parts_rows = await cursor_lesson_parts.fetchall()
+                    # Собираем все текстовые части урока в одну строку
+                    full_assignment_description = "\n".join([row[0] for row in lesson_parts_rows if row[0]])
+                # --- КОНЕЦ НОВОГО БЛОКА ---
+
+
+                # Формируем базовый URL для коллбэков на лету
+                # WEBHOOK_HOST_CONF и WEBHOOK_PATH_CONF должны быть доступны (например, как глобальные переменные)
+                current_bot_callback_base_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
+
+                payload_for_n8n_hw = {
+                    "action": "check_homework",
+                    "student_user_id": user_id,
+                    "course_numeric_id": course_numeric_id,
+                    "course_title": await get_course_title(course_id),  # course_id уже строковый
+                    "lesson_num": current_lesson,
+                    "homework_content_type": message.content_type.lower(),
+                    "lesson_assignment_description": full_assignment_description,  # <--- ВОТ ОНО
+                    "homework_text": message.text if message.text else message.caption,
+                    "homework_file_id": file_id,  # file_id фото/документа и т.д., уже определен в вашем коде
+                    "admin_group_id": ADMIN_GROUP_ID,  # Должен быть доступен (глобально или через os.getenv)
+                    "original_admin_message_id": sent_admin_message.message_id,
+                    "callback_webhook_url_result": f"{current_bot_callback_base_url}/n8n_hw_result",
+                    "callback_webhook_url_error": f"{current_bot_callback_base_url}/n8n_hw_processing_error",
+                    "telegram_bot_token": BOT_TOKEN  # BOT_TOKEN должен быть доступен (глобально или через os.getenv)
+                }
+                asyncio.create_task(send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload_for_n8n_hw))
+            # >>> КОНЕЦ НОВОГО БЛОКА ДЛЯ N8N <<<
+
             try:
                 async with aiosqlite.connect(DB_FILE) as conn:
                     await conn.execute("""
@@ -6156,6 +6284,27 @@ async def main():
      #   logger.info(f"Message Handler: {handler_obj.callback.__name__ if hasattr(handler_obj.callback, '__name__') else handler_obj.callback}, filters: {handler_obj.filters}")
 
     setup_application(app, dp, bot=bot) # Передаем bot для доступа к нему через app['bot'] если нужно
+
+    # >>> НАЧАЛО НОВОГО БЛОКА - РЕГИСТРАЦИЯ МАРШРУТОВ ДЛЯ N8N CALLBACKS <<<
+    # Используем WEBHOOK_PATH_CONF как базовый путь, к которому добавляем специфичные эндпоинты для n8n
+    # Убедитесь, что эти пути не конфликтуют с final_webhook_path_for_aiohttp
+
+    # Путь для результатов проверки ДЗ (одобрено/отклонено)
+    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result", handle_n8n_hw_approval)
+    # Путь для ошибок обработки ДЗ в n8n
+    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
+    # Путь для ответа от эксперта/ИИ
+    # app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer_callback", handle_n8n_expert_answer)
+    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",
+                        handle_n8n_expert_answer)
+
+    logger.info(f"Зарегистрированы дополнительные маршруты для n8n callbacks на базе {WEBHOOK_PATH_CONF.rstrip('/')}:")
+    logger.info(f" - /n8n_hw_result")
+    logger.info(f" - /n8n_hw_processing_error")
+    logger.info(f" - /n8n_expert_answer_callback")
+    # >>> КОНЕЦ НОВОГО БЛОКА <<<
+
+
 
     runner = web.AppRunner(app)
     await runner.setup()
