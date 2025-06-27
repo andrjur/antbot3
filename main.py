@@ -66,6 +66,9 @@ locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 MAX_LOG_SIZE = 50 * 1024  # 50 kB
 LOG_BACKUP_COUNT = 1
 
+
+db_lock = asyncio.Lock()
+
 class LocalTimeFormatter(logging.Formatter):
     # Укажите ваш целевой часовой пояс
     default_tz = pytz.timezone('Europe/Moscow')  # Например, Москва (UTC+3)
@@ -1370,19 +1373,21 @@ def escape_md(text):
 # логирование действий пользователя
 async def log_action(user_id: int, action_type: str, course_id: str = None, lesson_num: int = None,
                      old_value: str = None, new_value: str = None, details: str = None):
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute(
-                """INSERT INTO user_actions_log 
-                   (user_id, action_type, course_id, lesson_num, old_value, new_value, details, timestamp) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, action_type, course_id, lesson_num, old_value, new_value, details, datetime.now(pytz.utc))
-            )
-            await conn.commit()
-        logger.info(f"Лог действия: user_id={user_id}, action={action_type}, course={course_id}, lesson={lesson_num}, old={old_value}, new={new_value}, details={details}")
-    except Exception as e1120:
-        logger.error(f"Ошибка логирования действия {action_type} для user_id={user_id}: {e1120}")
-
+    # Захватываем "замок". Никто другой не сможет писать в БД, пока этот блок не завершится.
+    async with db_lock:
+        try:
+            # Устанавливаем соединение внутри "замка"
+            async with aiosqlite.connect(DB_FILE) as conn:
+                await conn.execute(
+                    """INSERT INTO user_actions_log 
+                       (user_id, action_type, course_id, lesson_num, old_value, new_value, details, timestamp) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (user_id, action_type, course_id, lesson_num, old_value, new_value, details, datetime.now(pytz.utc))
+                )
+                await conn.commit()
+            logger.info(f"Лог действия: user_id={user_id}, action={action_type}, course={course_id}, lesson={lesson_num}, old={old_value}, new={new_value}, details={details}")
+        except Exception as e: # Используем уникальное имя переменной
+            logger.error(f"Ошибка логирования действия {action_type} для user_id={user_id}: {e}")
 # Пример использования в новой activate_course:
 # await log_action(user_id, "TARIFF_CHANGE", new_course_id,
 #                  old_value=current_active_version_id, new_value=new_version_id,
@@ -1686,14 +1691,14 @@ async def _handle_missing_lesson_content(user_id: int, course_id: str, lesson_nu
     """Обрабатывает ситуацию, когда контент урока не найден."""
     logger.warning(
         f"⚠️ Контент для урока {lesson_num} не найден в курсе {course_id}, "
-        f"хотя такой номер урока допустим (всего {total_lessons} уроков)."
+        f"хотя такой номер урока допустим (всего {total_lessons} уроков)"
     )
     course_title_safe = escape_md(await get_course_title(course_id))
     await bot.send_message(
         user_id,
-        f"Извините, урок №{lesson_num} для курса «{course_title_safe}» временно недоступен или еще не был добавлен. "
-        f"Пожалуйста, попробуйте позже или свяжитесь с поддержкой.",
-        parse_mode=ParseMode.MARKDOWN_V2  # Текст формируется безопасно
+        f"Извините, урок №{lesson_num} для курса «{course_title_safe}» временно недоступен или еще не был добавлен "
+        f"Пожалуйста, попробуйте позже или свяжитесь с поддержкой",
+        parse_mode=None  # Текст формируется безопасно
     )
 
 async def scheduled_lesson_check(user_id: int):
@@ -4920,117 +4925,114 @@ async def handle_homework_result(
         callback_query: types.CallbackQuery = None,
         original_admin_message_id_to_delete: int = None
 ):
+    """
+    Обрабатывает результат проверки ДЗ (от админа или ИИ).
+    Эта функция является критической секцией, поэтому защищена "замком" (lock).
+    """
+    log_prefix = f"handle_homework_result(user={user_id}, lesson={lesson_num}):"
     logger.info(
-        f"handle_homework_result для user_id={user_id}, course_id={course_id}, lesson_num={lesson_num}, approved={is_approved}, admin_id={admin_id}")
-    try:
-        hw_status = "approved" if is_approved else "rejected"
-        await update_homework_status(user_id, course_id, lesson_num, hw_status)  # Обновляем статус ДЗ
+        f"{log_prefix} Запуск. approved={is_approved}, admin_id={admin_id}, admin_msg_id={original_admin_message_id_to_delete}")
 
-        async with aiosqlite.connect(DB_FILE) as conn:
-            # Получаем информацию о курсе пользователя
-            cursor_uc = await conn.execute(
-                "SELECT version_id FROM user_courses WHERE user_id = ? AND course_id = ?",
-                (user_id, course_id)
-            )
-            user_course_info = await cursor_uc.fetchone()
-            if not user_course_info:
-                logger.error(
-                    f"Не найдены данные курса для user_id={user_id}, course_id={course_id} в handle_homework_result")
-                if callback_query: await callback_query.answer("Ошибка: данные курса не найдены.", show_alert=True)
-                return
-            version_id = user_course_info[0]
-            tariff_name = get_tariff_name(version_id)
+    # 1. Захватываем "замок" на всю операцию, чтобы избежать гонки состояний
+    async with db_lock:
+        try:
+            async with aiosqlite.connect(DB_FILE) as conn:
+                # 2. Проверяем, не обработано ли уже это ДЗ
+                cursor_check = await conn.execute(
+                    "SELECT hw_status FROM user_courses WHERE user_id = ? AND course_id = ? AND current_lesson = ?",
+                    (user_id, course_id, lesson_num)
+                )
+                current_hw_status_row = await cursor_check.fetchone()
+                current_hw_status = current_hw_status_row[0] if current_hw_status_row else 'none'
 
-            # Получаем общее количество уроков в курсе
-            cursor_tl = await conn.execute(
-                "SELECT MAX(lesson_num) FROM group_messages WHERE course_id = ? AND lesson_num > 0", (course_id,)
-            )
-            total_lessons_data = await cursor_tl.fetchone()
-            total_lessons = total_lessons_data[0] if total_lessons_data and total_lessons_data[0] is not None else 0
-            logger.info(
-                f"Для курса {course_id}: lesson_num={lesson_num} (текущий обработанный), total_lessons={total_lessons}")
+                if current_hw_status not in ['pending', 'rejected']:
+                    logger.warning(
+                        f"{log_prefix} Попытка повторно обработать ДЗ, которое уже в статусе '{current_hw_status}'. Игнорируем.")
+                    if callback_query:
+                        try:
+                            await callback_query.answer(f"Это ДЗ уже было проверено (статус: {current_hw_status}).",
+                                                        show_alert=True)
+                        except TelegramBadRequest:
+                            pass  # Если колбэк устарел, ничего страшного
+                    return
 
+                # 3. Если ДЗ еще не проверено, обновляем статус и удаляем из очереди
+                new_hw_status = "approved" if is_approved else "rejected"
+                await conn.execute(
+                    "UPDATE user_courses SET hw_status = ? WHERE user_id = ? AND course_id = ? AND current_lesson = ?",
+                    (new_hw_status, user_id, course_id, lesson_num),
+                )
 
+                if original_admin_message_id_to_delete:
+                    await conn.execute(
+                        "DELETE FROM pending_admin_homework WHERE admin_message_id = ?",
+                        (original_admin_message_id_to_delete,)
+                    )
+                    logger.info(
+                        f"{log_prefix} Запись о ДЗ с admin_message_id {original_admin_message_id_to_delete} удалена из pending_admin_homework.")
 
-            # ---- НОВАЯ ЛОГИКА ----
-            next_lesson_display_text = await get_next_lesson_time(user_id, course_id, lesson_num)
-            action_for_user_message=f"⏳ Следующий урок: {escape_md(next_lesson_display_text)}\n"
+                # Получаем всю остальную информацию для сообщений
+                cursor_info = await conn.execute(
+                    "SELECT version_id FROM user_courses WHERE user_id = ? AND course_id = ?", (user_id, course_id)
+                )
+                user_course_info = await cursor_info.fetchone()
+                version_id = user_course_info[0] if user_course_info else "unknown"
+                tariff_name = get_tariff_name(version_id)
 
-            if is_approved and lesson_num >= total_lessons and total_lessons > 0:
-                # ДЗ для ПОСЛЕДНЕГО урока одобрено - курс завершен!
-                logger.info(f"Последний урок {lesson_num} курса {course_id} завершен и ДЗ одобрено для user {user_id}.")
-                course_title_safe = escape_md(await get_course_title(course_id))
+                cursor_total = await conn.execute(
+                    "SELECT MAX(lesson_num) FROM group_messages WHERE course_id = ? AND lesson_num > 0", (course_id,)
+                )
+                total_lessons_data = await cursor_total.fetchone()
+                total_lessons = total_lessons_data[0] if total_lessons_data and total_lessons_data[0] is not None else 0
+
+                await conn.commit()  # Сохраняем все изменения в БД
+
+            # 4. Вся логика по отправке сообщений вынесена за пределы транзакции
+            course_title_safe = escape_md(await get_course_title(course_id))
+
+            # Если ДЗ для ПОСЛЕДНЕГО урока одобрено - курс завершен!
+            if is_approved and total_lessons > 0 and lesson_num >= total_lessons:
+                logger.info(f"{log_prefix} Последний урок {lesson_num} курса '{course_id}' завершен и ДЗ одобрено.")
                 message_text_completion = (
                     f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
                     "Вы прошли все уроки\\. Что вы хотите сделать дальше?"
                 )
                 builder_completion = InlineKeyboardBuilder()
-                builder_completion.button(text=escape_md("Выбрать другой курс"), callback_data="select_other_course")
-                builder_completion.button(text=escape_md("Оставить отзыв"), callback_data="leave_feedback")
+                builder_completion.button(text="Выбрать другой курс", callback_data="select_other_course")
+                builder_completion.button(text="Оставить отзыв", callback_data="leave_feedback")
+                await bot.send_message(user_id, message_text_completion, reply_markup=builder_completion.as_markup(),
+                                       parse_mode=ParseMode.MARKDOWN_V2)
 
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=message_text_completion,
-                    reply_markup=builder_completion.as_markup(),
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-                # Обновляем статус курса на 'completed'
-                await conn.execute(
-                    "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
-                    (user_id, course_id)
-                )
-                # await conn.commit() # Коммит будет ниже, после отправки уведомления админу
-            else:
-                # ДЗ одобрено/отклонено, но это не последний урок, или ДЗ отклонено
-                message_to_user_main_part = ""
+                # Снова открываем соединение для обновления статуса курса
+                async with aiosqlite.connect(DB_FILE) as conn_complete:
+                    await conn_complete.execute(
+                        "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
+                        (user_id, course_id)
+                    )
+                    await conn_complete.commit()
+            else:  # Если это не последний урок или ДЗ отклонено
                 if is_approved:
-                    message_to_user_main_part = f"✅ Ваше домашнее задание по курсу {escape_md(course_id)}, урок {lesson_num} принято"
+                    message_to_user_part1 = f"✅ Ваше домашнее задание по курсу {course_title_safe}, урок {lesson_num} принято"
                     if feedback_text:
-                        message_to_user_main_part += f"\n\nКомментарий:\n{escape_md(feedback_text)}"
-                else:  # ДЗ отклонено (is_approved == False)
-                    message_to_user_main_part = f"❌ Ваше домашнее задание по курсу {escape_md(course_id)}, урок {lesson_num} отклонено"
+                        message_to_user_part1 += f"\n\n*Комментарий:*\n{escape_md(feedback_text)}"
+                    action_part = f"⏳ Следующий урок: {escape_md(await get_next_lesson_time(user_id, course_id, lesson_num))}"
+                else:  # is_approved == False
+                    message_to_user_part1 = f"❌ Ваше домашнее задание по курсу {course_title_safe}, урок {lesson_num} отклонено"
                     if feedback_text:
-                        message_to_user_main_part += f"\n\nПричина:\n{escape_md(feedback_text)}"
+                        message_to_user_part1 += f"\n\n*Причина:*\n{escape_md(feedback_text)}"
+                    action_part = escape_md(
+                        "Пожалуйста, исправьте и отправьте домашнее задание снова. Следующий урок будет доступен после его принятия.")
 
-                    is_last_lesson_in_course = (lesson_num >= total_lessons and total_lessons > 0)
-                    if is_last_lesson_in_course:
-                        action_for_user_message = escape_md("Пожалуйста, исправьте и отправьте домашнее задание снова, чтобы успешно завершить курс.")
-                    else:
-                        action_for_user_message = escape_md("Пожалуйста, исправьте и отправьте домашнее задание снова.  Следующий урок будет доступен после его принятия.")
-
-
-                menu_text_for_user = (
-                    f"{message_to_user_main_part}\n\n"
-                    f"{action_for_user_message}\n\n"  # Здесь будет либо время следующего урока, либо призыв пересдать
-                    f"🎓 Курс: {escape_md(await get_course_title(course_id))}\n"
-                    f"🔑 Тариф: {escape_md(tariff_name)}\n"
-                    f"📚 Текущий урок: {lesson_num}"
+                final_message_to_user = (
+                    f"{message_to_user_part1}\n\n{action_part}"
                 )
+                await bot.send_message(user_id, final_message_to_user, parse_mode=ParseMode.MARKDOWN_V2)
+                # Отправляем меню отдельным сообщением
+                await send_main_menu(user_id, course_id, lesson_num, version_id, homework_pending=(not is_approved))
 
-                # homework_pending для клавиатуры: True если отклонено, False если принято (даже если не последний урок)
-                # Если принято, но не последний, то следующий урок по расписанию, ДЗ уже не pending для текущего.
-                keyboard = get_main_menu_inline_keyboard(
-                    course_numeric_id,
-                    lesson_num,
-                    version_id,
-                    homework_pending=(not is_approved)  # True, если is_approved = False (т.е. отклонено)
-                )
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=menu_text_for_user,
-                    reply_markup=keyboard,
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-            # ... (остальная часть функции: уведомление админа, запись в лог, удаление из pending_admin_homework, обновление сообщения в админ-чате)
-
-            # ---- КОНЕЦ НОВОЙ ЛОГИКИ ----
-
-            # Уведомление администратора/ИИ, совершившего действие (остается как было)
-            admin_actor_name = "Система "  # Дефолт, если нет информации
-            if callback_query and callback_query.from_user:
-                admin_actor_name = escape_md(
-                    callback_query.from_user.full_name or f"ID:{callback_query.from_user.id}")
-            elif admin_id:
+            # 5. Уведомление в админ-группу
+            admin_actor_name = "🤖 Система (ИИ)"
+            if admin_id != 0:
                 try:
                     actor_chat = await bot.get_chat(admin_id)
                     admin_actor_name = escape_md(actor_chat.full_name or f"ID:{admin_id}")
@@ -5038,125 +5040,47 @@ async def handle_homework_result(
                     admin_actor_name = f"Актор ID:{admin_id}"
 
             user_name_safe = escape_md(await get_user_name(user_id))
-            course_id_safe = escape_md(course_id)
-            action_str = "принято" if is_approved else "отклонено"
-
+            action_str = "**ОДОБРЕНО**" if is_approved else "**ОТКЛОНЕНО**"
             notification_to_admin_group = (
-                f"ДЗ от {user_name_safe} ID: {user_id} по курсу {course_id_safe}, урок {lesson_num} "
-                f"было **{action_str}** актор: {admin_actor_name}"
+                f"ДЗ от {user_name_safe} ID:{user_id} по курсу {course_title_safe}, урок {lesson_num} "
+                f"было {action_str} актором: {admin_actor_name}"
             )
             if feedback_text:
-                notification_to_admin_group += f"\nКомментарий/причина: {escape_md(feedback_text)}"
+                notification_to_admin_group += f"\n\n*Комментарий/причина:*\n{escape_md(feedback_text)}"
 
-            if ADMIN_GROUP_ID:  # Проверяем, что ID админ группы есть
-                await bot.send_message(
-                    chat_id=ADMIN_GROUP_ID,
-                    text=notification_to_admin_group,
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-
-            await conn.commit()  # Один коммит в конце
-
-            # добавочка от 20-05 Удаление записи из таблицы pending_admin_homework после обработки
-            message_id_in_admin_group_to_clear = None
-            if callback_query and callback_query.message:
-                message_id_in_admin_group_to_clear = callback_query.message.message_id
-            elif original_admin_message_id_to_delete:
-                message_id_in_admin_group_to_clear = original_admin_message_id_to_delete
-
-
-            if message_id_in_admin_group_to_clear:
+            if original_admin_message_id_to_delete and ADMIN_GROUP_ID:
                 try:
-                    await conn.execute(
-                        "DELETE FROM pending_admin_homework WHERE admin_message_id = ?",
-                        (message_id_in_admin_group_to_clear,)
+                    await bot.edit_message_reply_markup(
+                        chat_id=ADMIN_GROUP_ID, message_id=original_admin_message_id_to_delete, reply_markup=None
                     )
-                    await conn.commit()
-                    logger.info(
-                        f"Запись о ДЗ с admin_message_id {message_id_in_admin_group_to_clear} удалена из pending_admin_homework.")
-                except Exception as e_clear_pending:
-                    logger.error(
-                        f"Не удалось удалить запись из pending_admin_homework для admin_message_id {message_id_in_admin_group_to_clear}: {e_clear_pending}")
+                    await bot.send_message(
+                        chat_id=ADMIN_GROUP_ID,
+                        text=notification_to_admin_group,
+                        reply_to_message_id=original_admin_message_id_to_delete,
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+                except TelegramBadRequest as e_tg:
+                    logger.warning(
+                        f"{log_prefix} Не удалось изменить/ответить на сообщение {original_admin_message_id_to_delete}: {e_tg}. Отправляю просто в чат.")
+                    await bot.send_message(ADMIN_GROUP_ID, notification_to_admin_group,
+                                           parse_mode=ParseMode.MARKDOWN_V2)
 
+            # 6. Логируем действие
+            await log_action(
+                user_id=user_id, action_type="HOMEWORK_REVIEWED", course_id=course_id, lesson_num=lesson_num,
+                new_value=new_hw_status, details=f"Проверил: {admin_id}"
+            )
 
+            if callback_query:
+                await callback_query.answer(f"ДЗ {action_str.replace('*', '').lower()}. Студент уведомлен.")
 
-            action_details = "одобрено" if is_approved else "отклонено"
-            if feedback_text: action_details += f" с комментарием"
-            await log_action(user_id, "HOMEWORK_REVIEWED", course_id, lesson_num,
-                             new_value=hw_status,  # 'approved' или 'rejected'
-                             details=f"Проверил: {admin_id}. Результат: {action_details}")
-
-        # В handle_homework_result, после отправки уведомления пользователю и админу
-        # РЕДАКТИРОВАНИЕ исходного сообщения с кнопками в админ-группе
-        # Блок удаления/редактирования сообщения в админ-группе
-        message_id_to_modify = None
-        if callback_query and callback_query.message:
-            message_id_to_modify = callback_query.message.message_id
-        elif original_admin_message_id_to_delete:
-            message_id_to_modify = original_admin_message_id_to_delete
-
-        if message_id_to_modify and ADMIN_GROUP_ID:  # Убедитесь, что ADMIN_GROUP_ID используется правильно
-            try:  # Вложенный try для операции с сообщением в админ-группе
-                action_text_for_admin_msg = "✅ ОДОБРЕНО" if is_approved else "❌ ОТКЛОНЕНО"
-                admin_actor_name_for_status = "Неизвестный"  # Получите имя актора, как делали выше
-                if callback_query and callback_query.from_user:
-                    admin_actor_name_for_status = escape_md(
-                        callback_query.from_user.full_name or f"ID:{callback_query.from_user.id}")
-                elif admin_id:
-                    try:
-                        actor_chat = await bot.get_chat(admin_id)
-                        admin_actor_name_for_status = escape_md(actor_chat.full_name or f"ID:{admin_id}")
-                    except Exception:
-                        admin_actor_name_for_status = f"Актор ID:{admin_id}"
-
-                await bot.edit_message_reply_markup(
-                    chat_id=ADMIN_GROUP_ID,
-                    message_id=message_id_to_modify,
-                    reply_markup=None  # Убираем кнопки
-                )
-                logger.info(f"Убрана клавиатура с сообщения {message_id_to_modify} в админ-группе.")
-
-                # Отправляем новое сообщение в ответ, указывая статус
-                status_update_text = f"Статус ДЗ сообщение выше: {action_text_for_admin_msg} by {admin_actor_name_for_status}"
-                if feedback_text:
-                    status_update_text += f"\nКомментарий: {escape_md(feedback_text)}"
-
-                await bot.send_message(
-                    chat_id=ADMIN_GROUP_ID,
-                    text=status_update_text,
-                    reply_to_message_id=message_id_to_modify,
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-            except TelegramBadRequest as e_tg_edit:  # Ловим ошибку конкретно для изменения сообщения
-                logger.warning(
-                    f"Не удалось изменить/ответить на сообщение {message_id_to_modify} в админ-группе: {e_tg_edit}")
-            except Exception as e_inner:  # Другие ошибки во вложенном try
-                logger.error(f"Неожиданная ошибка при модификации сообщения в админ-группе: {e_inner}", exc_info=True)
-
-        if callback_query:
-            await callback_query.answer()
-
-        # Удаление исходного сообщения с кнопками в админ-группе
-        # message_id_to_delete = None
-        # if callback_query and callback_query.message:
-        #     message_id_to_delete = callback_query.message.message_id
-        # elif original_admin_message_id_to_delete:
-        #     message_id_to_delete = original_admin_message_id_to_delete
-        #
-        # if message_id_to_delete and ADMIN_GROUP_ID:  # Проверяем, что ID админ группы есть
-        #     try:
-        #         await bot.delete_message(chat_id=ADMIN_GROUP_ID, message_id=message_id_to_delete)
-        #     except TelegramBadRequest as e:
-        #         logger.warning(f"Не удалось удалить сообщение {message_id_to_delete} в админ-группе: {e}")
-        #
-        # if callback_query:
-        #     await callback_query.answer()
-
-    except Exception as e4324:
-        logger.error(f"❌ Ошибка в handle_homework_result: {e4324}", exc_info=True)
-        if callback_query:
-            await callback_query.answer("Произошла ошибка при обработке ДЗ.", show_alert=True)
-
+        except Exception as e:
+            logger.error(f"❌ {log_prefix} КРИТИЧЕСКАЯ ОШИБКА: {e}", exc_info=True)
+            if callback_query:
+                try:
+                    await callback_query.answer("Произошла критическая ошибка при обработке ДЗ.", show_alert=True)
+                except TelegramBadRequest:
+                    pass
 
 async def get_user_name(user_id: int) -> str:
     """Получает имя пользователя по ID."""
