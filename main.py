@@ -5,7 +5,7 @@ from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 from aiogram.exceptions import TelegramBadRequest
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, F, md
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart, BaseFilter, CommandObject
 from aiogram.filters.callback_data import CallbackData
 #from aiogram.exceptions import TelegramAPIError
@@ -21,9 +21,8 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
 
 # ---- НОВЫЕ ИМПОРТЫ ДЛЯ ВЕБХУКОВ ----
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
 import aiohttp
-from functools import wraps
+
 
 # Для генерации подписи Robokassa (примерный, нужно проверить актуальность)
 #import decimal
@@ -337,12 +336,12 @@ def require_n8n_secret(handler):
 
 
 ### End filters... # 14-04
-async def populate_course_versions(settings):
+async def populate_course_versions(settings2):
     """Заполняет таблицу course_versions данными из settings.json."""
     #logger.info("Заполнение таблицы course_versions...")
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            for code, data in settings["activation_codes"].items():
+            for code, data in settings2["activation_codes"].items():
                 course_id = data["course"]
                 version_id = data["version"]
 
@@ -376,14 +375,14 @@ async def load_settings():
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 logger.info(f"Загрузка настроек из файла: {SETTINGS_FILE}")
-                settings = json.load(f)
-                logger.info(f"Настройки settings.json {len(settings)=} {settings.keys()=}")
-                logger.info(f"Настройки успешно загружены. {settings['groups']=}")
+                settings4 = json.load(f)
+                logger.info(f"Настройки settings.json {len(settings4)=} {settings4.keys()=}")
+                logger.info(f"Настройки успешно загружены. {settings4['groups']=}")
 
                 # Заполнение таблицы course_versions
-                asyncio.create_task(populate_course_versions(settings))
+                asyncio.create_task(populate_course_versions(settings4))
 
-                return settings
+                return settings4
         except json.JSONDecodeError:
             logger.error("8889 Ошибка при декодировании JSON.")
             return {"groups": {}, "activation_codes": {}}
@@ -498,166 +497,129 @@ async def is_valid_activation_code(code: str) -> bool:
         return False
 
 
-async def activate_course(user_id: int, activation_code: str, level:int = 1):
+async def activate_course(user_id: int, activation_code: str, level: int = 1):
     """
     Активирует курс для пользователя. Если курс уже активен с другим тарифом,
     предлагает сменить тариф. Если курс был неактивен/завершен, активирует новый тариф.
+     Защищено asyncio.Lock для предотвращения гонки состояний. 27-06
     """
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            # 1. Получаем данные по коду активации
-            cursor_code = await conn.execute(
-                "SELECT course_id, version_id FROM course_activation_codes WHERE code_word = ?", (activation_code,)
-            )
-            code_data = await cursor_code.fetchone()
+    # 1. Захватываем замок на всю операцию активации
+    async with db_lock:
+        try:
+            # 2. Все операции с БД производим в одном соединении
+            async with aiosqlite.connect(DB_FILE) as conn:
+                # Получаем данные по коду активации
+                cursor_code = await conn.execute(
+                    "SELECT course_id, version_id FROM course_activation_codes WHERE code_word = ?", (activation_code,)
+                )
+                code_data = await cursor_code.fetchone()
 
-            if not code_data:
-                return False, "❌ Неверный код активации."
+                if not code_data:
+                    return False, "? Неверный код активации."
 
-            new_course_id, new_version_id = code_data
-            new_tariff_name = settings.get("tariff_names", {}).get(new_version_id, f"Тариф {new_version_id}")
-            course_title = await get_course_title(new_course_id)  # Получаем название курса
+                new_course_id, new_version_id = code_data
+                new_tariff_name = settings.get("tariff_names", {}).get(new_version_id, f"Тариф {new_version_id}")
+                course_title = await get_course_title(new_course_id)
 
-            logger.info(
-                f"Попытка активации: user_id={user_id}, code={activation_code} -> course_id='{new_course_id}', version_id='{new_version_id}' ({new_tariff_name})")
+                logger.info(
+                    f"Попытка активации: user_id={user_id}, code={activation_code} -> course_id='{new_course_id}', version_id='{new_version_id}' ({new_tariff_name})")
 
-            # 2. Проверяем, есть ли у пользователя УЖЕ КАКАЯ-ЛИБО запись для этого курса (любой version_id, любой статус)
-            cursor_existing = await conn.execute(
-                "SELECT version_id, status, current_lesson FROM user_courses WHERE user_id = ? AND course_id = ?",
-                (user_id, new_course_id)
-            )
-            existing_user_course_records = await cursor_existing.fetchall()
+                # Проверяем существующие записи
+                cursor_existing = await conn.execute(
+                    "SELECT version_id, status, current_lesson FROM user_courses WHERE user_id = ? AND course_id = ?",
+                    (user_id, new_course_id)
+                )
+                existing_user_course_records = await cursor_existing.fetchall()
 
-            now_utc = datetime.now(pytz.utc)
-            now_utc_str = now_utc.strftime('%Y-%m-%d %H:%M:%S')
+                now_utc = datetime.now(pytz.utc)
+                now_utc_str = now_utc.strftime('%Y-%m-%d %H:%M:%S')
+                activation_log_details = ""
+                user_message = ""
+                current_active_version_id = None # Для логирования
 
-            activation_log_details = user_message = ""
-
-            if existing_user_course_records:
-                # У пользователя уже есть записи для этого курса.
-                # Найдем активную запись, если она есть.
+                # --- Начало логики определения действия ---
                 active_record = next((r for r in existing_user_course_records if r[1] == 'active'), None)
 
                 if active_record:
-                    current_active_version_id, _, current_active_lesson = active_record
-                    current_active_tariff_name = settings.get("tariff_names", {}).get(current_active_version_id,
-                                                                                      f"Тариф {current_active_version_id}")
-
+                    current_active_version_id, _, _ = active_record
                     if current_active_version_id == new_version_id:
-                        user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» у вас уже активен."
-                        activation_log_details = f"Попытка повторной активации того же тарифа '{new_version_id}' для курса '{new_course_id}'. Курс уже активен."
-                        logger.info(activation_log_details)
-                        # Запускаем шедулер на всякий случай, если он был остановлен
-                        await start_lesson_schedule_task(user_id)
-                        return True, user_message  # Считаем успешной, т.к. курс уже активен
-
-                    else:
-                        # Активен другой тариф! Обновляем.
-                        logger.info(
-                            f"Смена тарифа для user_id={user_id}, course_id='{new_course_id}' с '{current_active_version_id}' на '{new_version_id}'.")
-                        # Деактивируем все старые версии этого курса для этого пользователя
-                        await conn.execute(
-                            "UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ?",
-                            (user_id, new_course_id)
-                        )
-                        # Обновляем или вставляем новую запись с новым тарифом
-                        # Сбрасываем прогресс при смене тарифа (current_lesson = 0)
+                        user_message = f"? Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» у вас уже активен."
+                        activation_log_details = f"Попытка повторной активации того же тарифа."
+                        logger.info(f"{activation_log_details} для user {user_id}")
+                        # Ничего не меняем в БД, просто выходим
+                        return True, user_message
+                    else: # Смена тарифа
+                        current_active_tariff_name = settings.get("tariff_names", {}).get(current_active_version_id, f"Тариф {current_active_version_id}")
+                        logger.info(f"Смена тарифа для user_id={user_id} с '{current_active_version_id}' на '{new_version_id}'.")
+                        await conn.execute("UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ?", (user_id, new_course_id))
+                        # Запрос на вставку или обновление
                         await conn.execute("""
                             INSERT INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date, first_lesson_sent_time, last_lesson_sent_time, level)
                             VALUES (?, ?, ?, 'active', 0, ?, ?, ?, ?)
                             ON CONFLICT(user_id, course_id, version_id) DO UPDATE SET
-                                status = 'active',
-                                current_lesson = 0,
-                                activation_date = excluded.activation_date,
-                                first_lesson_sent_time = excluded.first_lesson_sent_time,
-                                last_lesson_sent_time = excluded.last_lesson_sent_time,
-                                level = 1, 
-                                hw_status = 'none', hw_type = NULL, is_completed = 0
-                        """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str, level))
-
-                        user_message = (f"✅ Тариф для курса «{escape_md(course_title)}» успешно изменен\\!\n"
+                                status = 'active', current_lesson = 0, activation_date = excluded.activation_date,
+                                first_lesson_sent_time = excluded.first_lesson_sent_time, last_lesson_sent_time = excluded.last_lesson_sent_time,
+                                level = ?, hw_status = 'none', hw_type = NULL, is_completed = 0
+                        """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str, level, level))
+                        user_message = (f"? Тариф для курса «{escape_md(course_title)}» успешно изменен\\!\n"
                                         f"Раньше был: «{escape_md(current_active_tariff_name)}».\n"
                                         f"Теперь активен: «{escape_md(new_tariff_name)}».\n"
                                         "Прогресс по курсу начнется заново.")
-                        activation_log_details = f"Смена тарифа для курса '{new_course_id}' с '{current_active_version_id}' на '{new_version_id}'. Прогресс сброшен."
-                else:
-                    # Есть записи, но ни одна не активна (все inactive или completed)
-                    logger.info(
-                        f"Повторная активация курса '{new_course_id}' с тарифом '{new_version_id}' для user_id={user_id}. Предыдущие статусы были неактивны.")
-                    # Деактивируем все старые версии на всякий случай
-                    await conn.execute(
-                        "UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ? AND version_id != ?",
-                        (user_id, new_course_id, new_version_id)
-                    )
-                    # Вставляем или обновляем (если запись с таким version_id уже была, но inactive)
+                        activation_log_details = f"Смена тарифа с '{current_active_version_id}' на '{new_version_id}'. Прогресс сброшен."
+                else: # Есть записи, но неактивные (возобновление)
+                    logger.info(f"Повторная активация/возобновление курса '{new_course_id}' для user_id={user_id}.")
+                    await conn.execute("UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ? AND version_id != ?", (user_id, new_course_id, new_version_id))
+                    # Запрос на вставку или обновление
                     await conn.execute("""
                         INSERT INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date, first_lesson_sent_time, last_lesson_sent_time, level)
-                        VALUES (?, ?, ?, 'active', 0, ?, ?, ?, 1)
+                        VALUES (?, ?, ?, 'active', 0, ?, ?, ?, ?)
                         ON CONFLICT(user_id, course_id, version_id) DO UPDATE SET
-                            status = 'active',
-                            current_lesson = 0,
-                            activation_date = excluded.activation_date,
-                            first_lesson_sent_time = excluded.first_lesson_sent_time,
-                            last_lesson_sent_time = excluded.last_lesson_sent_time,
-                            level = 1,
-                            hw_status = 'none', hw_type = NULL, is_completed = 0
-                    """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str))
-                    user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован (или возобновлен)\\! Прогресс начнется заново."
+                            status = 'active', current_lesson = 0, activation_date = excluded.activation_date,
+                            first_lesson_sent_time = excluded.first_lesson_sent_time, last_lesson_sent_time = excluded.last_lesson_sent_time,
+                            level = ?, hw_status = 'none', hw_type = NULL, is_completed = 0
+                    """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str, level, level))
+                    user_message = f"? Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован (или возобновлен)\\! Прогресс начнется заново."
                     activation_log_details = f"Активирован/возобновлен курс '{new_course_id}' с тарифом '{new_version_id}'. Прогресс сброшен."
-            else:
-                # Это первая активация этого курса для пользователя
-                logger.info(
-                    f"Первая активация курса '{new_course_id}' с тарифом '{new_version_id}' для user_id={user_id}.")
-                await conn.execute("""
-                    INSERT INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date, first_lesson_sent_time, last_lesson_sent_time, level)
-                    VALUES (?, ?, ?, 'active', 0, ?, ?, ?, 1)
-                """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str))
-                user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован\\!"
-                activation_log_details = f"Курс '{new_course_id}' (тариф '{new_version_id}') успешно активирован."
-            logger.info(f"{activation_log_details=}  {user_message=}" )
-            await conn.commit()
 
-            # Логирование действия в БД
+                if not existing_user_course_records: # Первая активация этого курса
+                    logger.info(f"Первая активация курса '{new_course_id}' для user_id={user_id}.")
+                    await conn.execute("""
+                        INSERT INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date, first_lesson_sent_time, last_lesson_sent_time, level)
+                        VALUES (?, ?, ?, 'active', 0, ?, ?, ?, ?)
+                    """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str, level))
+                    user_message = f"? Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован\\!"
+                    activation_log_details = f"Курс '{new_course_id}' (тариф '{new_version_id}') успешно активирован."
+
+                # Сохраняем все изменения одним коммитом
+                await conn.commit()
+                logger.info(f"Действие активации для user {user_id} успешно закоммичено в БД.")
+
+            # --- Логика отправки сообщений и логов вынесена за пределы транзакции ---
+
+            # Логирование действия в БД (вызываем другую защищенную локом функцию)
+            log_action_type = "COURSE_ACTIVATION"
+            old_log_value = None
             if "Смена тарифа" in activation_log_details:
-                # При смене тарифа мы знаем old_value (старый тариф)
-                # current_active_version_id должен быть доступен в этом блоке кода
-                await log_action(
-                    user_id=user_id,
-                    action_type="TARIFF_CHANGE",
-                    course_id=new_course_id,
-                    old_value=current_active_version_id, # <--- Убедитесь, что эта переменная здесь доступна
-                    new_value=new_version_id,
-                    details=activation_log_details
-                )
-            elif "Попытка повторной активации того же тарифа" in activation_log_details:
-                 await log_action(
-                    user_id=user_id,
-                    action_type="COURSE_REACTIVATION_ATTEMPT",
-                    course_id=new_course_id,
-                    new_value=new_version_id, # Это тот же тариф, что и был
-                    details=activation_log_details
-                )
-            else: # Обычная активация или возобновление
-                await log_action(
-                    user_id=user_id,
-                    action_type="COURSE_ACTIVATION",
-                    course_id=new_course_id,
-                    new_value=new_version_id,
-                    details=activation_log_details
-                )
+                log_action_type = "TARIFF_CHANGE"
+                old_log_value = current_active_version_id
+
+            await log_action(
+                user_id=user_id, action_type=log_action_type, course_id=new_course_id,
+                old_value=old_log_value, new_value=new_version_id, details=activation_log_details
+            )
 
             # Отправка уведомления админам
             if ADMIN_GROUP_ID:
-                user_info = await bot.get_chat(user_id)
-                user_display_name = user_info.full_name or f"ID:{user_id}"
-                if user_info.username: user_display_name += f" @{user_info.username}"
-                admin_notification = (
-                    f"🔔 Активация курса для пользователя {escape_md(user_display_name)}\n"
-                    f"Курс: {escape_md(course_title)} {escape_md(new_course_id)}\n"
-                    f"Тариф: {escape_md(new_tariff_name)} {escape_md(new_version_id)}\n"
-                    f"Детали: {escape_md(activation_log_details)}"
-                )
                 try:
+                    user_info = await bot.get_chat(user_id)
+                    user_display_name = user_info.full_name or f"ID:{user_id}"
+                    if user_info.username: user_display_name += f" @{user_info.username}"
+                    admin_notification = (
+                        f"?? Активация курса для пользователя {escape_md(user_display_name)}\n"
+                        f"Курс: {escape_md(course_title)} ({escape_md(new_course_id)})\n"
+                        f"Тариф: {escape_md(new_tariff_name)} ({escape_md(new_version_id)})\n"
+                        f"Детали: {escape_md(activation_log_details)}"
+                    )
                     await bot.send_message(ADMIN_GROUP_ID, admin_notification, parse_mode=ParseMode.MARKDOWN_V2)
                 except Exception as e_admin_notify:
                     logger.error(f"Не удалось отправить уведомление админам об активации: {e_admin_notify}")
@@ -665,9 +627,9 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
             await start_lesson_schedule_task(user_id)
             return True, user_message
 
-    except Exception as e566:
-        logger.error(f"Ошибка при активации курса (код {activation_code}) для user_id={user_id}: {e566}", exc_info=True)
-        return False, "⚠️ Произошла серьезная ошибка при активации курса. Пожалуйста, свяжитесь с поддержкой."
+        except Exception as e566:
+            logger.error(f"Ошибка внутри `async with db_lock` при активации курса (код {activation_code}) для user_id={user_id}: {e566}", exc_info=True)
+            return False, "⚠️ Произошла серьезная ошибка при активации курса. Пожалуйста, свяжитесь с поддержкой."
 
 
 # 14-04
@@ -1275,9 +1237,7 @@ async def process_expert_question(message: types.Message, state: FSMContext):
 
 @require_n8n_secret
 async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
-    bot_instance = request.app['bot']  # Получаем экземпляр бота
-    dp_instance = request.app['dp']  # Получаем экземпляр диспетчера (или FSMContext напрямую, если нужно)
-
+    """получает от ИИ результат проверки ДЗ. да/нет и подробная причина"""
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (HW Approval): {data}")
@@ -1764,7 +1724,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
             total_lessons_data = await cursor_total_lessons.fetchone()
             total_lessons = total_lessons_data[0] if total_lessons_data and total_lessons_data[0] is not None else 0
 
-            if total_lessons > 0 and current_lesson_for_display >= total_lessons:
+            if current_lesson_for_display >= total_lessons > 0:
                 logger.info(
                     f"Урок {current_lesson_for_display} является последним для курса {course_id} (всего {total_lessons}).")
                 return "🎉 Это был последний урок курса!"
@@ -5292,99 +5252,61 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 @dp.message(F.content_type.in_({'photo', 'document', 'text'}), F.chat.type == "private")
 @db_exception_handler
 async def handle_homework(message: types.Message):
-    """Обрабатывает отправку домашних заданий (фото/документы/текст)"""
+    """    Обрабатывает отправку ДЗ или кода активации. Защищено asyncio.Lock.    """
     user_id = message.from_user.id
-    logger.info(f" новый обработчик и текстовой домашки и фото  17-04 {user_id=}")
+    logger.info(f"handle_homework: Получено сообщение от user_id={user_id}, content_type={message.content_type}")
 
-    # Получаем данные о курсе
+    # 1. Сначала пытаемся получить данные о курсе. Не пишем в базу, только читаем.
     user_course_data = await get_user_course_data(user_id)
-    logger.info(f" строка 4162 {user_course_data=}")
+
+    # --- Сценарий 1: У пользователя нет активного курса -> это код активации ---
     if not user_course_data:
-        await message.answer("Проверяю код", parse_mode=None)
-        activation_result = await activate_course(user_id, message.text) # Get status code
-        is_activated = activation_result[0]
-        activation_message = activation_result[1]
+        logger.info(f"handle_homework: Нет активного курса для user_id={user_id}. Обработка как кода активации.")
+        await message.answer("Проверяю код...", parse_mode=None)
 
-        await message.answer(activation_message, parse_mode=None) # answer
+        # activate_course уже защищена db_lock, поэтому здесь вызов безопасен.
+        is_activated, activation_message = await activate_course(user_id, message.text)
 
-# ======================== вот тут активация ===================================
+        # Отправляем результат активации
+        await message.answer(escape_md(activation_message), parse_mode=ParseMode.MARKDOWN_V2)
+
         if is_activated:
             logger.info(f"444 is_activated now")
             # Load course data to get course_id and version_id
             async with aiosqlite.connect(DB_FILE) as conn:
-                try:
-                    # cursor = await conn.execute("""
-                    #     SELECT course_id, version_id FROM user_courses WHERE user_id = ?
-                    # """, (user_id,))
-                    cursor = await safe_db_execute(
-                        conn,
-                        "SELECT course_id, version_id FROM user_courses WHERE user_id = ?",
-                        (user_id,)
-                    )
+                # Получаем данные только что активированного курса
+                cursor = await conn.execute(
+                    "SELECT course_id, version_id FROM user_courses WHERE user_id = ? AND status='active' ORDER BY activation_date DESC LIMIT 1",
+                    (user_id,)
+                )
+                activated_course_data = await cursor.fetchone()
 
-                    new_course_data = await cursor.fetchone()
-                    course_id, version_id = new_course_data
+            if activated_course_data:
+                course_id, version_id = activated_course_data
+                await send_course_description(user_id, course_id)
+                await send_main_menu(user_id, course_id, 0, version_id)
+            else:
+                logger.error(f"КРИТИЧНО: Не удалось найти данные после успешной активации для user {user_id}")
+                await cmd_start(message)
+        return  # Завершаем выполнение
 
-                    # Fetch additional info
-                    course_title = await get_course_title(course_id)
-                    course_numeric_id = await get_course_id_int(course_id)
-                    tariff_name = get_tariff_name(version_id)
-                    if course_numeric_id == 0:
-                        logger.error(f"Не найден курс {course_id=}")
-                    lesson_num = 0  # After activation the first lesson is shown
-
-                    # Get the lesson interval information based on user_id and version
-                    message_interval = settings.get("message_interval", 24) #message_interval = 0.05
-                    logger.info(f" message_interval = {message_interval} ")
-
-                except Exception as e4585:
-                    logger.error(f" 😱 Ой-ой! Какая-то ошибка с базой после активации: {e4585}")
-                    await message.answer(" 😥 Кажется, база данных уснула. Попробуйте чуть позже", parse_mode=None)
-                    return
-
-            await send_course_description(user_id, course_id) # show course description and new keyboards
-
-            logger.info(f"3 перед созданием клавиатуры{course_numeric_id=}")
-            keyboard = get_main_menu_inline_keyboard(  # await убрали
-                course_numeric_id = course_numeric_id,
-                lesson_num=lesson_num,
-                user_tariff=version_id
-            )
-
-            # Формируем приветственное сообщение с информацией о курсе и тарифе
-            first_name = message.from_user.first_name or message.from_user.username or "Пользователь"
-            welcome_message = (
-                f"*Добро пожаловать*, {escape_md(first_name)}\n\n"
-                f"Вы успешно активировали *{escape_md(course_title)}*\n"
-                f"Ваш тариф: *{escape_md(tariff_name)}*\n"
-                f"Интервал между уроками: *{escape_md(str(message_interval))}* ч\n\n" #todo: interval
-                f"Желаем удачи в прохождении курса"
-            )
-            logger.info(f"3332 {welcome_message=}")
-            await message.answer(welcome_message, reply_markup=keyboard, parse_mode="MarkdownV2")
-
-
-        return # break here
-
+    # --- Сценарий 2: У пользователя есть активный курс -> это домашнее задание ---
     course_numeric_id, current_lesson, version_id = user_course_data
     course_id = await get_course_id_str(course_numeric_id)
 
-    # Если тариф v1 → самопроверка
-    if version_id == 'v1':
-        try:
-            # Экранируем сообщение с помощью escape_md
-            await message.answer(
-                escape_md("✅ Домашка принята для самопроверки и будет одобрена автоматически!"),
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-            logger.info(f"handle_homework: Отправлено сообщение об одобрении домашки для самопроверки")
+    # Логика для тарифа с самопроверкой
+    if version_id == 'v1':  # Используй свой ID для тарифа, например 'v1'
+        logger.info(f"handle_homework: ДЗ для тарифа с самопроверкой от user {user_id}")
+        await message.answer(escape_md("✅ Домашка принята для самопроверки и будет одобрена автоматически!"),
+                             parse_mode=ParseMode.MARKDOWN_V2)
+
+        # Используем db_lock для всех изменений в БД
+        async with db_lock:
             async with aiosqlite.connect(DB_FILE) as conn:
-                await conn.execute("""
-                    UPDATE user_courses 
-                    SET hw_status = 'approved'
-                    WHERE user_id = ? AND course_id = ?
-                """, (user_id, course_id))
-                await conn.commit()
+                # Обновляем статус домашки
+                await conn.execute(
+                    "UPDATE user_courses SET hw_status = 'approved' WHERE user_id = ? AND course_id = ? AND current_lesson = ?",
+                    (user_id, course_id, current_lesson))
 
                 # ---- НОВАЯ ЛОГИКА ЗДЕСЬ для v1 ----
                 cursor_total = await conn.execute(
@@ -5393,308 +5315,135 @@ async def handle_homework(message: types.Message):
                 total_lessons_data = await cursor_total.fetchone()
                 total_lessons = total_lessons_data[0] if total_lessons_data and total_lessons_data[0] is not None else 0
 
-                if  0 < total_lessons <= current_lesson:
+                is_course_completed = (total_lessons > 0 and current_lesson >= total_lessons)
+
+                if is_course_completed:
                     logger.info(
                         f"Курс {course_id} (v1) завершен для {user_id} после самоодобрения ДЗ урока {current_lesson}.")
-                    course_title_safe = escape_md(await get_course_title(course_id))
-                    message_text_completion = (
-                        f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
-                        "Вы прошли все уроки. Что вы хотите сделать дальше?"
-                    )
-                    builder_completion = InlineKeyboardBuilder()
-                    builder_completion.button(text=escape_md("Выбрать другой курс"),
-                                              callback_data="select_other_course")
-                    builder_completion.button(text=escape_md("Оставить отзыв"), callback_data="leave_feedback")
-
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=message_text_completion,
-                        reply_markup=builder_completion.as_markup(),
-                        parse_mode=ParseMode.MARKDOWN_V2
-                    )
                     await conn.execute(
                         "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
                         (user_id, course_id)
                     )
-                    await conn.commit()
-                else:
-                    # Если курс не завершен, выводим обычное меню
-                    await send_main_menu(user_id, course_id, current_lesson, version_id, homework_pending=False)
-                    # ---- КОНЕЦ НОВОЙ ЛОГИКИ для v1 ----
-        except Exception as e4669:
-            logger.error(f"Ошибка при отправке сообщения об авто-аппруве: {e4669}", exc_info=True)
-        return
 
-    # Получаем ожидаемый hw_type для текущего урока из БД
-    expected_hw_type = None
-    async with aiosqlite.connect(DB_FILE) as conn:
-        # Ищем запись о ДЗ для текущего урока пользователя
-        # Предполагаем, что is_homework=True и hw_type установлены для соответствующей части урока
-        cursor_hw_info = await conn.execute(
-            """SELECT hw_type 
-               FROM group_messages 
-               WHERE course_id = ? AND lesson_num = ? AND is_homework = 1 
-               ORDER BY id DESC LIMIT 1""",  # Берем последнюю часть ДЗ, если их несколько
-            (course_id, current_lesson)
-        )
-        hw_info_row = await cursor_hw_info.fetchone()
-        if hw_info_row and hw_info_row[0]:
-            expected_hw_type = hw_info_row[0].strip().lower()
-            logger.info(f"Для урока {current_lesson} курса {course_id} ожидается ДЗ типа: '{expected_hw_type}'")
-        else:
-            logger.warning(
-                f"Не найден ожидаемый тип ДЗ (hw_type) для урока {current_lesson} курса {course_id}. Разрешаю любой тип.")
-            expected_hw_type = "any"  # Если тип не указан в базе, считаем, что подходит любой
+                await conn.commit()  # Сохраняем все изменения (hw_status и, возможно, status курса)
 
-    # Определяем тип присланного ДЗ
-    submitted_content_type = message.content_type.lower()  # 'text', 'photo', 'document', etc.
-
-    # Проверка типа ДЗ
-    if expected_hw_type != "any" and submitted_content_type != expected_hw_type:
-        # Специальные случаи, если, например, "document" может быть любым файлом,
-        # а ожидается "pdf" (это уже выходит за рамки простого message.content_type)
-        # Пока считаем прямое совпадение.
-
-        # Если ожидается 'text', а прислали медиа с подписью, это тоже может быть валидно
-        # В этом случае, нужно смотреть и на message.text и на message.caption
-        # Но если ожидается 'photo', а прислали 'text', то это явное несоответствие.
-
-        is_mismatch = True
-        if expected_hw_type == "text" and submitted_content_type in ["photo", "video", "document",
-                                                                     "animation"] and message.caption:
-            # Если ожидаем текст, но прислали медиа с подписью - это может быть альтернативным вариантом текста.
-            # Решите, считать ли это ошибкой. Пока будем считать, что если ждем текст, то только текст.
-            pass  # is_mismatch остается True
-        elif submitted_content_type == expected_hw_type:
-            is_mismatch = False
-
-        if is_mismatch:
-            logger.warning(f"Несоответствие типа ДЗ для урока {current_lesson} курса {course_id}. "
-                           f"Ожидался: '{expected_hw_type}', получен: '{submitted_content_type}'.")
-            await message.reply(
-                escape_md(
-                    f"Вы прислали ДЗ не того типа. Для этого урока ожидается: **{expected_hw_type.capitalize()}**. "
-                    f"Пожалуйста, отправьте ДЗ корректного типа"),
-                parse_mode=ParseMode.MARKDOWN_V2
+        # Отправляем сообщения уже после закрытия транзакции
+        if is_course_completed:
+            course_title_safe = escape_md(await get_course_title(course_id))
+            message_text_completion = (
+                f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
+                "Вы прошли все уроки  Что вы хотите сделать дальше?"
             )
-            return  # Прерываем обработку ДЗ
+            builder_completion = InlineKeyboardBuilder()
+            builder_completion.button(text="Выбрать другой курс", callback_data="select_other_course")
+            builder_completion.button(text="Оставить отзыв", callback_data="leave_feedback")
+            await bot.send_message(user_id, message_text_completion, reply_markup=builder_completion.as_markup(),
+                                   parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            # Если курс не завершен, просто выводим обычное меню
+            await send_main_menu(user_id, course_id, current_lesson, version_id, homework_pending=False)
 
+        return  # Завершаем выполнение, т.к. для этого тарифа больше ничего не нужно
+    # --- КОНЕЦ ЛОГИКИ ДЛЯ ТАРИФА С САМОПРОВЕРКОЙ ---
 
-
-    # Формируем сообщение для админа
-    course_title_from_db = await get_course_title(course_numeric_id)  # Получаем название по числовому ID
-    # Защита, если курс еще не имеет названия в БД или course_numeric_id=0
-    display_course_title = course_title_from_db if course_title_from_db != "Неизвестный курс" else course_id  # course_id здесь строковый от user_course_data
-
-    user_display_name = message.from_user.full_name  # Имя пользователя
-    if message.from_user.username:
-        user_display_name += f" @{message.from_user.username}"
-
-    # Создаем клавиатуру для админа (ДО формирования сообщения)
-    admin_keyboard = create_admin_keyboard(
-        user_id=user_id,
-        course_id=course_numeric_id,
-        lesson_num=current_lesson,
-        message_id=message.message_id
-    )
-
-    # Формируем сообщение для админа в зависимости от типа контента
-    if message.text:
-        homework_type = "Текстовая домашка"
-        text = message.text.strip()
-        file_id = None
-        admin_message_content = f"✏️ Текст: {md.quote(text)}"
-    elif message.photo:
-        homework_type = "Домашка с фото"
-        text = message.caption or ""  # Получаем подпись к фото (если есть)
-        file_id = message.photo[-1].file_id  # Берем последнее (самое большое) фото
-        admin_message_content = f"📸 Фото: {file_id}\n✏️ Описание: {md.quote(text)}"
-    elif message.document:
-        homework_type = "Домашка с документом"
-        text = message.caption or ""  # Получаем подпись к документу (если есть)
-        file_id = message.document.file_id
-        admin_message_content = f"📎 Документ: {file_id}\n✏️ Описание: {md.quote(text)}"
-    else:
-        await message.answer("Неподдерживаемый тип контента.")
-        return
-    logger.info(f"admin_message_content: {admin_message_content} {file_id=}")
-    # Добавляем ID пользователя в сообщение админам
-    admin_message_text = (
-        f"📝 Новое ДЗ {homework_type}\n"
-        f"👤 Пользователь: {escape_md(user_display_name)} ID: {user_id}\n"  # Добавили user_id
-        f"📚 Курс: {escape_md(display_course_title)}\n"  # Используем display_course_title
-        f"⚡ Тариф: {escape_md(version_id)}\n"
-        f"📖 Урок: {current_lesson}\n"
-    )
-
+    # --- Подготовка к отправке ДЗ на проверку (для остальных тарифов) ---
     try:
-        # Сохраняем информацию о ДЗ в базе данных (для последующей обработки админами)
+        # Проверяем тип ДЗ
+        expected_hw_type = "any"
         async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute("""
-                INSERT OR REPLACE INTO admin_context (user_id, course_id, lesson_num, text)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, course_numeric_id, current_lesson, f"{user_id}:{course_numeric_id}:{current_lesson}"))
-            await conn.commit()
-
-        # Отправляем сообщение админам
-        sent_admin_message = None  # Для отслеживания отправленного сообщения, если понадобится его ID
-
-        # Формируем базовый caption (без описания из ДЗ, оно добавится ниже если есть)
-        base_caption_for_media = admin_message_text
-
-        # Добавляем описание из ДЗ к caption, если оно есть
-        # text здесь - это message.caption из входящего сообщения с ДЗ
-        description_from_homework = text if text else ""  # text = message.caption or ""
-        if description_from_homework:
-            caption_with_description = base_caption_for_media + f"\n✏️ Описание: {escape_md(description_from_homework)}"
-        else:
-            caption_with_description = base_caption_for_media
-
-        if message.photo:
-            sent_admin_message = await bot.send_photo(
-                chat_id=ADMIN_GROUP_ID,
-                photo=message.photo[-1].file_id,
-                caption=caption_with_description,
-                reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+            cursor_hw_info = await conn.execute(
+                "SELECT hw_type FROM group_messages WHERE course_id = ? AND lesson_num = ? AND is_homework = 1 ORDER BY id DESC LIMIT 1",
+                (course_id, current_lesson)
             )
-        elif message.video:
-            sent_admin_message = await bot.send_video(
-                chat_id=ADMIN_GROUP_ID,
-                video=message.video.file_id,
-                caption=caption_with_description,
-                reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
+            hw_info_row = await cursor_hw_info.fetchone()
+            if hw_info_row and hw_info_row[0]: expected_hw_type = hw_info_row[0].strip().lower()
+
+        if expected_hw_type != "any" and message.content_type.lower() != expected_hw_type:
+            await message.reply(
+                escape_md(f"Вы прислали ДЗ не того типа. Ожидается: **{expected_hw_type.capitalize()}**."),
+                parse_mode=ParseMode.MARKDOWN_V2)
+            return
+
+        # Готовим данные для сообщения админу
+        display_course_title = await get_course_title(course_id)
+        user_display_name = message.from_user.full_name or f"ID:{user_id}"
+        if message.from_user.username: user_display_name += f" @{message.from_user.username}"
+        admin_keyboard = create_admin_keyboard(user_id, course_numeric_id, current_lesson, message.message_id)
+
+        homework_type, text_from_hw, file_id_from_hw = "", "", None
+        if message.text:
+            homework_type, text_from_hw = "Текстовая домашка", message.text.strip()
+        elif message.photo:
+            homework_type, text_from_hw, file_id_from_hw = "Домашка с фото", message.caption or "", message.photo[
+                -1].file_id
         elif message.document:
-            sent_admin_message = await bot.send_document(
-                chat_id=ADMIN_GROUP_ID,
-                document=message.document.file_id,
-                caption=caption_with_description,
-                reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-        elif message.audio:  # Новый тип
-            sent_admin_message = await bot.send_audio(
-                chat_id=ADMIN_GROUP_ID,
-                audio=message.audio.file_id,
-                caption=caption_with_description,
-                reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-        elif message.voice:  # Новый тип
-            sent_admin_message = await bot.send_voice(
-                chat_id=ADMIN_GROUP_ID,
-                voice=message.voice.file_id,
-                caption=caption_with_description,
-                # Для voice caption обычно не отображается клиентами, но API его принимает
-                reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-        elif message.animation:  # Новый тип (GIF)
-            sent_admin_message = await bot.send_animation(
-                chat_id=ADMIN_GROUP_ID,
-                animation=message.animation.file_id,
-                caption=caption_with_description,
-                reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-        elif message.text:  # Если это текстовая домашка
-            # text здесь - это message.text.strip()
-            final_admin_text = admin_message_text + f"\n✏️ Текст ДЗ:\n{escape_md(text)}"  # text уже взят из message.text.strip()
-            sent_admin_message = await bot.send_message(
-                ADMIN_GROUP_ID,
-                final_admin_text,
-                reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-        else:
-            logger.warning(f"Получен неподдерживаемый тип контента для ДЗ от user {user_id}: {message.content_type}")
-            await message.answer(escape_md("Неподдерживаемый тип файла для домашнего задания."),
-                                 parse_mode=ParseMode.MARKDOWN_V2)
-            return  # Выходим, если тип не поддерживается
-        logger.info(f"sent_admin_message: {sent_admin_message}")
+            homework_type, text_from_hw, file_id_from_hw = "Домашка с документом", message.caption or "", message.document.file_id
 
-        if sent_admin_message and ADMIN_GROUP_ID:  # Убедимся, что сообщение отправлено
-            if N8N_HOMEWORK_CHECK_WEBHOOK_URL:
-
-                # Внутри функции handle_homework, после того как определили course_id и current_lesson
-                # --- НАЧАЛО НОВОГО БЛОКА ---
-                async with aiosqlite.connect(DB_FILE) as conn:
-                    # Получаем текст урока, где было само задание (части до is_homework=True)
-                    cursor_lesson_parts = await conn.execute(
-                        """SELECT text FROM group_messages 
-                           WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text'
-                           ORDER BY id ASC""",
-                        (course_id, current_lesson)
-                    )
-                    lesson_parts_rows = await cursor_lesson_parts.fetchall()
-                    # Собираем все текстовые части урока в одну строку
-                    full_assignment_description = "\n".join([row[0] for row in lesson_parts_rows if row[0]])
-                # --- КОНЕЦ НОВОГО БЛОКА ---
-
-
-                # Формируем базовый URL для коллбэков на лету
-                # WEBHOOK_HOST_CONF и WEBHOOK_PATH_CONF должны быть доступны (например, как глобальные переменные)
-                current_bot_callback_base_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
-
-                payload_for_n8n_hw = {
-                    "action": "check_homework",
-                    "student_user_id": user_id,
-                    "course_numeric_id": course_numeric_id,
-                    "course_title": await get_course_title(course_id),  # course_id уже строковый
-                    "lesson_num": current_lesson,
-                    "homework_content_type": message.content_type.lower(),
-                    "lesson_assignment_description": full_assignment_description,  # <--- ВОТ ОНО
-                    "homework_text": message.text if message.text else message.caption,
-                    "homework_file_id": file_id,  # file_id фото/документа и т.д., уже определен в вашем коде
-                    "admin_group_id": ADMIN_GROUP_ID,  # Должен быть доступен (глобально или через os.getenv)
-                    "original_admin_message_id": sent_admin_message.message_id,
-                    "callback_webhook_url_result": f"{current_bot_callback_base_url}/n8n_hw_result",
-                    "callback_webhook_url_error": f"{current_bot_callback_base_url}/n8n_hw_processing_error",
-                    "telegram_bot_token": BOT_TOKEN  # BOT_TOKEN должен быть доступен (глобально или через os.getenv)
-                }
-                asyncio.create_task(send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload_for_n8n_hw))
-            # >>> КОНЕЦ НОВОГО БЛОКА ДЛЯ N8N <<<
-
-            try:
-                async with aiosqlite.connect(DB_FILE) as conn:
-                    await conn.execute("""
-                        INSERT INTO pending_admin_homework
-                        (admin_message_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_message_id)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        sent_admin_message.message_id,
-                        ADMIN_GROUP_ID,
-                        user_id,  # ID студента
-                        course_numeric_id,  # Числовой ID курса
-                        current_lesson,  # Номер урока
-                        message.message_id  # ID сообщения самого студента с ДЗ
-                    ))
-                    await conn.commit()
-                    logger.info(
-                        f"ДЗ для студента {user_id}, урок {current_lesson} зарегистрировано в pending_admin_homework с admin_message_id {sent_admin_message.message_id}")
-            except Exception as e_pending_hw:
-                logger.error(f"Не удалось сохранить информацию о ДЗ в pending_admin_homework: {e_pending_hw}")
-
-        # Если нужно обновить callback_data кнопок с ID отправленного сообщения:
-        # if sent_admin_message:
-        #     new_keyboard = create_admin_keyboard(
-        #         user_id=user_id,
-        #         course_id=course_numeric_id,
-        #         lesson_num=current_lesson,
-        #         message_id=sent_admin_message.message_id # <--- Новый ID
-        #     )
-        #     await bot.edit_message_reply_markup(
-        #         chat_id=ADMIN_GROUP_ID,
-        #         message_id=sent_admin_message.message_id,
-        #         reply_markup=new_keyboard
-        #     )
-
-        await message.answer(
-            escape_md(f"✅ {homework_type} на проверке!"),
-            parse_mode=ParseMode.MARKDOWN_V2
+        admin_message_text = (
+            f"📝 Новое ДЗ: {homework_type}\n"
+            f"👤 Пользователь: {escape_md(user_display_name)} (ID: {user_id})\n"
+            f"📚 Курс: {escape_md(display_course_title)}\n"
+            f"⚡ Тариф: {escape_md(version_id)}\n"
+            f"📖 Урок: {current_lesson}"
         )
+
+        # Отправляем сообщение в админ-чат
+        sent_admin_message = None
+        if file_id_from_hw:
+            send_method_name = f"send_{message.content_type.lower()}"
+            if hasattr(bot, send_method_name):
+                send_method = getattr(bot, send_method_name)
+                caption_for_admin = admin_message_text + f"\n\n✏️ Описание:\n{escape_md(text_from_hw)}"
+                sent_admin_message = await send_method(ADMIN_GROUP_ID, file_id_from_hw, caption=caption_for_admin,
+                                                       reply_markup=admin_keyboard, parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            final_admin_text = admin_message_text + f"\n\n✏️ Текст ДЗ:\n{escape_md(text_from_hw)}"
+            sent_admin_message = await bot.send_message(ADMIN_GROUP_ID, final_admin_text, reply_markup=admin_keyboard,
+                                                        parse_mode=ParseMode.MARKDOWN_V2)
+
+        # Записываем данные в БД под "замком"
+        if sent_admin_message:
+            async with db_lock:
+                async with aiosqlite.connect(DB_FILE) as conn:
+                    await conn.execute(
+                        """INSERT OR REPLACE INTO admin_context (user_id, course_id, lesson_num, text) VALUES (?, ?, ?, ?)""",
+                        (user_id, course_numeric_id, current_lesson, f"{user_id}:{course_numeric_id}:{current_lesson}")
+                    )
+                    await conn.execute(
+                        """INSERT INTO pending_admin_homework (admin_message_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_message_id) VALUES (?, ?, ?, ?, ?, ?)""",
+                        (sent_admin_message.message_id, ADMIN_GROUP_ID, user_id, course_numeric_id, current_lesson,
+                         message.message_id)
+                    )
+                    await conn.commit()
+            logger.info(
+                f"handle_homework: ДЗ для user {user_id} зарегистрировано в pending_admin_homework с admin_message_id {sent_admin_message.message_id}")
+
+        # Отправляем payload в n8n (если нужно)
+        if sent_admin_message and N8N_HOMEWORK_CHECK_WEBHOOK_URL:
+            async with aiosqlite.connect(DB_FILE) as conn:
+                cursor_lesson_parts = await conn.execute(
+                    """SELECT text FROM group_messages WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text' ORDER BY id ASC""",
+                    (course_id, current_lesson)
+                )
+                lesson_parts_rows = await cursor_lesson_parts.fetchall()
+                full_assignment_description = "\n".join([row[0] for row in lesson_parts_rows if row[0]])
+
+            payload_for_n8n_hw = {
+                "action": "check_homework", "student_user_id": user_id, "course_numeric_id": course_numeric_id,
+                "course_title": display_course_title, "lesson_num": current_lesson,
+                "homework_content_type": message.content_type.lower(),
+                "lesson_assignment_description": full_assignment_description,
+                "homework_text": text_from_hw, "homework_file_id": file_id_from_hw,
+                "admin_group_id": ADMIN_GROUP_ID, "original_admin_message_id": sent_admin_message.message_id,
+                "callback_webhook_url_result": f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result",
+                "callback_webhook_url_error": f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error",
+                "telegram_bot_token": BOT_TOKEN
+            }
+            asyncio.create_task(send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload_for_n8n_hw))
+
+        # Финальный ответ пользователю
+        await message.answer(escape_md(f"✅ {homework_type} на проверке!"), parse_mode=ParseMode.MARKDOWN_V2)
+
 
     except Exception as e4826:
         logger.error(f"Ошибка отправки домашки админам: {e4826}", exc_info=True)
