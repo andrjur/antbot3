@@ -4907,13 +4907,10 @@ async def handle_homework_result(
 
                 if current_hw_status not in ['pending', 'rejected']:
                     logger.warning(
-                        f"{log_prefix} Попытка повторно обработать ДЗ, которое уже в статусе '{current_hw_status}'. Игнорируем.")
+                        f"{log_prefix} Попытка повторно обработать ДЗ в статусе '{current_hw_status}'. Игнорируем.")
                     if callback_query:
-                        try:
-                            await callback_query.answer(f"Это ДЗ уже было проверено (статус: {current_hw_status}).",
-                                                        show_alert=True)
-                        except TelegramBadRequest:
-                            pass  # Если колбэк устарел, ничего страшного
+                        await callback_query.answer(f"Это ДЗ уже было проверено (статус: {current_hw_status}).",
+                                                    show_alert=True)
                     return
 
                 # 3. Если ДЗ еще не проверено, обновляем статус и удаляем из очереди
@@ -4924,24 +4921,20 @@ async def handle_homework_result(
                 )
 
                 if original_admin_message_id_to_delete:
-                    await conn.execute(
-                        "DELETE FROM pending_admin_homework WHERE admin_message_id = ?",
-                        (original_admin_message_id_to_delete,)
-                    )
+                    await conn.execute("DELETE FROM pending_admin_homework WHERE admin_message_id = ?",
+                                       (original_admin_message_id_to_delete,))
                     logger.info(
-                        f"{log_prefix} Запись о ДЗ с admin_message_id {original_admin_message_id_to_delete} удалена из pending_admin_homework.")
+                        f"{log_prefix} Запись о ДЗ с admin_message_id {original_admin_message_id_to_delete} удалена.")
 
                 # Получаем всю остальную информацию для сообщений
                 cursor_info = await conn.execute(
-                    "SELECT version_id FROM user_courses WHERE user_id = ? AND course_id = ?", (user_id, course_id)
-                )
+                    "SELECT version_id FROM user_courses WHERE user_id = ? AND course_id = ?", (user_id, course_id))
                 user_course_info = await cursor_info.fetchone()
                 version_id = user_course_info[0] if user_course_info else "unknown"
                 tariff_name = get_tariff_name(version_id)
 
                 cursor_total = await conn.execute(
-                    "SELECT MAX(lesson_num) FROM group_messages WHERE course_id = ? AND lesson_num > 0", (course_id,)
-                )
+                    "SELECT MAX(lesson_num) FROM group_messages WHERE course_id = ? AND lesson_num > 0", (course_id,))
                 total_lessons_data = await cursor_total.fetchone()
                 total_lessons = total_lessons_data[0] if total_lessons_data and total_lessons_data[0] is not None else 0
 
@@ -4953,10 +4946,7 @@ async def handle_homework_result(
             # Если ДЗ для ПОСЛЕДНЕГО урока одобрено - курс завершен!
             if is_approved and total_lessons > 0 and lesson_num >= total_lessons:
                 logger.info(f"{log_prefix} Последний урок {lesson_num} курса '{course_id}' завершен и ДЗ одобрено.")
-                message_text_completion = (
-                    f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
-                    "Вы прошли все уроки\\. Что вы хотите сделать дальше?"
-                )
+                message_text_completion = f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\nВы прошли все уроки\\. Что вы хотите сделать дальше?"
                 builder_completion = InlineKeyboardBuilder()
                 builder_completion.button(text="Выбрать другой курс", callback_data="select_other_course")
                 builder_completion.button(text="Оставить отзыв", callback_data="leave_feedback")
@@ -4968,15 +4958,13 @@ async def handle_homework_result(
                     async with aiosqlite.connect(DB_FILE) as conn_complete:
                         await conn_complete.execute(
                             "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
-                            (user_id, course_id)
-                        )
+                            (user_id, course_id))
                         await conn_complete.commit()
             else:  # Если это не последний урок или ДЗ отклонено
                 if is_approved:
                     message_to_user_part1 = f"✅ Ваше домашнее задание по курсу {course_title_safe}, урок {lesson_num} принято"
                     if feedback_text:
                         message_to_user_part1 += f"\n\n*Комментарий:*\n{escape_md(feedback_text)}"
-                    # Экранируем результат функции get_next_lesson_time
                     next_lesson_time_safe = escape_md(await get_next_lesson_time(user_id, course_id, lesson_num))
                     action_part = f"⏳ Следующий урок: {next_lesson_time_safe}"
                 else:  # is_approved == False
@@ -4994,17 +4982,14 @@ async def handle_homework_result(
             # 5. Уведомление в админ-группу
             admin_actor_name = "🤖 Система (ИИ)"
             if admin_id != 0:
-                try:
-                    actor_chat = await bot.get_chat(admin_id)
-                    admin_actor_name = escape_md(actor_chat.full_name or f"ID:{admin_id}")
-                except Exception:
-                    admin_actor_name = f"Актор ID:{admin_id}"
+                actor_chat = await bot.get_chat(admin_id)
+                admin_actor_name = escape_md(actor_chat.full_name or f"ID:{admin_id}")
 
             user_name_safe = escape_md(await get_user_name(user_id))
             action_str = "**ОДОБРЕНО**" if is_approved else "**ОТКЛОНЕНО**"
             # Экранируем каждую переменную перед вставкой в f-строку
             notification_to_admin_group = (
-                f"ДЗ от {user_name_safe} ID:{user_id} по курсу {course_title_safe}, урок {lesson_num} "
+                f"ДЗ от {user_name_safe} \\(ID:{user_id}\\) по курсу {course_title_safe}, урок {lesson_num} "
                 f"было {action_str} актором: {admin_actor_name}"
             )
             if feedback_text:
@@ -5012,14 +4997,12 @@ async def handle_homework_result(
 
             if original_admin_message_id_to_delete and ADMIN_GROUP_ID:
                 try:
-                    await bot.edit_message_reply_markup(
-                        chat_id=ADMIN_GROUP_ID, message_id=original_admin_message_id_to_delete, reply_markup=None
-                    )
+                    await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID,
+                                                        message_id=original_admin_message_id_to_delete,
+                                                        reply_markup=None)
                     await bot.send_message(
-                        chat_id=ADMIN_GROUP_ID,
-                        text=notification_to_admin_group,
-                        reply_to_message_id=original_admin_message_id_to_delete,
-                        parse_mode=ParseMode.MARKDOWN_V2
+                        chat_id=ADMIN_GROUP_ID, text=notification_to_admin_group,
+                        reply_to_message_id=original_admin_message_id_to_delete, parse_mode=ParseMode.MARKDOWN_V2
                     )
                 except TelegramBadRequest as e_tg:
                     logger.warning(
@@ -5028,21 +5011,17 @@ async def handle_homework_result(
                                            parse_mode=ParseMode.MARKDOWN_V2)
 
             # 6. Логируем действие
-            await log_action(
-                user_id=user_id, action_type="HOMEWORK_REVIEWED", course_id=course_id, lesson_num=lesson_num,
-                new_value=new_hw_status, details=f"Проверил: {admin_id}"
-            )
+            await log_action(user_id, "HOMEWORK_REVIEWED", course_id, lesson_num, new_value=new_hw_status,
+                             details=f"Проверил: {admin_id}")
 
-            if callback_query:
-                await callback_query.answer(f"ДЗ {action_str.replace('*', '').lower()}. Студент уведомлен.")
+            if callback_query: await callback_query.answer(
+                f"ДЗ {action_str.replace('*', '').lower()}. Студент уведомлен.")
 
         except Exception as e:
             logger.error(f"❌ {log_prefix} КРИТИЧЕСКАЯ ОШИБКА: {e}", exc_info=True)
             if callback_query:
-                try:
-                    await callback_query.answer("Произошла критическая ошибка при обработке ДЗ.", show_alert=True)
-                except TelegramBadRequest:
-                    pass
+                await callback_query.answer("Произошла критическая ошибка при обработке ДЗ.", show_alert=True)
+
 
 async def get_user_name(user_id: int) -> str:
     """Получает имя пользователя по ID."""
