@@ -4972,10 +4972,10 @@ async def handle_homework_result(
                     if feedback_text:
                         message_to_user_part1 += f"\n\n*Причина:*\n{escape_md(feedback_text)}"
                     action_part = escape_md(
-                        "Пожалуйста, исправьте и отправьте домашнее задание снова. Следующий урок будет доступен после его принятия.")
+                        "Пожалуйста, исправьте и отправьте домашнее задание снова  Следующий урок будет доступен после его принятия ")
 
                 final_message_to_user = f"{message_to_user_part1}\n\n{action_part}"
-                await bot.send_message(user_id, final_message_to_user, parse_mode=ParseMode.MARKDOWN_V2)
+                await bot.send_message(user_id, final_message_to_user, parse_mode=None)
                 # Отправляем меню отдельным сообщением
                 await send_main_menu(user_id, course_id, lesson_num, version_id, homework_pending=(not is_approved))
 
@@ -5002,13 +5002,13 @@ async def handle_homework_result(
                                                         reply_markup=None)
                     await bot.send_message(
                         chat_id=ADMIN_GROUP_ID, text=notification_to_admin_group,
-                        reply_to_message_id=original_admin_message_id_to_delete, parse_mode=ParseMode.MARKDOWN_V2
+                        reply_to_message_id=original_admin_message_id_to_delete, parse_mode=None
                     )
                 except TelegramBadRequest as e_tg:
                     logger.warning(
                         f"{log_prefix} Не удалось изменить/ответить на сообщение {original_admin_message_id_to_delete}: {e_tg}. Отправляю просто в чат.")
                     await bot.send_message(ADMIN_GROUP_ID, notification_to_admin_group,
-                                           parse_mode=ParseMode.MARKDOWN_V2)
+                                           parse_mode=None)
 
             # 6. Логируем действие
             await log_action(user_id, "HOMEWORK_REVIEWED", course_id, lesson_num, new_value=new_hw_status,
