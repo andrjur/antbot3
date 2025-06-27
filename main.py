@@ -4964,18 +4964,21 @@ async def handle_homework_result(
                                        parse_mode=ParseMode.MARKDOWN_V2)
 
                 # Снова открываем соединение для обновления статуса курса
-                async with aiosqlite.connect(DB_FILE) as conn_complete:
-                    await conn_complete.execute(
-                        "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
-                        (user_id, course_id)
-                    )
-                    await conn_complete.commit()
+                async with db_lock:
+                    async with aiosqlite.connect(DB_FILE) as conn_complete:
+                        await conn_complete.execute(
+                            "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
+                            (user_id, course_id)
+                        )
+                        await conn_complete.commit()
             else:  # Если это не последний урок или ДЗ отклонено
                 if is_approved:
                     message_to_user_part1 = f"✅ Ваше домашнее задание по курсу {course_title_safe}, урок {lesson_num} принято"
                     if feedback_text:
                         message_to_user_part1 += f"\n\n*Комментарий:*\n{escape_md(feedback_text)}"
-                    action_part = f"⏳ Следующий урок: {escape_md(await get_next_lesson_time(user_id, course_id, lesson_num))}"
+                    # Экранируем результат функции get_next_lesson_time
+                    next_lesson_time_safe = escape_md(await get_next_lesson_time(user_id, course_id, lesson_num))
+                    action_part = f"⏳ Следующий урок: {next_lesson_time_safe}"
                 else:  # is_approved == False
                     message_to_user_part1 = f"❌ Ваше домашнее задание по курсу {course_title_safe}, урок {lesson_num} отклонено"
                     if feedback_text:
@@ -4983,9 +4986,7 @@ async def handle_homework_result(
                     action_part = escape_md(
                         "Пожалуйста, исправьте и отправьте домашнее задание снова. Следующий урок будет доступен после его принятия.")
 
-                final_message_to_user = (
-                    f"{message_to_user_part1}\n\n{action_part}"
-                )
+                final_message_to_user = f"{message_to_user_part1}\n\n{action_part}"
                 await bot.send_message(user_id, final_message_to_user, parse_mode=ParseMode.MARKDOWN_V2)
                 # Отправляем меню отдельным сообщением
                 await send_main_menu(user_id, course_id, lesson_num, version_id, homework_pending=(not is_approved))
@@ -5001,6 +5002,7 @@ async def handle_homework_result(
 
             user_name_safe = escape_md(await get_user_name(user_id))
             action_str = "**ОДОБРЕНО**" if is_approved else "**ОТКЛОНЕНО**"
+            # Экранируем каждую переменную перед вставкой в f-строку
             notification_to_admin_group = (
                 f"ДЗ от {user_name_safe} ID:{user_id} по курсу {course_title_safe}, урок {lesson_num} "
                 f"было {action_str} актором: {admin_actor_name}"
@@ -5399,7 +5401,7 @@ async def handle_homework(message: types.Message):
         else:
             final_admin_text = admin_message_text + f"\n\n✏️ Текст ДЗ:\n{escape_md(text_from_hw)}"
             sent_admin_message = await bot.send_message(ADMIN_GROUP_ID, final_admin_text, reply_markup=admin_keyboard,
-                                                        parse_mode=ParseMode.MARKDOWN_V2)
+                                                        parse_mode=None)
 
         # Записываем данные в БД под "замком"
         if sent_admin_message:
