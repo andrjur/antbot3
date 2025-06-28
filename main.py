@@ -1271,9 +1271,11 @@ async def process_expert_question(message: types.Message, state: FSMContext):
     else:
         await message.reply(escape_md("Сервис ответов на вопросы временно недоступен."))
 
+
+#============ зона n8n ========================
 @require_n8n_secret
 async def handle_n8n_hw_approval(request: web.Request, bot: Bot) -> web.Response:
-
+    logger.info(' мы тут')
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (HW Approval): {data}")
@@ -1297,18 +1299,19 @@ async def handle_n8n_hw_approval(request: web.Request, bot: Bot) -> web.Response
             admin_id=0,  # Специальный ID для n8n/ИИ как проверяющего
             feedback_text=feedback_text,
             is_approved=is_approved,
+            bot=bot,  # Передаем bot в следующую функцию
             callback_query=None,  # Это не от пользователя
-            original_admin_message_id_to_delete=original_admin_message_id,
-            bot=bot  # Передаем bot в следующую функцию
+            original_admin_message_id_to_delete=original_admin_message_id
         )
         return web.Response(text="OK", status=200)
     except Exception as e8n:
         logger.error(f"Ошибка обработки n8n_hw_approval callback: {e8n}", exc_info=True)
         return web.Response(text="Error processing request", status=500)
 
+
 @require_n8n_secret
-async def handle_n8n_hw_error(request: web.Request) -> web.Response:
-    bot_instance = request.app['bot']
+async def handle_n8n_hw_error(request: web.Request, bot: Bot) -> web.Response:
+    logger.info(f"handle_n8n_hw_error bot передан в параметрах ")
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (HW Error): {data}")
@@ -1316,20 +1319,22 @@ async def handle_n8n_hw_error(request: web.Request) -> web.Response:
         error_message = data.get("error_message", "Неизвестная ошибка в n8n.")
 
         if ADMIN_GROUP_ID and original_admin_message_id:
-            await bot_instance.send_message(
+            # Используем 'bot', который пришел как аргумент
+            await bot.send_message(
                 ADMIN_GROUP_ID,
                 text=f"⚠️ Ошибка при автоматической обработке ДЗ (ID сообщения: {original_admin_message_id}):\n`{escape_md(error_message)}`\nПожалуйста, проверьте вручную.",
                 reply_to_message_id=original_admin_message_id,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         return web.Response(text="Error noted", status=200)
-    except Exception as e:
-        logger.error(f"Ошибка обработки n8n_hw_error callback: {e}", exc_info=True)
+    except Exception as en82:
+        logger.error(f"Ошибка обработки n8n_hw_error callback: {en82}", exc_info=True)
         return web.Response(text="Error processing request", status=500)
 
+
 @require_n8n_secret
-async def handle_n8n_expert_answer(request: web.Request) -> web.Response:
-    bot_instance = request.app['bot']
+async def handle_n8n_expert_answer(request: web.Request, bot: Bot) -> web.Response:
+    logger.info(f"handle_n8n_expert_answer bot передан в параметрах ")
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (Expert Answer): {data}")
@@ -1340,14 +1345,14 @@ async def handle_n8n_expert_answer(request: web.Request) -> web.Response:
 
         if user_id_to_answer and answer_text:
             prefix = "🤖 Ответ ИИ-помощника:\n" if source == "ai_generated" else "👩‍🏫 Ответ эксперта:\n"
-            await bot_instance.send_message(
+            await bot.send_message(
                 user_id_to_answer,
                 text=prefix + escape_md(answer_text),
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         return web.Response(text="OK", status=200)
-    except Exception as e:
-        logger.error(f"Ошибка обработки n8n_expert_answer callback: {e}", exc_info=True)
+    except Exception as en83:
+        logger.error(f"Ошибка обработки n8n_expert_answer callback: {en83}", exc_info=True)
         return web.Response(text="Error processing request", status=500)
 
 
@@ -2782,6 +2787,7 @@ async def process_homework_command(
             admin_id=admin_id,
             feedback_text=feedback_text_hw,  # Передаем собранный фидбэк
             is_approved=is_approval,
+            bot=bot,
             callback_query=None,
             original_admin_message_id_to_delete=original_bot_message_id_in_admin_group
         )
@@ -4782,11 +4788,11 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
         if action == "approve_hw":
             await callback_query.answer("Одобряю ДЗ...")
             await handle_homework_result(user_id, course_id_str, course_numeric_id, lesson_num, admin_user_id, "", True,
-                                         callback_query, admin_message_id_with_buttons)
+                                         bot, callback_query, admin_message_id_with_buttons)
         elif action == "reject_hw":
             await callback_query.answer("Отклоняю ДЗ...")
             await handle_homework_result(user_id, course_id_str, course_numeric_id, lesson_num, admin_user_id,
-                                         "Домашнее задание требует доработки.", False, callback_query,
+                                         "Домашнее задание требует доработки.", False, bot, callback_query,
                                          admin_message_id_with_buttons)  # Добавил дефолтный текст
         elif action in ["approve_reason", "reject_reason"]:
             # Сохраняем все необходимые данные, включая ID сообщения с кнопками
@@ -4847,8 +4853,8 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
 
             await state.set_state(Form.feedback)
 
-    except Exception as e:
-        logger.error(f"❌ Ошибка в process_homework_action: {e}", exc_info=True)
+    except Exception as e227:
+        logger.error(f"❌ Ошибка в process_homework_action: {e227}", exc_info=True)
         await callback_query.answer("Произошла внутренняя ошибка.", show_alert=True)
         await state.clear()  # Очищаем состояние при любой ошибке в этом обработчике
 
@@ -4899,6 +4905,7 @@ async def process_feedback(message: types.Message, state: FSMContext):
             admin_id=admin_id_who_wrote_feedback,  # Админ, который написал фидбэк
             feedback_text=feedback_text,
             is_approved=is_approved,
+            bot=bot,
             callback_query=None,  # Здесь нет callback_query, это обычное сообщение
             original_admin_message_id_to_delete=admin_message_id_to_update
             # Передаем ID сообщения для обновления/ответа
@@ -6291,21 +6298,21 @@ async def main():
     # Используем WEBHOOK_PATH_CONF как базовый путь, к которому добавляем специфичные эндпоинты для n8n
     # Убедитесь, что эти пути не конфликтуют с final_webhook_path_for_aiohttp
 
-    # Путь для результатов проверки ДЗ (одобрено/отклонено)
-    #app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result", handle_n8n_hw_approval)
-    # Передаем bot как аргумент по умолчанию в обработчик todo 28-06
+    # Путь для результатов проверки ДЗ
     app.router.add_post(
         f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result",
-        partial(handle_n8n_hw_approval, bot=bot)
+        partial(handle_n8n_hw_approval, bot=bot)  # Передаем bot
     )
-
-
-    # Путь для ошибок обработки ДЗ в n8n
-    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
+    # Путь для ошибок обработки ДЗ
+    app.router.add_post(
+        f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error",
+        partial(handle_n8n_hw_error, bot=bot)  # Передаем bot
+    )
     # Путь для ответа от эксперта/ИИ
-    # app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer_callback", handle_n8n_expert_answer)
-    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",
-                        handle_n8n_expert_answer)
+    app.router.add_post(
+        f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",
+        partial(handle_n8n_expert_answer, bot=bot)  # Передаем bot
+    )
 
     logger.info(f"Зарегистрированы дополнительные маршруты для n8n callbacks на базе {WEBHOOK_PATH_CONF.rstrip('/')}:")
     logger.info(f" - /n8n_hw_result")
