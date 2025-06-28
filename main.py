@@ -1281,13 +1281,13 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
         logger.info(f"Получен callback от n8n (HW Approval): {data}")
 
         # --- НАДЕЖНАЯ ОЧИСТКА И ПРЕОБРАЗОВАНИЕ ДАННЫХ ---
-        student_user_id = int(data.get("student_user_id", 0))
-        course_numeric_id = int(data.get("course_numeric_id", 0))
-        lesson_num = int(data.get("lesson_num", 0))
-        original_admin_message_id = int(data.get("original_admin_message_id", 0))
+        student_user_id = int(str(data.get("student_user_id", "0")).strip())
+        course_numeric_id = int(str(data.get("course_numeric_id", "0")).strip())
+        lesson_num = int(str(data.get("lesson_num", "0")).strip())
+        original_admin_message_id = int(str(data.get("original_admin_message_id", "0")).strip())
         feedback_text = str(data.get("feedback_text", "")).strip()
-        is_approved_raw = data.get("is_approved", False)
-        is_approved = str(is_approved_raw).lower() == 'true'
+        is_approved_raw = data.get("is_approved", "false")  # Получаем как есть
+        is_approved = str(is_approved_raw).strip().lower() == 'true'
 
         logger.info(
             f"Данные после очистки: user={student_user_id}, course={course_numeric_id}, lesson={lesson_num}, approved={is_approved}")
@@ -1315,14 +1315,9 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
         return web.Response(text="OK", status=200)
 
 
-    except KeyError:
-        logger.critical(
-            "Критическая ошибка: не удалось получить 'bot' из request.app. Проверьте вызов setup_application.")
-        return web.Response(text="Server Configuration Error", status=500)
-
-    except Exception as e95:
-        logger.error(f"Ошибка обработки n8n_hw_approval callback: {e95}", exc_info=True)
-        return web.Response(text="Error processing request", status=500)
+    except  (ValueError, TypeError) as e95:
+        logger.error(f"Ошибка преобразования данных из n8n callback: {e95}. Полученные данные: {await request.text()}", exc_info=True)
+        return web.Response(text="Error: Invalid data format", status=400)
 
 
 @require_n8n_secret
@@ -5081,8 +5076,11 @@ async def handle_homework_result(
             # ---- КОНЕЦ НОВОЙ ЛОГИКИ ----
 
             # Уведомление администратора/ИИ, совершившего действие (остается как было)
-            admin_actor_name = "Система "  # Дефолт, если нет информации
-            if callback_query and callback_query.from_user:
+            admin_actor_name = "Неизвестный"  # Дефолт
+            if admin_id == 0:  # 0 - это наш ID для ИИ
+                # Можно даже передавать модель из n8n, если хочешь
+                admin_actor_name = "🤖 ИИ-ассистент"
+            elif callback_query and callback_query.from_user:
                 admin_actor_name = escape_md(
                     callback_query.from_user.full_name or f"ID:{callback_query.from_user.id}")
             elif admin_id:
@@ -5783,7 +5781,8 @@ async def handle_homework(message: types.Message):
                     "original_admin_message_id": sent_admin_message.message_id,
                     "callback_webhook_url_result": f"{current_bot_callback_base_url}/n8n_hw_result",
                     "callback_webhook_url_error": f"{current_bot_callback_base_url}/n8n_hw_processing_error",
-                    "telegram_bot_token": BOT_TOKEN  # BOT_TOKEN должен быть доступен (глобально или через os.getenv)
+                    "telegram_bot_token": BOT_TOKEN,  # BOT_TOKEN должен быть доступен (глобально или через os.getenv)
+                    "session_id": f"hw-{user_id}-{course_numeric_id}-{current_lesson}"
                 }
                 asyncio.create_task(send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload_for_n8n_hw))
             # >>> КОНЕЦ НОВОГО БЛОКА ДЛЯ N8N <<<
@@ -6339,7 +6338,7 @@ async def main():
      #   logger.info(f"Message Handler: {handler_obj.callback.__name__ if hasattr(handler_obj.callback, '__name__') else handler_obj.callback}, filters: {handler_obj.filters}")
 
     setup_application(app, dp, bot=bot) # Передаем bot для доступа к нему через app['bot'] если нужно
-    logger.info(f'{app.router.routes()} {dp}  {bot}')
+    logger.info(f'тупа ссылки {app.router.routes()} {dp}  {bot}')
 
     # >>> НАЧАЛО НОВОГО БЛОКА - РЕГИСТРАЦИЯ МАРШРУТОВ ДЛЯ N8N CALLBACKS <<<
     # Используем WEBHOOK_PATH_CONF как базовый путь, к которому добавляем специфичные эндпоинты для n8n
