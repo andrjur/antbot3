@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import asyncio, logging, json, os, re, shutil, sys, locale
-from functools import partial
 import functools, sqlite3, aiosqlite, pytz
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
@@ -9,7 +8,6 @@ from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F, md
 from aiogram.filters import Command, CommandStart, BaseFilter, CommandObject
 from aiogram.filters.callback_data import CallbackData
-#from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery, ForceReply
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
@@ -19,12 +17,10 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
 
-
 # ---- НОВЫЕ ИМПОРТЫ ДЛЯ ВЕБХУКОВ ----
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
 import aiohttp
-from functools import wraps
+
 
 # Для генерации подписи Robokassa (примерный, нужно проверить актуальность)
 #import decimal
@@ -1274,44 +1270,65 @@ async def process_expert_question(message: types.Message, state: FSMContext):
 
 #============ зона n8n ========================
 @require_n8n_secret
-async def handle_n8n_hw_approval(request: web.Request, bot: Bot) -> web.Response:
-    logger.info(' мы тут')
+async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
+    """Получает от ИИ результат проверки ДЗ. да/нет и подробная причина."""
+    # Достаем bot из request.app.
+    # Указываем тип для подсказок IDE.
+    #bot: Bot = request.app['bot']
+    logger.info('Зашли в handle_n8n_hw_approval')  # <-- НОВЫЙ ЛОГ
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (HW Approval): {data}")
 
-        student_user_id = data.get("student_user_id")
-        course_numeric_id = data.get("course_numeric_id")
-        lesson_num = data.get("lesson_num")
-        feedback_text = data.get("feedback_text", "")
-        is_approved = data.get("is_approved", False)  # Важно, чтобы n8n присылал это поле
-        original_admin_message_id = data.get("original_admin_message_id")
+        # --- НАДЕЖНАЯ ОЧИСТКА И ПРЕОБРАЗОВАНИЕ ДАННЫХ ---
+        student_user_id = int(data.get("student_user_id", 0))
+        course_numeric_id = int(data.get("course_numeric_id", 0))
+        lesson_num = int(data.get("lesson_num", 0))
+        original_admin_message_id = int(data.get("original_admin_message_id", 0))
+        feedback_text = str(data.get("feedback_text", "")).strip()
+        is_approved_raw = data.get("is_approved", False)
+        is_approved = str(is_approved_raw).lower() == 'true'
 
+        logger.info(
+            f"Данные после очистки: user={student_user_id}, course={course_numeric_id}, lesson={lesson_num}, approved={is_approved}")
+
+        if not all([student_user_id, course_numeric_id, lesson_num, original_admin_message_id]):
+             logger.error(f"Некорректные или нулевые ID в колбэке от n8n: {data}")
+             return web.Response(text="Error: Invalid IDs provided", status=400)
+
+        logger.info(f'******course_numeric_id = {course_numeric_id}')
         course_id_str = await get_course_id_str(course_numeric_id)
+        logger.info(f'******course_id_str = {course_id_str}')
 
-        # Вызываем вашу существующую функцию обработки результата ДЗ
-        # ADMIN_ID для этого случая может быть специальным ID "n8n_bot_actor" или 0
         await handle_homework_result(
             user_id=student_user_id,
             course_id=course_id_str,
             course_numeric_id=course_numeric_id,
             lesson_num=lesson_num,
-            admin_id=0,  # Специальный ID для n8n/ИИ как проверяющего
+            admin_id=0,  # 0 для ИИ
             feedback_text=feedback_text,
             is_approved=is_approved,
-            bot=bot,  # Передаем bot в следующую функцию
-            callback_query=None,  # Это не от пользователя
+            #bot=bot, # Передаем bot
+            callback_query=None,
             original_admin_message_id_to_delete=original_admin_message_id
         )
         return web.Response(text="OK", status=200)
-    except Exception as e8n:
-        logger.error(f"Ошибка обработки n8n_hw_approval callback: {e8n}", exc_info=True)
+
+
+    except KeyError:
+        logger.critical(
+            "Критическая ошибка: не удалось получить 'bot' из request.app. Проверьте вызов setup_application.")
+        return web.Response(text="Server Configuration Error", status=500)
+
+    except Exception as e95:
+        logger.error(f"Ошибка обработки n8n_hw_approval callback: {e95}", exc_info=True)
         return web.Response(text="Error processing request", status=500)
 
 
 @require_n8n_secret
-async def handle_n8n_hw_error(request: web.Request, bot: Bot) -> web.Response:
-    logger.info(f"handle_n8n_hw_error bot передан в параметрах ")
+async def handle_n8n_hw_error(request: web.Request) -> web.Response:
+    bot: Bot = request.app['bot']
+    logger.info('handle_n8n_hw_error Бот получен из request.app.')  # Добавил лог, чтобы убедиться
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (HW Error): {data}")
@@ -1319,7 +1336,6 @@ async def handle_n8n_hw_error(request: web.Request, bot: Bot) -> web.Response:
         error_message = data.get("error_message", "Неизвестная ошибка в n8n.")
 
         if ADMIN_GROUP_ID and original_admin_message_id:
-            # Используем 'bot', который пришел как аргумент
             await bot.send_message(
                 ADMIN_GROUP_ID,
                 text=f"⚠️ Ошибка при автоматической обработке ДЗ (ID сообщения: {original_admin_message_id}):\n`{escape_md(error_message)}`\nПожалуйста, проверьте вручную.",
@@ -1327,21 +1343,22 @@ async def handle_n8n_hw_error(request: web.Request, bot: Bot) -> web.Response:
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         return web.Response(text="Error noted", status=200)
-    except Exception as en82:
-        logger.error(f"Ошибка обработки n8n_hw_error callback: {en82}", exc_info=True)
+    except Exception as e66:
+        logger.error(f"Ошибка обработки n8n_hw_error callback: {e66}", exc_info=True)
         return web.Response(text="Error processing request", status=500)
 
 
 @require_n8n_secret
-async def handle_n8n_expert_answer(request: web.Request, bot: Bot) -> web.Response:
-    logger.info(f"handle_n8n_expert_answer bot передан в параметрах ")
+async def handle_n8n_expert_answer(request: web.Request) -> web.Response:
+    bot: Bot = request.app['bot']
+    logger.info('handle_n8n_expert_answer ')  # Добавил лог, чтобы убедиться
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (Expert Answer): {data}")
 
         user_id_to_answer = data.get("user_id")
         answer_text = data.get("answer_text")
-        source = data.get("source", "ai")  # "ai" или "human"
+        source = data.get("source", "ai")
 
         if user_id_to_answer and answer_text:
             prefix = "🤖 Ответ ИИ-помощника:\n" if source == "ai_generated" else "👩‍🏫 Ответ эксперта:\n"
@@ -1351,10 +1368,11 @@ async def handle_n8n_expert_answer(request: web.Request, bot: Bot) -> web.Respon
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         return web.Response(text="OK", status=200)
-    except Exception as en83:
-        logger.error(f"Ошибка обработки n8n_expert_answer callback: {en83}", exc_info=True)
+    except Exception as e3333:
+        logger.error(f"Ошибка обработки n8n_expert_answer callback: {e3333}", exc_info=True)
         return web.Response(text="Error processing request", status=500)
 
+# ... остальной код ...
 
 # В функции main(), где настраивается веб-сервер aiohttp:
 # ...
@@ -2788,7 +2806,7 @@ async def process_homework_command(
             admin_id=admin_id,
             feedback_text=feedback_text_hw,  # Передаем собранный фидбэк
             is_approved=is_approval,
-            bot=bot,
+            #bot=bot,
             callback_query=None,
             original_admin_message_id_to_delete=original_bot_message_id_in_admin_group
         )
@@ -4789,11 +4807,11 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
         if action == "approve_hw":
             await callback_query.answer("Одобряю ДЗ...")
             await handle_homework_result(user_id, course_id_str, course_numeric_id, lesson_num, admin_user_id, "", True,
-                                         bot, callback_query, admin_message_id_with_buttons)
+                                         callback_query, admin_message_id_with_buttons)
         elif action == "reject_hw":
             await callback_query.answer("Отклоняю ДЗ...")
             await handle_homework_result(user_id, course_id_str, course_numeric_id, lesson_num, admin_user_id,
-                                         "Домашнее задание требует доработки.", False, bot, callback_query,
+                                         "Домашнее задание требует доработки.", False, callback_query,
                                          admin_message_id_with_buttons)  # Добавил дефолтный текст
         elif action in ["approve_reason", "reject_reason"]:
             # Сохраняем все необходимые данные, включая ID сообщения с кнопками
@@ -4906,7 +4924,7 @@ async def process_feedback(message: types.Message, state: FSMContext):
             admin_id=admin_id_who_wrote_feedback,  # Админ, который написал фидбэк
             feedback_text=feedback_text,
             is_approved=is_approved,
-            bot=bot,
+            #bot=bot,
             callback_query=None,  # Здесь нет callback_query, это обычное сообщение
             original_admin_message_id_to_delete=admin_message_id_to_update
             # Передаем ID сообщения для обновления/ответа
@@ -4925,7 +4943,7 @@ async def process_feedback(message: types.Message, state: FSMContext):
 async def handle_homework_result(
         user_id: int, course_id: str, course_numeric_id: int, lesson_num: int,
         admin_id: int, feedback_text: str, is_approved: bool,
-        bot: Bot,
+        #bot: Bot,
         callback_query: types.CallbackQuery = None,
         original_admin_message_id_to_delete: int = None
 
@@ -6321,26 +6339,16 @@ async def main():
      #   logger.info(f"Message Handler: {handler_obj.callback.__name__ if hasattr(handler_obj.callback, '__name__') else handler_obj.callback}, filters: {handler_obj.filters}")
 
     setup_application(app, dp, bot=bot) # Передаем bot для доступа к нему через app['bot'] если нужно
+    logger.info(f'{app.router.routes()} {dp}  {bot}')
 
     # >>> НАЧАЛО НОВОГО БЛОКА - РЕГИСТРАЦИЯ МАРШРУТОВ ДЛЯ N8N CALLBACKS <<<
     # Используем WEBHOOK_PATH_CONF как базовый путь, к которому добавляем специфичные эндпоинты для n8n
     # Убедитесь, что эти пути не конфликтуют с final_webhook_path_for_aiohttp
 
     # Путь для результатов проверки ДЗ
-    app.router.add_post(
-        f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result",
-        partial(handle_n8n_hw_approval, bot=bot)  # Передаем bot
-    )
-    # Путь для ошибок обработки ДЗ
-    app.router.add_post(
-        f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error",
-        partial(handle_n8n_hw_error, bot=bot)  # Передаем bot
-    )
-    # Путь для ответа от эксперта/ИИ
-    app.router.add_post(
-        f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",
-        partial(handle_n8n_expert_answer, bot=bot)  # Передаем bot
-    )
+    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result", handle_n8n_hw_approval)
+    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
+    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",handle_n8n_expert_answer)
 
     logger.info(f"Зарегистрированы дополнительные маршруты для n8n callbacks на базе {WEBHOOK_PATH_CONF.rstrip('/')}:")
     logger.info(f" - /n8n_hw_result")
