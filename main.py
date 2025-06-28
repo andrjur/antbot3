@@ -2651,7 +2651,8 @@ def get_context_from_admin_message_markup(message_with_buttons: types.Message) -
 async def process_homework_command(
         message: types.Message,
         command_args: str | None,  # Это строка аргументов ПОСЛЕ самой команды
-        is_approval: bool
+        is_approval: bool,
+        bot: Bot  # <--- ДОБАВЛЯЕМ bot СЮДА
 ):
     admin_id = message.from_user.id
     user_id_student = None
@@ -2814,13 +2815,13 @@ async def process_homework_command(
 @dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
 async def cmd_approve_homework_handler(message: types.Message, command: CommandObject):
     logger.info(f"Получена команда /approve от админа {message.from_user.id}")
-    await process_homework_command(message, command.args, is_approval=True)
+    await process_homework_command(message, command.args, is_approval=True, bot=bot)
 
 
 @dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
 async def cmd_reject_homework_handler(message: types.Message, command: CommandObject):
     logger.info(f"Получена команда /reject от админа {message.from_user.id}")
-    await process_homework_command(message, command.args, is_approval=False)
+    await process_homework_command(message, command.args, is_approval=False, bot=bot)
 
 
 # Команды для взаимодействия с пользователем - в конце, аминь.
@@ -4931,6 +4932,33 @@ async def handle_homework_result(
 ):
     logger.info(
         f"handle_homework_result для user_id={user_id}, course_id={course_id}, lesson_num={lesson_num}, approved={is_approved}, admin_id={admin_id}")
+
+
+    # ===== НАЧАЛО НОВОГО БЛОКА ЗАЩИТЫ =====
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Проверяем, существует ли еще эта ДЗ в таблице ожидающих
+            cursor = await conn.execute(
+                "SELECT 1 FROM pending_admin_homework WHERE admin_message_id = ?",
+                (original_admin_message_id_to_delete,)
+            )
+            pending_hw_exists = await cursor.fetchone()
+
+            if not pending_hw_exists:
+                logger.warning(f"Попытка повторной обработки ДЗ (admin_message_id: {original_admin_message_id_to_delete}). ДЗ уже обработано. Игнорируем.")
+                # Если это был клик админа, нужно ответить на callback, чтобы часики пропали
+                if callback_query:
+                    await callback_query.answer("Это ДЗ уже было обработано.", show_alert=True)
+                return # <-- ВАЖНО: Выходим из функции, если ДЗ уже нет в списке ожидающих
+    except Exception as e2277:
+        logger.error(f"Ошибка при пред-проверке статуса ДЗ: {e2277}")
+        # В случае ошибки лучше не продолжать, чтобы не натворить дел
+        if callback_query:
+            await callback_query.answer("Ошибка при проверке статуса ДЗ.", show_alert=True)
+        return
+    # ===== КОНЕЦ НОВОГО БЛОКА ЗАЩИТЫ =====
+
+
     try:
         hw_status = "approved" if is_approved else "rejected"
         await update_homework_status(user_id, course_id, lesson_num, hw_status)  # Обновляем статус ДЗ
