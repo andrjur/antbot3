@@ -401,6 +401,9 @@ settings=dict() # делаем глобальный пустой словарь
 
 COURSE_GROUPS = []
 
+# Глобальный словарь для блокировки ДЗ, которые редактируются админами
+HOMEWORK_BEING_PROCESSED = {}
+
 # Глобальная переменная для хранения стека уроков
 lesson_stack = {}
 
@@ -1303,6 +1306,43 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
 
         logger.info(
             f"Данные после очистки: user={student_user_id}, course={course_numeric_id}, lesson={lesson_num}, approved={is_approved}")
+
+        # ===== НОВАЯ ЛОГИКА: ПРОВЕРКА ЗАМКА И ОТПРАВКА СОВЕТА ===== todo 29-06
+        # ===== ПРОВЕРКА БЛОКИРОВКИ =====
+        if original_admin_message_id in HOMEWORK_BEING_PROCESSED:
+            admin_id_who_locked = HOMEWORK_BEING_PROCESSED[original_admin_message_id]
+            logger.warning(
+                f"ДЗ (admin_msg_id: {original_admin_message_id}) уже обрабатывается админом {admin_id_who_locked}. Отправляем ответ ИИ как подсказку.")
+
+            feedback_from_ai = data.get("feedback_text", "ИИ не предоставил комментария.")
+            is_approved_by_ai = str(data.get("is_approved", "false")).lower() == 'true'
+            ai_verdict = "✅ Одобрить" if is_approved_by_ai else "❌ Отклонить"
+
+            # Формируем красивое сообщение-подсказку
+            # ВАЖНО: Мы экранируем фидбек от ИИ и используем parse_mode=MarkdownV2
+            suggestion_text = (
+                f"🤫 *Подсказка от ИИ \\(для ДЗ выше\\):*\n\n"
+                f"**Вердикт ИИ:** {escape_md(ai_verdict)}\n"
+                f"**Комментарий:**\n{escape_md(feedback_from_ai)}\n\n"
+                f"_(Это сообщение видите только вы\\. Студент ждет вашего финального ответа\\.)_"
+            )
+
+            # Отправляем подсказку в админ-чат
+            try:
+                await bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text=suggestion_text,
+                    reply_to_message_id=original_admin_message_id,
+                    parse_mode=ParseMode.MARKDOWN_V2  # Используем MarkdownV2
+                )
+            except Exception as e_suggestion:
+                logger.error(f"Не удалось отправить подсказку от ИИ админу: {e_suggestion}")
+
+            # Важно: выходим, не обрабатывая результат
+            return web.Response(text="OK: Ignored, homework is locked by admin.", status=200)
+        # ===== КОНЕЦ НОВОЙ ЛОГИКИ =====
+
+        logger.info(f"нет замка")
 
         if not all([student_user_id, course_numeric_id, lesson_num, original_admin_message_id]):
              logger.error(f"Некорректные или нулевые ID в колбэке от n8n: {data}")
@@ -4822,6 +4862,11 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
                                          "Домашнее задание требует доработки.", False, callback_query,
                                          admin_message_id_with_buttons)  # Добавил дефолтный текст
         elif action in ["approve_reason", "reject_reason"]:
+            # ===== НАЧАЛО БЛОКИРОВКИ =====
+            HOMEWORK_BEING_PROCESSED[admin_message_id_with_buttons] = admin_user_id
+            logger.info(
+                f"ДЗ с admin_message_id: {admin_message_id_with_buttons} заблокировано для ручной проверки админом {admin_user_id}.")
+            # =============================
             # Сохраняем все необходимые данные, включая ID сообщения с кнопками
             await state.update_data(
                 student_user_id_for_feedback=user_id,  # Переименовал для ясности в state
@@ -4945,6 +4990,11 @@ async def process_feedback(message: types.Message, state: FSMContext):
         await message.reply(escape_md("Произошла ошибка при обработке вашего комментария."),
                             parse_mode=ParseMode.MARKDOWN_V2)
     finally:
+        # ===== СНЯТИЕ БЛОКИРОВКИ =====
+        if admin_message_id_to_update and admin_message_id_to_update in HOMEWORK_BEING_PROCESSED:
+            del HOMEWORK_BEING_PROCESSED[admin_message_id_to_update]
+            logger.info(f"Блокировка с ДЗ (admin_message_id: {admin_message_id_to_update}) снята.")
+        # ==============================
         await state.clear()  # Обязательно очищаем состояние
 
 # вызывается из process_feedback - вверху функция
