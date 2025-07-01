@@ -129,7 +129,7 @@ logger = logging.getLogger(__name__)  # Создание логгера для �
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения.")
-logger.info(f"BOT_TOKEN: {BOT_TOKEN}")
+#logger.info(f"BOT_TOKEN: {BOT_TOKEN}") - дыра в безопасности
 
 ADMIN_GROUP_ID = int(os.getenv('ADMIN_GROUP_ID', 0))
 logger.info(f"ADMIN_GROUP_ID: {ADMIN_GROUP_ID}")
@@ -147,6 +147,14 @@ WEB_SERVER_PORT = int(os.getenv("WEB_SERVER_PORT", 8080))  # Порт, на ко
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"  # Секретный путь для вебхука
 BASE_WEBHOOK_URL = os.getenv("BASE_WEBHOOK_URL")  # Например, "https://your.domain.com"
 
+WEBHOOK_SECRET_PATH_CONF = os.getenv("WEBHOOK_SECRET_PATH") # Путь для секретного ключа вебхука 01-07
+WEBHOOK_SECRET_TOKEN_CONF = os.getenv("WEBHOOK_SECRET_TOKEN")
+
+# Валидация
+if not WEBHOOK_SECRET_PATH_CONF:
+    raise ValueError("WEBHOOK_SECRET_PATH не найден.")
+if not WEBHOOK_SECRET_TOKEN_CONF:
+    raise ValueError("WEBHOOK_SECRET_TOKEN не найден.")
 
 N8N_HOMEWORK_CHECK_WEBHOOK_URL = os.getenv("N8N_HOMEWORK_CHECK_URL")
 N8N_ASK_EXPERT_WEBHOOK_URL = os.getenv("N8N_ASK_EXPERT_URL")
@@ -3828,7 +3836,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
                 (user_id, course_id_for_review, review_text_raw, datetime.now(pytz.utc))
             )
             await conn.commit()
-        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉"),
+        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хотите пройти!"),
                             parse_mode=ParseMode.MARKDOWN_V2)
 
         if ADMIN_GROUP_ID:
@@ -6143,9 +6151,19 @@ async def on_startup():
     # Явное указание global здесь не обязательно, если они уже определены на уровне модуля
     # и вы их только читаете
 
-    final_webhook_path = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
-    webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{final_webhook_path}"
-    await bot.set_webhook(webhook_url, drop_pending_updates=True)
+   # final_webhook_path = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
+   # webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{final_webhook_path}"
+
+   # WEBHOOK_SECRET_PATH_CONF = os.getenv("WEBHOOK_SECRET_PATH")  # Путь для секретного ключа вебхука 01-07
+   # WEBHOOK_SECRET_TOKEN_CONF = os.getenv("WEBHOOK_SECRET_TOKEN")
+
+    webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{WEBHOOK_SECRET_PATH_CONF.strip('/')}"
+
+    await bot.set_webhook(
+        webhook_url,
+        drop_pending_updates=True,
+        secret_token=WEBHOOK_SECRET_TOKEN_CONF  # <--- ДОБАВИТЬ ЭТОТ АРГУМЕНТ
+    )
     logger.info(f"Webhook set to: {webhook_url}")
 
 
@@ -6212,7 +6230,7 @@ async def main():
     # Загрузка переменных с именами из вашего .env
     BOT_TOKEN_CONF = os.getenv("BOT_TOKEN")
     admin_ids_str = os.getenv("ADMIN_IDS")
-    WEBHOOK_HOST_CONF = os.getenv("WEBHOOK_HOST")
+    WEBHOOK_HOST_CONF = os.getenv("WEBHOOK_HOST") #WEBHOOK_HOST = 'https://antbot.alwaysdata.net/'
     webapp_port_str = os.getenv("WEBAPP_PORT")
     WEBAPP_HOST_CONF = os.getenv("WEBAPP_HOST", "::") # '::' как дефолт, если не указано
     WEBHOOK_PATH_CONF = os.getenv("WEBHOOK_PATH", "/bot/") # '/bot/' как дефолт
@@ -6221,7 +6239,7 @@ async def main():
     if not BOT_TOKEN_CONF:
         logger.critical("BOT_TOKEN не найден. Завершение.")
         raise ValueError("BOT_TOKEN не найден.")
-    if not WEBHOOK_HOST_CONF:
+    if not WEBHOOK_HOST_CONF: # WEBHOOK_HOST = 'https://antbot.alwaysdata.net/'
         logger.critical("WEBHOOK_HOST не найден. Завершение.")
         raise ValueError("WEBHOOK_HOST не найден.")
 
@@ -6273,11 +6291,13 @@ async def main():
 
     # Формируем финальный путь для регистрации в aiohttp
     # Он должен быть таким же, как формируется в on_startup
-    final_webhook_path_for_aiohttp = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
+    #final_webhook_path_for_aiohttp = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
+    final_webhook_path_for_aiohttp = f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}" #01-07
 
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
         bot=bot,
+        secret_token=WEBHOOK_SECRET_TOKEN_CONF  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
         # secret_token="YOUR_SECRET_TOKEN" # Если используется
     )
     webhook_requests_handler.register(app, path=final_webhook_path_for_aiohttp)
