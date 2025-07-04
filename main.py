@@ -1058,6 +1058,56 @@ async def init_db():
             await conn.commit()
 
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS task_pool (
+                    id INTEGER PRIMARY KEY, -- Уникальный ID задания (например, 201, 202...)
+                    task_category TEXT NOT NULL, -- Категория: 'Управление вниманием', 'Работа с эмоциями' и т.д.
+                    task_text TEXT NOT NULL, -- Полный текст задания
+                    report_format TEXT, -- Примерный формат отчета: "Сделано. Мой уровень тревоги [...]"
+                    karma_points INTEGER DEFAULT 1, -- Количество "Карма Баллов" за выполнение
+                    is_repeatable BOOLEAN DEFAULT FALSE, -- <-- НОВОЕ ПОЛЕ
+                    is_active BOOLEAN DEFAULT TRUE -- Флаг, чтобы временно отключать задания
+                )
+            ''')
+            await conn.commit()
+
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS task_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,   -- Уникальный номер, который вы дали в списке (1-214)
+                    task_num INTEGER UNIQUE,                -- Категория, как в вашем списке
+                    category TEXT NOT NULL,                 -- Полное описание задания
+                    description TEXT NOT NULL,              -- Стоимость в Карма-Баллах
+                    karma_points INTEGER NOT NULL,          -- Пример отчета, чтобы ИИ знал, чего ждать
+                    report_example TEXT 
+                )
+            ''')
+
+            await conn.commit()
+
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_completed_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    task_id INTEGER NOT NULL,
+                    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    user_report TEXT, -- Можно сохранять отчет пользователя
+                    FOREIGN KEY (user_id) REFERENCES users(user_id),
+                    FOREIGN KEY (task_id) REFERENCES task_pool(id)
+                )
+            ''')
+            await conn.commit()
+
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS marathon_flow (
+                    step_number INTEGER PRIMARY KEY, -- 1, 2, 3... Порядок шагов в марафоне
+                    step_type TEXT NOT NULL, -- 'TASK' или 'INFO_MESSAGE'
+                    task_category TEXT, -- 'Управление вниманием', 'Восстановление энергии' и т.д.
+                    is_ai_choice BOOLEAN DEFAULT TRUE, -- ИИ выбирает задание из категории?
+                    info_text TEXT -- Текст для шагов типа 'INFO_MESSAGE'
+                )
+            ''')
+            await conn.commit()
+
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS courses (
                     course_id TEXT PRIMARY KEY,
                     id INTEGER,
@@ -4178,6 +4228,106 @@ async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_d
 ROBOKASSA_MERCHANT_LOGIN = os.getenv("ROBOKASSA_MERCHANT_LOGIN", "your_robokassa_login")
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "your_robokassa_password1")
 
+
+# Понадобится библиотека для запросов к вашему ИИ, например, 'google-generativeai' или 'openai'
+# import google.generativeai as genai
+# genai.configure(api_key="YOUR_AI_API_KEY")
+
+async def get_ai_selected_task_id(user_id: int) -> int | None:
+    # 1. Собрать контекст
+    async with aiosqlite.connect(DB_FILE) as conn:
+        # Получаем завершенные задачи
+        cursor_completed = await conn.execute(
+            "SELECT task_id FROM user_completed_tasks WHERE user_id = ?", (user_id,)
+        )
+        completed_ids = [row[0] for row in await cursor_completed.fetchall()]
+
+        # Получаем все доступные задачи (ID и категорию)
+        cursor_all = await conn.execute(
+            "SELECT id, task_category FROM task_pool WHERE is_active = TRUE"
+        )
+        all_tasks = await cursor_all.fetchall()
+
+    # Фильтруем те, что еще не выполнены
+    available_tasks_for_prompt = [task for task in all_tasks if task[0] not in completed_ids]
+    if not available_tasks_for_prompt:
+        return None  # Задания кончились
+
+    # 2. Формируем промпт (текст промпта как в примере выше)
+    prompt = f"""
+    Ты — ассистент-психолог... (и так далее, как в примере выше)
+    Контекст пользователя:
+    - User ID: {user_id}
+    - Завершенные задания (ID): {completed_ids}
+
+    Вот список всех доступных для выбора заданий в формате [ID, Категория]:
+    {available_tasks_for_prompt}
+
+    ВЕРНИ ТОЛЬКО JSON ОБЪЕКТ С ОДНИМ КЛЮЧОМ "task_id".
+    """
+
+    try:
+        # 3. Отправляем запрос к ИИ (это пример для Gemini, адаптируйте под свою модель)
+        # model = genai.GenerativeModel('gemini-pro')
+        # response = await model.generate_content_async(prompt)
+        # ai_response_text = response.text
+
+        # ЗАГЛУШКА: пока нет ИИ, выбираем случайное
+        import random
+        selected_task = random.choice(available_tasks_for_prompt)
+        ai_response_text = json.dumps({"task_id": selected_task[0]})
+        # --- конец заглушки ---
+
+        logger.info(f"Ответ от ИИ: {ai_response_text}")
+
+        # 4. Парсим ответ
+        data = json.loads(ai_response_text)
+        return int(data["task_id"])
+
+    except Exception as e:
+        logger.error(f"Ошибка при взаимодействии с ИИ для выбора задания: {e}")
+        # В случае ошибки ИИ, можно выдать случайное задание из доступных
+        import random
+        return random.choice(available_tasks_for_prompt)[0]
+
+
+# Создаем новый обработчик команды
+@dp.message(Command("get_task"))
+async def cmd_get_new_task(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    await message.answer("Подбираю для вас наиболее подходящее задание, минутку...")
+
+    new_task_id = await get_ai_selected_task_id(user_id)
+
+    if not new_task_id:
+        await message.answer("🎉 Поздравляю! Вы выполнили все доступные задания марафона!")
+        return
+
+    # Находим задание в нашей БД
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute(
+            "SELECT task_text, report_format, karma_points FROM task_pool WHERE id = ?", (new_task_id,)
+        )
+        task_data = await cursor.fetchone()
+
+    if not task_data:
+        await message.answer("Произошла ошибка при поиске задания. Попробуйте еще раз.")
+        logger.error(f"ИИ вернул ID задания {new_task_id}, но оно не найдено в task_pool.")
+        return
+
+    task_text, report_format, karma_points = task_data
+
+    # Отправляем задание пользователю
+    full_message = f"✨ **Ваше новое задание ({karma_points} КБ):**\n\n"
+    full_message += task_text
+    if report_format:
+        full_message += f"\n\n*Для отчета, отправьте сообщение в формате:*\n`{report_format}`"
+
+    await message.answer(escape_md(full_message), parse_mode=ParseMode.MARKDOWN_V2)
+
+    # Сохраняем в FSM, какого задания мы ждем отчет
+    await state.set_state(Form.waiting_for_homework)  # Нужно будет создать это состояние
+    await state.update_data(current_task_id=new_task_id)
 
 
 
