@@ -1097,6 +1097,26 @@ async def init_db():
             await conn.commit()
 
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_karma (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                )
+            ''')
+            await conn.commit()
+
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_karma_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    points_changed INTEGER NOT NULL, -- Может быть и отрицательным
+                    reason TEXT, -- 'Урок 5 курса "база"', 'Задание #34', 'Подарок от админа'
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            await conn.commit()
+
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS marathon_flow (
                     step_number INTEGER PRIMARY KEY, -- 1, 2, 3... Порядок шагов в марафоне
                     step_type TEXT NOT NULL, -- 'TASK' или 'INFO_MESSAGE'
@@ -1107,12 +1127,15 @@ async def init_db():
             ''')
             await conn.commit()
 
+
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS courses (
                     course_id TEXT PRIMARY KEY,
                     id INTEGER,
                     group_id TEXT,
                     title TEXT NOT NULL COLLATE NOCASE,
+                    course_type TEXT DEFAULT 'LESSON_BASED', -- или  бывает (новые) `TASK_BASED`.
                     message_interval REAL NOT NULL DEFAULT 24,
                     description TEXT COLLATE NOCASE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -3065,6 +3088,29 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
                                parse_mode=ParseMode.MARKDOWN_V2)
 
 
+# Добавьте эту функцию в main.py
+async def award_karma_points(user_id: int, points: int, reason: str):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        # Обновляем или создаем баланс
+        await conn.execute("""
+            INSERT INTO user_karma (user_id, balance) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET balance = balance + excluded.balance
+        """, (user_id, points))
+
+        # Записываем в лог
+        await conn.execute("INSERT INTO user_karma_log (user_id, points_changed, reason) VALUES (?, ?, ?)",
+                           (user_id, points, reason))
+        await conn.commit()
+
+    # Получаем новый баланс
+    cursor = await conn.execute("SELECT balance FROM user_karma WHERE user_id = ?", (user_id,))
+    new_balance = (await cursor.fetchone())[0]
+
+    logger.info(f"Начислено {points} КБ пользователю {user_id} за '{reason}'. Новый баланс: {new_balance} КБ.")
+    # Оповещаем пользователя
+    await bot.send_message(user_id,
+                           f"✨ Вам начислено +{points} Карма-Баллов!\nПричина: {reason}\n*Ваш текущий баланс: {new_balance} КБ*",
+                           parse_mode="Markdown")
 
 # Вспомогательная функция для получения текущего урока пользователя
 async def get_user_current_lesson(user_id: int, course_id_str: str) -> int:
@@ -5155,6 +5201,91 @@ async def process_feedback(message: types.Message, state: FSMContext):
         # ==============================
         await state.clear()  # Обязательно очищаем состояние
 
+
+
+async def get_daily_task_menu(user_id: int, course_id: str, step_number: int) -> dict | None:
+    """     Формирует ежедневное меню заданий: 1 главное + несколько дополнительных.    """
+    async with aiosqlite.connect(DB_FILE) as conn:
+        # 1. Получаем категорию "задания дня" из marathon_flow
+        cursor = await conn.execute(
+            "SELECT task_category FROM marathon_flow WHERE course_id = ? AND step_number = ?",
+            (course_id, step_number)
+        )
+        flow_step = await cursor.fetchone()
+        if not flow_step or not flow_step[0]:
+            logger.error(f"Не найден шаг {step_number} или категория для курса {course_id} в marathon_flow")
+            return None
+
+        main_category = flow_step[0]
+
+        # 2. Выбираем одно ГЛАВНОЕ задание из нужной категории
+        # Исключаем те, что пользователь уже делал (нужна таблица user_tasks_log)
+        main_task_cursor = await conn.execute(
+            "SELECT * FROM task_templates WHERE category = ? ORDER BY RANDOM() LIMIT 1",
+            (main_category,)
+        )
+        main_task = await main_task_cursor.fetchone()
+
+        if not main_task:
+            logger.warning(f"Не найдено ни одного задания для главной категории {main_category}!")
+            return None
+
+        # 3. Выбираем 2 ДОПОЛНИТЕЛЬНЫХ задания из ДРУГИХ категорий
+        secondary_tasks_cursor = await conn.execute(
+            "SELECT * FROM task_templates WHERE category != ? ORDER BY RANDOM() LIMIT 2",
+            (main_category,)
+        )
+        secondary_tasks = await secondary_tasks_cursor.fetchall()
+
+        # Преобразуем кортежи в словари для удобства
+        columns = [desc[0] for desc in main_task_cursor.description]
+        main_task_dict = dict(zip(columns, main_task))
+
+        secondary_tasks_list = [dict(zip(columns, row)) for row in secondary_tasks]
+
+        return {
+            "main_task": main_task_dict,
+            "secondary_tasks": secondary_tasks_list
+        }
+
+
+# Обработчик кнопки "Получить задания на сегодня"
+@dp.callback_query(F.data == "get_daily_tasks")
+async def cb_get_daily_tasks(query: types.CallbackQuery):
+    user_id = query.from_user.id
+    # Получаем текущий курс и шаг пользователя (ваша логика)
+    course_id, step_number = await get_user_current_marathon_step(user_id)
+
+    task_menu = await get_daily_task_menu(user_id, course_id, step_number)
+
+    if not task_menu:
+        await query.message.answer("Не удалось составить для вас список заданий. Попробуйте позже.")
+        return
+
+    # Формируем красивое сообщение
+    main_task = task_menu['main_task']
+    message_text = f"✨ **Главная практика дня ({main_task['karma_points']} КБ):**\n" \
+                   f"_{escape_md(main_task['title'])}_\n" \
+                   f"{escape_md(main_task['description'])}\n\n" \
+                   f"🔍 **Дополнительные возможности (по 1 КБ за каждое):**\n"
+
+    builder = InlineKeyboardBuilder()
+
+    # Кнопка для основного задания
+    builder.button(text=f"✅ Выполнить: {main_task['title'][:30]}...",
+                   callback_data=f"do_task:{main_task['id']}")
+
+    for task in task_menu['secondary_tasks']:
+        message_text += f"• {escape_md(task['title'])}\n"
+        # Кнопка для дополнительного задания
+        builder.button(text=f"✅ Выполнить: {task['title'][:30]}...",
+                       callback_data=f"do_task:{task['id']}")
+
+    builder.adjust(1)  # Все кнопки в один столбец
+
+    await query.message.edit_text(message_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+
+
 # вызывается из process_feedback - вверху функция
 async def handle_homework_result(
         user_id: int, course_id: str, course_numeric_id: int, lesson_num: int,
@@ -5250,6 +5381,12 @@ async def handle_homework_result(
                 if is_approved:
                     message_to_user_main_part = f"✅ Ваше домашнее задание по курсу *{escape_md(course_id)}*, урок *{lesson_num}* принято"
                     if feedback_text: message_to_user_main_part += f"\n\n*Комментарий:*\n{escape_md(feedback_text)}"
+                    # --- НАЧАЛО ИНТЕГРАЦИИ --- todo 05-07
+                    # Начисляем баллы за успешное ДЗ старого типа
+                    course_title = await get_course_title(course_id)
+                    reason_text = f"Успешное выполнение урока {lesson_num} курса «{course_title}»"
+                    await award_karma_points(user_id, 10, reason_text)  # Например, даем 10 баллов за любой урок
+                    # --- КОНЕЦ ИНТЕГРАЦИИ ---
                 else:
                     message_to_user_main_part = f"❌ Ваше домашнее задание по курсу *{escape_md(course_id)}*, урок *{lesson_num}* отклонено"
                     if feedback_text: message_to_user_main_part += f"\n\n*Причина:*\n{escape_md(feedback_text)}"
