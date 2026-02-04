@@ -1,0 +1,47 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'antbot-monitor'
+
+rule_files:
+  - 'prometheus-alerts.yml'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Мониторинг самого Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Мониторинг бота
+  - job_name: 'antbot'
+    static_configs:
+      - targets: ['bot:8080']  # Или ваш URL и порт
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Мониторинг health-check endpoint
+  - job_name: 'antbot-health'
+    static_configs:
+      - targets: ['bot:8080']
+    metrics_path: '/health'
+    scrape_interval: 30s
+
+  # Мониторинг node exporter (если установлен)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Мониторинг базы данных (через экспортер или кастомные метрики)
+  - job_name: 'sqlite'
+    static_configs:
+      - targets: ['bot:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s

@@ -1,0 +1,123 @@
+groups:
+  - name: antbot_alerts
+    interval: 30s
+    rules:
+      # Критические ошибки бота
+      - alert: BotHighErrorRate
+        expr: rate(bot_errors_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Высокая частота ошибок в боте"
+          description: "Бот генерирует более 0.1 ошибок в секунду"
+
+      # Бот недоступен
+      - alert: BotDown
+        expr: up{job="antbot"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Бот недоступен"
+          description: "Бот не отвечает на health-check более 1 минуты"
+
+      # База данных недоступна
+      - alert: DatabaseDown
+        expr: bot_database_health_status != 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "База данных недоступна"
+          description: "Не удается подключиться к SQLite базе данных"
+
+      # Telegram API недоступен
+      - alert: TelegramAPIDown
+        expr: bot_telegram_api_health_status != 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telegram API недоступен"
+          description: "Не удается подключиться к Telegram API"
+
+      # N8N вебхуки недоступны
+      - alert: N8NWebhookDown
+        expr: bot_n8n_webhook_health_status != 1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "N8N вебхуки недоступны"
+          description: "Не удается подключиться к N8N сервису"
+
+      # Место на диске заканчивается
+      - alert: DiskSpaceLow
+        expr: bot_disk_space_usage_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Мало места на диске"
+          description: "Использовано {{ $value }}% дискового пространства"
+
+      # Критически мало места на диске
+      - alert: DiskSpaceCritical
+        expr: bot_disk_space_usage_percent > 90
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Критически мало места на диске"
+          description: "Использовано {{ $value }}% дискового пространства"
+
+      # Долгая проверка ДЗ
+      - alert: HomeworkCheckSlow
+        expr: histogram_quantile(0.95, rate(bot_homework_checks_duration_seconds_bucket[5m])) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Медленная проверка ДЗ"
+          description: "95-й перцентиль времени проверки ДЗ превышает 5 минут"
+
+      # Много ДЗ ожидает проверки
+      - alert: PendingHomeworkHigh
+        expr: bot_pending_homework > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Много ДЗ ожидает проверки"
+          description: "{{ $value }} домашних заданий ожидают проверки"
+
+      # Медленные запросы к БД
+      - alert: DatabaseSlowQueries
+        expr: histogram_quantile(0.95, rate(bot_db_operations_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Медленные запросы к БД"
+          description: "95-й перцентиль времени запросов к БД превышает 1 секунду"
+
+      # N8N запросы медленные
+      - alert: N8NSlowRequests
+        expr: histogram_quantile(0.95, rate(bot_n8n_requests_duration_seconds_bucket[5m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Медленные запросы к N8N"
+          description: "95-й перцентиль времени запросов к N8N превышает 30 секунд"
+
+      # Мало активных пользователей (аномалия)
+      - alert: LowActiveUsers
+        expr: bot_active_users{period="24h"} < 5
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Мало активных пользователей"
+          description: "За последние 24 часа активно менее 5 пользователей"
