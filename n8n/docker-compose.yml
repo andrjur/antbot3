@@ -1,0 +1,28 @@
+# version: '3.7' # Можно удалить
+
+services:
+  n8n:
+    image: n8nio/n8n
+    restart: always
+    ports:
+      # Теперь Nginx обрабатывает внешние порты, n8n слушает только на localhost
+      - "127.0.0.1:5678:5678" # <--- ВАЖНО: измените обратно на 127.0.0.1
+    environment:
+      - N8N_FORCE_DISABLE_ATTRIBUTION=true
+      - N8N_DISABLE_PRODUCTION_MAIN_PROCESS_ANALYTICS=true
+      - N8N_HOST=${SUBDOMAIN}.${DOMAIN_NAME} # Будет n8n.indikov.ru
+      - N8N_PORT=5678 # Внутренний порт n8n
+      - N8N_PROTOCOL=https # <--- ВАЖНО: измените на https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://${SUBDOMAIN}.${DOMAIN_NAME}/ # Будет https://n8n.indikov.ru/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+
+      # Если раскомментировали в .env, раскомментируйте и здесь
+      # - N8N_BASIC_AUTH_ACTIVE=true
+      # - N8N_BASIC_AUTH_USER=${N8N_USERNAME}
+      # - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+
+      # Теперь можно вернуть true или удалить, т.к. будет HTTPS
+      - N8N_SECURE_COOKIE=true # <--- ВАЖНО: измените на true (или удалите)
+    volumes:
+      - ./n8n_data:/home/node/.n8n

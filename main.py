@@ -21,6 +21,15 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 import aiohttp
 
+# ---- ИМПОРТЫ ДЛЯ МОНИТОРИНГА ----
+from services.metrics import (
+    track_command, track_callback, track_db_operation,
+    track_lesson_sent, track_homework_submission,
+    init_bot_info, get_metrics_response
+)
+from services.monitoring import setup_metrics_endpoints
+from services.health import health_check_endpoint, liveness_probe, readiness_probe
+
 
 # Для генерации подписи Robokassa (примерный, нужно проверить актуальность)
 #import decimal
@@ -55,9 +64,6 @@ load_dotenv()
 
 # Инициализация определителя часовых поясов
 DEFAULT_TIMEZONE = "Europe/Moscow"  # Установка часового пояса по умолчанию
-
-# Установка локали для русского языка
-locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
 MAX_LOG_SIZE = 500 * 1024  # 500 kB
 LOG_BACKUP_COUNT = 2
@@ -125,6 +131,16 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger(__name__)  # Создание логгера для текущего модуля
 
+# Установка локали для русского языка
+try:
+    locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'ru_RU.utf8')
+    except locale.Error:
+        logger.warning("Russian locale not available, using default locale")
+        pass
+
 # == Константы и конфиг ==
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -150,11 +166,8 @@ BASE_WEBHOOK_URL = os.getenv("BASE_WEBHOOK_URL")  # Например, "https://y
 WEBHOOK_SECRET_PATH_CONF = os.getenv("WEBHOOK_SECRET_PATH") # Путь для секретного ключа вебхука 01-07
 WEBHOOK_SECRET_TOKEN_CONF = os.getenv("WEBHOOK_SECRET_TOKEN")
 
-# Валидация
-if not WEBHOOK_SECRET_PATH_CONF:
-    raise ValueError("WEBHOOK_SECRET_PATH не найден.")
-if not WEBHOOK_SECRET_TOKEN_CONF:
-    raise ValueError("WEBHOOK_SECRET_TOKEN не найден.")
+# Валидация webhook переменных будет в main() после определения use_webhook
+# Перенесем в main() после определения use_webhook
 
 N8N_HOMEWORK_CHECK_WEBHOOK_URL = os.getenv("N8N_HOMEWORK_CHECK_URL")
 N8N_ASK_EXPERT_WEBHOOK_URL = os.getenv("N8N_ASK_EXPERT_URL")
@@ -1075,6 +1088,7 @@ async def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,   -- Уникальный номер, который вы дали в списке (1-214)
                     task_num INTEGER UNIQUE,                -- Категория, как в вашем списке
                     category TEXT NOT NULL,                 -- Полное описание задания
+                    title TEXT NOT NULL ,                 -- 
                     description TEXT NOT NULL,              -- Стоимость в Карма-Баллах
                     karma_points INTEGER NOT NULL,          -- Пример отчета, чтобы ИИ знал, чего ждать
                     report_example TEXT 
@@ -5249,41 +5263,48 @@ async def get_daily_task_menu(user_id: int, course_id: str, step_number: int) ->
         }
 
 
+# ЗАГЛУШКА: Вам нужно реализовать эту функцию, чтобы она брала данные из user_courses
+async def get_user_current_marathon_step(user_id):
+    # Пример: SELECT course_id, current_lesson FROM user_courses WHERE user_id = ? AND status = 'active'
+    return "karma_marafon_v1", 1  # Возвращает (course_id, step_number)
+
 # Обработчик кнопки "Получить задания на сегодня"
 @dp.callback_query(F.data == "get_daily_tasks")
 async def cb_get_daily_tasks(query: types.CallbackQuery):
     user_id = query.from_user.id
-    # Получаем текущий курс и шаг пользователя (ваша логика)
+
     course_id, step_number = await get_user_current_marathon_step(user_id)
 
     task_menu = await get_daily_task_menu(user_id, course_id, step_number)
 
     if not task_menu:
-        await query.message.answer("Не удалось составить для вас список заданий. Попробуйте позже.")
+        await query.answer("Не удалось составить для вас список заданий. Попробуйте позже.")
         return
 
     # Формируем красивое сообщение
     main_task = task_menu['main_task']
-    message_text = f"✨ **Главная практика дня ({main_task['karma_points']} КБ):**\n" \
-                   f"_{escape_md(main_task['title'])}_\n" \
-                   f"{escape_md(main_task['description'])}\n\n" \
-                   f"🔍 **Дополнительные возможности (по 1 КБ за каждое):**\n"
+    message_text = (
+        f"✨ *Главная практика дня ({main_task['karma_points']} КБ):*\n"
+        f"_{escape_md(main_task['title'])}_\n"
+        f"{escape_md(main_task['description'])}\n\n"
+        f"🔍 *Дополнительные возможности (по 1-2 КБ за каждое):*\n"
+    )
 
     builder = InlineKeyboardBuilder()
 
     # Кнопка для основного задания
     builder.button(text=f"✅ Выполнить: {main_task['title'][:30]}...",
-                   callback_data=f"do_task:{main_task['id']}")
+                   callback_data=f"do_task:{main_task['id']}")  # Отправляем ID из БД
 
     for task in task_menu['secondary_tasks']:
-        message_text += f"• {escape_md(task['title'])}\n"
-        # Кнопка для дополнительного задания
+        message_text += f"• {escape_md(task['title'])} ({task['karma_points']} КБ)\n"
         builder.button(text=f"✅ Выполнить: {task['title'][:30]}...",
                        callback_data=f"do_task:{task['id']}")
 
-    builder.adjust(1)  # Все кнопки в один столбец
+    builder.adjust(1)
 
-    await query.message.edit_text(message_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await query.message.edit_text(message_text, reply_markup=builder.as_markup(), parse_mode="MarkdownV2")
+    await query.answer()
 
 
 # вызывается из process_feedback - вверху функция
@@ -6011,6 +6032,14 @@ async def handle_homework(message: types.Message):
                 # WEBHOOK_HOST_CONF и WEBHOOK_PATH_CONF должны быть доступны (например, как глобальные переменные)
                 current_bot_callback_base_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
 
+                # Вычисляем фазу спринта по номеру урока
+                if current_lesson <= 7:
+                    sprint_phase = "ОРИЕНТАЦИЯ"
+                elif current_lesson <= 21:
+                    sprint_phase = "СТРАТЕГИЯ"
+                else:
+                    sprint_phase = "ИНТЕГРАЦИЯ"
+
                 payload_for_n8n_hw = {
                     "action": "check_homework",
                     "student_user_id": user_id,
@@ -6028,7 +6057,9 @@ async def handle_homework(message: types.Message):
                     "callback_webhook_url_result": f"{current_bot_callback_base_url}/n8n_hw_result",
                     "callback_webhook_url_error": f"{current_bot_callback_base_url}/n8n_hw_processing_error",
                     "telegram_bot_token": BOT_TOKEN,  # BOT_TOKEN должен быть доступен (глобально или через os.getenv)
-                    "session_id": f"hw-{user_id}-{course_numeric_id}-{current_lesson}"
+                    "session_id": f"hw-{user_id}-{course_numeric_id}-{current_lesson}",
+                    "sprint_phase": sprint_phase,
+                    "day_number": current_lesson
                 }
                 asyncio.create_task(send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload_for_n8n_hw))
             # >>> КОНЕЦ НОВОГО БЛОКА ДЛЯ N8N <<<
@@ -6526,9 +6557,20 @@ async def main():
     if not BOT_TOKEN_CONF:
         logger.critical("BOT_TOKEN не найден. Завершение.")
         raise ValueError("BOT_TOKEN не найден.")
-    if not WEBHOOK_HOST_CONF: # WEBHOOK_HOST = 'https://antbot.alwaysdata.net/'
-        logger.critical("WEBHOOK_HOST не найден. Завершение.")
-        raise ValueError("WEBHOOK_HOST не найден.")
+    
+    # Проверяем режим работы: webhook или polling
+    use_webhook = bool(os.getenv("WEBHOOK_HOST"))
+    if not use_webhook:
+        logger.info("WEBHOOK_HOST не указан. Используем polling режим.")
+    else:
+        logger.info(f"Используем webhook режим. Host: {WEBHOOK_HOST_CONF}")
+    
+    # Валидация webhook переменных (только для webhook режима)
+    if use_webhook:
+        if not WEBHOOK_SECRET_PATH_CONF:
+            raise ValueError("WEBHOOK_SECRET_PATH не найден.")
+        if not WEBHOOK_SECRET_TOKEN_CONF:
+            raise ValueError("WEBHOOK_SECRET_TOKEN не найден.")
 
     # Парсинг и установка значений
     if admin_ids_str:
@@ -6574,30 +6616,57 @@ async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    app = web.Application()
+    if use_webhook:
+        app = web.Application()
 
-    # Формируем финальный путь для регистрации в aiohttp
-    # Он должен быть таким же, как формируется в on_startup
-    #final_webhook_path_for_aiohttp = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
-    final_webhook_path_for_aiohttp = f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}" #01-07
+        # Формируем финальный путь для регистрации в aiohttp
+        final_webhook_path_for_aiohttp = f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}" #01-07
 
-    webhook_requests_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot,
-        secret_token=WEBHOOK_SECRET_TOKEN_CONF  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
-        # secret_token="YOUR_SECRET_TOKEN" # Если используется
-    )
-    webhook_requests_handler.register(app, path=final_webhook_path_for_aiohttp)
+        webhook_requests_handler = SimpleRequestHandler(
+            dispatcher=dp,
+            bot=bot,
+            secret_token=WEBHOOK_SECRET_TOKEN_CONF
+        )
+        webhook_requests_handler.register(app, path=final_webhook_path_for_aiohttp)
 
-    logger.info(f"Зарегистрированные обработчики сообщений: {len(dp.message.handlers)}")
-    logger.info(f"Зарегистрированные обработчики колбэков: {len(dp.callback_query.handlers)}")
+        # Настройка эндпоинтов мониторинга
+        await setup_metrics_endpoints(
+            app=app,
+            db_file=DB_FILE,
+            bot_token=BOT_TOKEN_CONF,
+            admin_group_id=ADMIN_GROUP_ID,
+            n8n_domain=N8N_DOMAIN,
+            webhook_url=f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}"
+        )
 
-    #Можно даже вывести их подробнее, если нужно глубоко копать:
-    #for handler_obj in dp.message.handlers:
-     #   logger.info(f"Message Handler: {handler_obj.callback.__name__ if hasattr(handler_obj.callback, '__name__') else handler_obj.callback}, filters: {handler_obj.filters}")
+        logger.info(f"Зарегистрированные обработчики сообщений: {len(dp.message.handlers)}")
+        logger.info(f"Зарегистрированные обработчики колбэков: {len(dp.callback_query.handlers)}")
 
-    setup_application(app, dp, bot=bot) # Передаем bot для доступа к нему через app['bot'] если нужно
-    logger.info(f'тупа ссылки {app.router.routes()} {dp}  {bot}')
+        setup_application(app, dp, bot=bot)
+        logger.info(f'Webhook сервер настроен. Пути: {app.router.routes()}')
+        
+        # Запускаем веб-сервер
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host=WEBAPP_HOST_CONF, port=WEBAPP_PORT_CONF)
+        await site.start()
+        
+        actual_host_log = WEBAPP_HOST_CONF if WEBAPP_HOST_CONF != "::" else "0.0.0.0"
+        logger.info(f"Bot webhook server started on {actual_host_log}, port {WEBAPP_PORT_CONF}. Listening on path: {final_webhook_path_for_aiohttp}")
+        
+        # Ожидаем прерывания
+        try:
+            while True:
+                await asyncio.sleep(3600)  # спим 1 час
+        except asyncio.CancelledError:
+            logger.info("Webhook server stopped")
+    else:
+        # Polling режим
+        logger.info("Starting bot in polling mode...")
+        await dp.start_polling(
+            bot,
+            handle_signals=False
+        )
 
     # >>> НАЧАЛО НОВОГО БЛОКА - РЕГИСТРАЦИЯ МАРШРУТОВ ДЛЯ N8N CALLBACKS <<<
     # Используем WEBHOOK_PATH_CONF как базовый путь, к которому добавляем специфичные эндпоинты для n8n

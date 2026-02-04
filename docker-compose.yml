@@ -1,0 +1,123 @@
+services:
+  # Основной сервис бота
+  bot:
+    build: .
+    container_name: antbot
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Europe/Moscow
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"  # Вебхук и метрики
+    volumes:
+      - ./bot.db:/app/bot.db  # База данных
+      - ./logs:/app/logs      # Логи
+      - ./settings.json:/app/settings.json  # Настройки
+    networks:
+      - antbot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Prometheus для сбора метрик
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: antbot-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - antbot-network
+    depends_on:
+      - bot
+
+  # Grafana для визуализации
+  grafana:
+    image: grafana/grafana:latest
+    container_name: antbot-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=
+    networks:
+      - antbot-network
+    depends_on:
+      - prometheus
+
+  # Alertmanager для отправки уведомлений
+  # n8n для AI проверки домашних заданий
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: antbot-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=admin123
+      - N8N_HOST=n8n.indikov.ru
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.indikov.ru/
+      - GENERIC_TIMEZONE=Europe/Moscow
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+    networks:
+      - antbot-network
+    depends_on:
+      - bot
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: antbot-alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    networks:
+      - antbot-network
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:
+  n8n_data:
+
+networks:
+  antbot-network:
+    driver: bridge
