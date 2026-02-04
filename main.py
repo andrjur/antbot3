@@ -6549,7 +6549,7 @@ async def main():
     BOT_TOKEN_CONF = os.getenv("BOT_TOKEN")
     admin_ids_str = os.getenv("ADMIN_IDS")
     WEBHOOK_HOST_CONF = os.getenv("WEBHOOK_HOST") #WEBHOOK_HOST = 'https://antbot.alwaysdata.net/'
-    webapp_port_str = os.getenv("WEBAPP_PORT")
+    webapp_port_str = os.getenv("WEB_SERVER_PORT", "8080")  # Используем WEB_SERVER_PORT из .env
     WEBAPP_HOST_CONF = os.getenv("WEBAPP_HOST", "::") # '::' как дефолт, если не указано
     WEBHOOK_PATH_CONF = os.getenv("WEBHOOK_PATH", "/bot/") # '/bot/' как дефолт
 
@@ -6585,10 +6585,10 @@ async def main():
 
 
     try:
-        WEBAPP_PORT_CONF = int(webapp_port_str) if webapp_port_str else 8349 # Дефолт из вашего .env
+        WEBAPP_PORT_CONF = int(webapp_port_str) if webapp_port_str else 8080  # Дефолт 8080
     except ValueError:
-        logger.warning(f"Некорректный формат WEBAPP_PORT: '{webapp_port_str}'. Устанавливаем 8349.")
-        WEBAPP_PORT_CONF = 8349
+        logger.warning(f"Некорректный формат WEB_SERVER_PORT: '{webapp_port_str}'. Устанавливаем 8080.")
+        WEBAPP_PORT_CONF = 8080
 
 
     bot = Bot(
