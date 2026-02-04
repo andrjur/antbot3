@@ -2545,7 +2545,7 @@ async def check_groups_access(bot: Bot, raw_id: int, gr_name:str):
 
     except TelegramBadRequest as e2344:
         logger.warning(f"Ошибка: {gr_name} | ID: {raw_id}\n Подробнее: {str(e2344)}")
-        return f"Ошибка: {gr_name} | ID: {raw_id}\n Подробнее: {str(e)}"
+        return f"Ошибка: {gr_name} | ID: {raw_id}\n Подробнее: {str(e2344)}"
 
 
 

@@ -137,6 +137,102 @@ AntBot - это многофункциональный Telegram-бот, разр
 
 ---
 
+## ⚙️ Конфигурация и настройка
+
+### Получение ID групп Telegram
+
+1. Добавьте бота в административную группу
+2. Используйте бота @getidsbot:
+   - Перешлите любое сообщение из группы боту
+   - Или добавьте бота в группу на минуту
+3. ID группы начинается с `-100` (например: `-1002373429764`)
+
+**Важно:** Группа должна быть супергруппой (Supergroup). Если ID короткий (без -100), преобразуйте:
+- Старый ID: `-123456789`
+- Новый ID: `-1001234567890` (добавьте 100 и дополнительный 0)
+
+### Настройка n8n workflow
+
+1. Откройте n8n по адресу: `https://n8n.indikov.ru`
+2. Логин: `admin`, пароль: `admin123`
+3. Импортируйте workflow: **Settings** → **Import** → выберите `AI Agent in n8n.json`
+4. Настройте Credentials:
+   - **Telegram API**: введите токен бота (тот же что в .env)
+   - **OpenRouter API**: введите API ключ (`sk-or-v1-...`)
+   - **HTTP Header Auth**: создайте для webhook безопасности
+5. Активируйте workflow (переключатель в правом верхнем углу)
+6. Скопируйте Webhook URL из узла "Webhook-homework":
+   - Production URL: `https://n8n.indikov.ru/webhook/aa46a723-619e-42e9-8e51-49ba51813718`
+   - Вставьте его в `.env` как `N8N_HOMEWORK_CHECK_URL`
+
+### Настройка Cloudflare DNS и SSL
+
+**DNS Records (обязательно):**
+```
+Type: A, Name: bot,    Content: 45.147.178.238, Proxy: Enabled (оранжевое облачко)
+Type: A, Name: n8n,    Content: 45.147.178.238, Proxy: Enabled
+Type: A, Name: webhook, Content: 45.147.178.238, Proxy: Enabled
+```
+
+**SSL/TLS настройки:**
+1. Перейдите в **SSL/TLS** → **Overview**
+2. Установите **Encryption mode**: `Full` (не Full Strict)
+3. Включите **Always Use HTTPS**
+4. В **Edge Certificates** дождитесь выпуска сертификатов (обычно 5-10 минут)
+
+### Переменные окружения (.env)
+
+Создайте файл `.env` в корне проекта:
+
+```bash
+# === Bot Configuration ===
+BOT_TOKEN=7792136369:AAFO5-fcvysbs80eTw4kGToWKlHuYP_ZRt8
+ADMIN_IDS=182643037,954230772
+ADMIN_GROUP_ID=-1002373429764
+
+# === Webhook Configuration ===
+WEBHOOK_HOST=https://bot.indikov.ru
+WEBHOOK_SECRET_PATH=hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL
+WEBHOOK_SECRET_TOKEN=tkn_aK3mN8pQr5sTu9vWx2Yz6AbCdEfGhIj
+
+# === Server Configuration ===
+WEB_SERVER_HOST=0.0.0.0
+WEB_SERVER_PORT=8080
+WEBHOOK_PATH=/webhook
+BASE_WEBHOOK_URL=https://bot.indikov.ru
+
+# === N8N Configuration ===
+N8N_HOMEWORK_CHECK_URL=https://n8n.indikov.ru/webhook/aa46a723-619e-42e9-8e51-49ba51813718
+N8N_ASK_EXPERT_URL=https://n8n.indikov.ru/webhook/83c1f9c5-7833-49c2-9122-22efe590c793
+N8N_WEBHOOK_SECRET=n8n_sec_4jK7lM9nP2qR5sT8uV1wX4yZ7aB3cD6e
+N8N_DOMAIN=https://n8n.indikov.ru/
+N8N_CALLBACK_SECRET=500
+
+# === Monitoring Configuration ===
+ALERT_BOT_TOKEN=8058427977:AAHpR5i4uyk_rUQM1ZvAVZxZSwlVPFpEk6c
+ALERT_CHAT_ID=-1002373429764
+
+# === Payment Configuration ===
+PAYMENT_INSTRUCTIONS=Для получения кода курса оплатите, пожалуйста, по номеру +79684494137 по СБП на Озон банк
+
+# === OpenRouter API Key (for AI homework checking) ===
+OPENROUTER_API_KEY=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
+```
+
+### Доступ к сервисам
+
+После запуска (docker-compose up -d):
+
+| Сервис | URL | Логин/Пароль |
+|--------|-----|--------------|
+| **Бот Webhook** | https://bot.indikov.ru | - |
+| **n8n** | https://n8n.indikov.ru | admin/admin123 |
+| **Grafana** | http://45.147.178.238:3000 | admin/admin123 |
+| **Prometheus** | http://45.147.178.238:9090 | - |
+| **Alertmanager** | http://45.147.178.238:9093 | - |
+
+---
+
 ## 📊 Диаграммы рабочих процессов
 
 (Диаграммы остаются без изменений)
