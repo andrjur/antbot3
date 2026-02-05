@@ -3473,7 +3473,8 @@ async def process_support_response(message: types.Message, state: FSMContext):
 
 @dp.message(CommandStart())
 @db_exception_handler
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext): # <--- Добавили state
+    await state.clear() # <--- Сбрасываем любые зависшие диалоги
     """Обработчик команды /start."""
     logger.info(f"!!!!!!!!!! CMD_START ВЫЗВАН для пользователя {message.from_user.id} !!!!!!!!!!")
     user = message.from_user

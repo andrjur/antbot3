@@ -10,7 +10,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8080:8080"  # Вебхук и метрики
+      - "8443:8080"  # Вебхук и метрики
     volumes:
       - ./bot.db:/app/bot.db  # База данных
       - ./logs:/app/logs      # Логи
