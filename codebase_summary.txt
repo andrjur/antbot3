@@ -1,19 +1,24 @@
 
-
-# 14-04 todo нафига
-async def get_all_courses_by_status(status='active'):
+def formatTime(self, record, datefmt=None):
 
 
-# 14-04 todo нафига
-async def get_user_active_courses(user_id: int):
+def setup_logging():
 
 
-# 14-04 todo нафига
-async def get_user_courses_count(user_id: int, status = 'active') -> int:
+# декоратор для обработки ошибок в БД
+def db_exception_handler(func):
+
+def db_exception_handler(func):
+@functools.wraps(func)
+async def wrapper(*args, **kwargs):
 
 
-# 14-04 todo нафига
-async def get_course_start_date(user_id: int, course_id: str):
+### End filters... # 14-04
+async def populate_course_versions(settings):
+
+
+
+async def load_settings():
 
 
 # 14-04
@@ -40,8 +45,8 @@ async def get_course_title(course_id: str) -> str:
 async def is_valid_activation_code(code: str) -> bool:
 
 
-# 14-04
-async def activate_course(user_id: int, activation_code: str):
+
+async def activate_course(user_id: int, activation_code: str, level:int = 1):
 
 
 # 14-04
@@ -49,13 +54,9 @@ async def deactivate_course(user_id: int, course_id: str):
 
 
 @db_exception_handler
-async def check_lesson_schedule(user_id: int, hours = 24, minutes = 0):
+async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
 
-await bot.send_message(user_id, "📛 Ошибка расписания. Мы уже чиним робота!", parse_mode=None)
 
-async def scheduled_lesson_check(user_id: int):
-
-await asyncio.sleep(2 * 60)  # Каждые 2 минуты
 
 async def send_admin_stats():
 
@@ -73,7 +74,7 @@ async def stop_lesson_schedule_task(user_id: int):
 
 
 
-def save_settings(settings):
+def save_settings(settings_s):
 
 
 @db_exception_handler
@@ -88,12 +89,37 @@ async def backup_settings_file():
 async def init_db():
 
 
+
+async def send_data_to_n8n(n8n_webhook_url: str, payload: dict):
+
+
+@dp.callback_query(F.data == "ask_expert_question")  # Или ваша CallbackData
+async def cb_ask_expert_start(query: types.CallbackQuery, state: FSMContext):
+
+
+@dp.message(AskExpertState.waiting_for_expert_question, F.text)
+async def process_expert_question(message: types.Message, state: FSMContext):
+    from aiohttp import web
+
+
+
+async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
+
+
+
+async def handle_n8n_hw_error(request: web.Request) -> web.Response:
+
+
+
+async def handle_n8n_expert_answer(request: web.Request) -> web.Response:
+
+
 # Функция для экранирования спецсимволов в тексте для использования в MarkdownV2
 def escape_md(text):
 
+
 # логирование действий пользователя
-@db_exception_handler
-async def log_user_activity(user_id, action, details=""):
+async def log_action(user_id: int, action_type: str, course_id: str = None, lesson_num: int = None,
 
 # функция для разрешения ID пользователя по алиасу или ID
 @db_exception_handler
@@ -101,7 +127,31 @@ async def resolve_user_id(user_identifier):
 
 
 @db_exception_handler
-async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int):
+async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, repeat: bool = False, level: int = 1):
+
+
+
+async def _get_lesson_content_from_db(conn, course_id: str, lesson_num: int) -> list:
+
+
+
+async def _send_lesson_parts(user_id: int, course_id: str, lesson_num: int, user_course_level: int,
+
+
+
+async def _update_user_course_after_lesson(conn, user_id: int, course_id: str, lesson_num: int, is_homework: bool, hw_type: str | None,
+
+
+
+async def _handle_course_completion(conn, user_id: int, course_id: str, requested_lesson_num: int,
+
+details=f"Завершен уровень {current_user_level}. Всего уроков на уровне (примерно): {total_lessons_current_level}")
+
+async def _handle_missing_lesson_content(user_id: int, course_id: str, lesson_num: int, total_lessons: int):
+
+)
+
+async def scheduled_lesson_check(user_id: int):
 
 # функция для кэширования статуса курса пользователя
 @lru_cache(maxsize=100)
@@ -113,15 +163,11 @@ async def set_timezone(message: types.Message):
 
 
 
-async def get_next_lesson_time(user_id: int, course_id: str) -> str:
+async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_display: int) -> str:
 
 @dp.callback_query(F.data == "menu_support")
 @db_exception_handler
 async def cmd_support_callback(query: types.CallbackQuery, state: FSMContext):
-
-@dp.callback_query(F.data == "old_menu_support")
-@db_exception_handler
-async def old_cmd_support_callback(query: types.CallbackQuery, state: FSMContext):
 
 
 
@@ -183,6 +229,58 @@ async def import_db(message: types.Message):  # types.Message instead of Message
 
 async def update_settings_file():
 
+# ===============================  команды ИИ для работы с ДЗ  ===============================================================
+# Вспомогательная функция для извлечения данных из сообщения по ID
+async def old_get_homework_context_by_message_id(admin_group_message_id: int) -> tuple | None:
+
+return None
+
+async def get_homework_context_by_message_id(admin_group_message_id: int) -> tuple | None:
+
+return None
+
+async def extract_homework_context_from_reply(message: types.Message) -> tuple | None:
+
+
+# Вспомогательная функция для извлечения данных из callback_data кнопок сообщения
+def get_context_from_admin_message_markup(message_with_buttons: types.Message) -> tuple | None:
+
+
+
+async def process_homework_command(
+
+
+@dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
+async def cmd_approve_homework_handler(message: types.Message, command: CommandObject):
+
+
+@dp.message(Command("reject"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
+async def cmd_reject_homework_handler(message: types.Message, command: CommandObject):
+
+
+@dp.callback_query(SelectLessonForRepeatCallback.filter())
+async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback_data: SelectLessonForRepeatCallback,
+
+
+# Вспомогательная функция для получения текущего урока пользователя
+async def get_user_current_lesson(user_id: int, course_id_str: str) -> int:
+
+# Обработчик для кнопки "Ввести номер урока вручную"
+@dp.callback_query(lambda c: c.data.startswith("manual_lesson_repeat:"))
+async def cb_manual_lesson_repeat_prompt(query: types.CallbackQuery, state: FSMContext):
+
+# Обработчик ввода номера урока
+@dp.message(RepeatLessonForm.waiting_for_lesson_number_to_repeat, F.text.regexp(r'^\d+$'))
+async def process_lesson_number_for_repeat(message: types.Message, state: FSMContext):
+
+
+@dp.message(RepeatLessonForm.waiting_for_lesson_number_to_repeat)  # Ловим нечисловой ввод
+async def process_invalid_lesson_number_for_repeat(message: types.Message, state: FSMContext):
+
+
+@dp.callback_query(MainMenuAction.filter(F.action == "stop_course"))
+async def cb_stop_current_course(query: types.CallbackQuery, callback_data: MainMenuAction, state: FSMContext):
+
 
 @dp.message(Command("timezone"))
 async def cmd_set_timezone(message: types.Message):
@@ -229,7 +327,7 @@ async def cmd_start(message: types.Message):
 
 
 
-async def send_course_description(user_id: int, course_id: str):
+async def send_course_description(user_id: int, course_id_str: str):  # Принимаем строковый ID
 
 # help
 @dp.message(Command("help"))
@@ -255,6 +353,50 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
 @db_exception_handler
 async def show_lesson_content(callback_query: types.CallbackQuery, callback_data: CourseCallback):
 
+# НОВЫЙ обработчик для кнопки "Оставить отзыв" ПОСЛЕ ЗАВЕРШЕНИЯ КУРСА
+@dp.callback_query(F.data == "leave_feedback")
+async def cb_leave_course_review_start(query: types.CallbackQuery, state: FSMContext): # Переименовал для ясности
+
+# НОВЫЙ обработчик для кнопки "Оставить отзыв" - ответ, собственно, юзера
+@dp.message(CourseReviewForm.waiting_for_review_text)  # Ловим сообщения в новом состоянии
+async def process_course_review_text(message: types.Message, state: FSMContext):
+
+
+@dp.callback_query(F.data == "select_other_course")
+async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
+
+# Обработчики для новых CallbackData
+@dp.callback_query(CourseDetailsCallback.filter(F.action == "show_description"))
+async def cb_show_course_description(query: types.CallbackQuery, callback_data: CourseDetailsCallback):
+
+
+@dp.callback_query(ShowActiveCourseMenuCallback.filter())
+async def cb_show_active_course_main_menu(query: types.CallbackQuery, callback_data: ShowActiveCourseMenuCallback,
+
+#  Обработчик для RestartCourseCallback:
+@dp.callback_query(RestartCourseCallback.filter())
+async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_data: RestartCourseCallback,
+
+
+
+def calculate_robokassa_signature(*args) -> str:
+
+
+@dp.message(Command("send_to_user"), F.from_user.id.in_(ADMIN_IDS_CONF))  # ADMIN_IDS_CONF - ваш список ID админов
+async def cmd_send_to_user_handler(message: types.Message, command: CommandObject, bot: Bot): # Добавил bot в аргументы
+
+
+@dp.callback_query(BuyCourseCallback.filter())
+async def cb_buy_course_prompt(query: types.CallbackQuery, callback_data: BuyCourseCallback, state: FSMContext):
+
+
+@dp.message(AwaitingPaymentConfirmation.waiting_for_activation_code_after_payment, F.text)
+async def process_code_after_payment(message: types.Message, state: FSMContext):
+
+@dp.callback_query(F.data == "select_other_course_from_payment",
+AwaitingPaymentConfirmation.waiting_for_activation_code_after_payment)
+async def cb_back_to_courses_from_payment(query: types.CallbackQuery, state: FSMContext):
+
 
 # данные о курсе пользователя courses.id:int, user_courses.current_lesson, user_courses.version_id
 async def get_user_course_data(user_id: int) -> tuple:
@@ -263,9 +405,13 @@ async def get_user_course_data(user_id: int) -> tuple:
 @db_exception_handler # Обработчик для команды просмотра прогресса по всем курсам
 async def cmd_progress_callback(query: types.CallbackQuery):
 
-@dp.callback_query(CourseCallback.filter(F.action == "self_approve_hw"))
-@db_exception_handler
-async def process_self_approve_hw(callback: types.CallbackQuery, callback_data: CourseCallback):
+#27-05 покажет список тарифов, текущий тариф и рассчитает разницу в цене.
+@dp.callback_query(ChangeTariffCallback.filter())
+async def cb_change_tariff_prompt(query: types.CallbackQuery, callback_data: ChangeTariffCallback, state: FSMContext):
+
+# 27-05 покажет детали доплаты и инструкцию по оплате.
+@dp.callback_query(SelectNewTariffToUpgradeCallback.filter())
+async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
 
 
 @dp.callback_query(ReplySupportCallback.filter())
@@ -273,7 +419,7 @@ async def reply_support_callback(callback: types.CallbackQuery, callback_data: R
 
 #======================Конец обработчиков слов и хэндлеров кнопок=========================================
 
-async def check_state(message: types.Message, state: FSMContext) -> bool:
+async def old_check_state(message: types.Message, state: FSMContext) -> bool:
 
 # НАДО 17-04
 @db_exception_handler
@@ -300,12 +446,12 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
 async def cmd_feedback(query: types.CallbackQuery, state: FSMContext):
 
 
-@dp.message(Form.feedback)
+@dp.message(Form.feedback, F.chat.id == ADMIN_GROUP_ID) # Убедимся, что это админ и он в админ-группе
 async def process_feedback(message: types.Message, state: FSMContext):
 
 
 # вызывается из process_feedback - вверху функция
-async def handle_homework_result(user_id: int, course_id: str, course_numeric_id: int, lesson_num: int, admin_id: int, feedback_text: str, is_approved: bool, callback_query: types.CallbackQuery):
+async def handle_homework_result(
 
 
 
@@ -335,8 +481,8 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 @db_exception_handler
 async def handle_homework(message: types.Message):
 
-logger.error(f"Ошибка отправки домашки админам: {e}", exc_info=True)
 
+# единое главное меню для пользователя. Теперь с левелами
 async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_id: str,
 
 # Обработчик последний - чтобы не мешал другим обработчикам работать. Порядок имеет значение
@@ -368,6 +514,15 @@ async def default_handler(message: types.Message):
 async def default_callback_handler(query: types.CallbackQuery):
 
 
+# ---- ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ ВЕБХУКОМ ----
+async def on_startup():
+
+
+
+async def on_shutdown():
+
+
 
 async def main():
+
 

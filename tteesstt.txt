@@ -1,0 +1,8 @@
+# Сборка и запуск
+docker-compose up --build -d
+
+# Просмотр логов
+docker-compose logs -f bot
+
+# Остановка
+docker-compose down

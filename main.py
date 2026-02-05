@@ -1313,9 +1313,14 @@ async def init_db():
             ''')
             await conn.commit()
 
-            logger.info("Database initialized successfully")
+            # Получаем список созданных таблиц
+            cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = await cursor.fetchall()
+            table_names = [t[0] for t in tables]
+            logger.info(f"✅ База данных инициализирована: {len(table_names)} таблиц")
+            logger.debug(f"   Таблицы: {', '.join(table_names)}")
     except Exception as e1095:
-        logger.error(f"Error initializing database: {e1095}")
+        logger.error(f"❌ Ошибка инициализации базы данных: {e1095}")
         raise  # Allows bot to exit on startup if database cannot be initialized
 
 
@@ -6541,9 +6546,12 @@ async def main():
     global WEBHOOK_HOST_CONF, WEBAPP_PORT_CONF, WEBAPP_HOST_CONF, WEBHOOK_PATH_CONF
 
     setup_logging()
-    logger.info("Запуск main() в режиме вебхука...")
+    logger.info("=" * 60)
+    logger.info("🚀 Запуск AntBot v4.0")
+    logger.info("=" * 60)
 
     load_dotenv()
+    logger.info("✅ Переменные окружения загружены из .env")
 
     # Загрузка переменных с именами из вашего .env
     BOT_TOKEN_CONF = os.getenv("BOT_TOKEN")
@@ -6555,15 +6563,19 @@ async def main():
 
     # Валидация обязательных переменных
     if not BOT_TOKEN_CONF:
-        logger.critical("BOT_TOKEN не найден. Завершение.")
+        logger.critical("❌ BOT_TOKEN не найден. Завершение.")
         raise ValueError("BOT_TOKEN не найден.")
+    logger.info("✅ BOT_TOKEN найден")
     
     # Проверяем режим работы: webhook или polling
     use_webhook = bool(os.getenv("WEBHOOK_HOST"))
     if not use_webhook:
-        logger.info("WEBHOOK_HOST не указан. Используем polling режим.")
+        logger.info("📡 Режим работы: POLLING")
     else:
-        logger.info(f"Используем webhook режим. Host: {WEBHOOK_HOST_CONF}")
+        logger.info(f"📡 Режим работы: WEBHOOK")
+        logger.info(f"   Host: {WEBHOOK_HOST_CONF}")
+        logger.info(f"   Порт сервера: {webapp_port_str}")
+        logger.info(f"   Хост приложения: {WEBAPP_HOST_CONF}")
     
     # Валидация webhook переменных (только для webhook режима)
     if use_webhook:
@@ -6571,23 +6583,25 @@ async def main():
             raise ValueError("WEBHOOK_SECRET_PATH не найден.")
         if not WEBHOOK_SECRET_TOKEN_CONF:
             raise ValueError("WEBHOOK_SECRET_TOKEN не найден.")
+        logger.info("✅ Webhook секреты настроены")
 
     # Парсинг и установка значений
     if admin_ids_str:
         try:
             ADMIN_IDS_CONF = [int(admin_id.strip()) for admin_id in admin_ids_str.split(',')]
+            logger.info(f"👤 Администраторы: {len(ADMIN_IDS_CONF)} ID загружено")
         except ValueError:
-            logger.warning(f"Некорректный формат ADMIN_IDS: '{admin_ids_str}'. Оставляем пустым.")
+            logger.warning(f"⚠️ Некорректный формат ADMIN_IDS: '{admin_ids_str}'. Оставляем пустым.")
             ADMIN_IDS_CONF = []
     else:
         ADMIN_IDS_CONF = []
-
-
+        logger.warning("⚠️ ADMIN_IDS не указаны. Управление ботом ограничено.")
 
     try:
         WEBAPP_PORT_CONF = int(webapp_port_str) if webapp_port_str else 8080  # Дефолт 8080
+        logger.info(f"🔌 Порт приложения: {WEBAPP_PORT_CONF}")
     except ValueError:
-        logger.warning(f"Некорректный формат WEB_SERVER_PORT: '{webapp_port_str}'. Устанавливаем 8080.")
+        logger.warning(f"⚠️ Некорректный формат WEB_SERVER_PORT: '{webapp_port_str}'. Устанавливаем 8080.")
         WEBAPP_PORT_CONF = 8080
 
 
@@ -6603,12 +6617,16 @@ async def main():
     # register_all_my_handlers(dp)
 
     await init_db()
+    
     settings = await load_settings()
     if settings and "groups" in settings: # Более безопасная проверка
         COURSE_GROUPS = list(map(int, settings.get("groups", {}).keys()))
+        logger.info(f"📋 Группы курсов: {len(settings.get('groups', {}))} групп загружено")
+        for group_id, group_name in settings.get('groups', {}).items():
+            logger.info(f"   - {group_name}: {group_id}")
     else:
         COURSE_GROUPS = []
-        logger.warning("Настройки 'groups' не загружены или отсутствуют, COURSE_GROUPS пуст.")
+        logger.warning("⚠️ Настройки 'groups' не загружены или отсутствуют, COURSE_GROUPS пуст.")
     await import_settings_to_db()
 
     # Передаем актуальные значения в лямбду для on_startup
@@ -6639,11 +6657,20 @@ async def main():
             webhook_url=f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}"
         )
 
-        logger.info(f"Зарегистрированные обработчики сообщений: {len(dp.message.handlers)}")
-        logger.info(f"Зарегистрированные обработчики колбэков: {len(dp.callback_query.handlers)}")
+        logger.info(f"📨 Обработчики сообщений: {len(dp.message.handlers)}")
+        logger.info(f"📨 Обработчики колбэков: {len(dp.callback_query.handlers)}")
 
         setup_application(app, dp, bot=bot)
-        logger.info(f'Webhook сервер настроен. Пути: {app.router.routes()}')
+        
+        # Путь для результатов проверки ДЗ
+        app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result", handle_n8n_hw_approval)
+        app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
+        app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",handle_n8n_expert_answer)
+
+        logger.info(f"🔗 Дополнительные маршруты n8n:")
+        logger.info(f"   - /n8n_hw_result")
+        logger.info(f"   - /n8n_hw_processing_error")
+        logger.info(f"   - /n8n_expert_answer_callback")
         
         # Запускаем веб-сервер
         runner = web.AppRunner(app)
@@ -6652,7 +6679,13 @@ async def main():
         await site.start()
         
         actual_host_log = WEBAPP_HOST_CONF if WEBAPP_HOST_CONF != "::" else "0.0.0.0"
-        logger.info(f"Bot webhook server started on {actual_host_log}, port {WEBAPP_PORT_CONF}. Listening on path: {final_webhook_path_for_aiohttp}")
+        logger.info("=" * 60)
+        logger.info("✅ БОТ УСПЕШНО ЗАПУЩЕН")
+        logger.info("=" * 60)
+        logger.info(f"🌐 Сервер: {actual_host_log}:{WEBAPP_PORT_CONF}")
+        logger.info(f"🔗 Webhook path: {final_webhook_path_for_aiohttp}")
+        logger.info(f"🔑 Secret token: {'установлен' if WEBHOOK_SECRET_TOKEN_CONF else 'отсутствует'}")
+        logger.info("=" * 60)
         
         # Ожидаем прерывания
         try:
@@ -6662,45 +6695,13 @@ async def main():
             logger.info("Webhook server stopped")
     else:
         # Polling режим
-        logger.info("Starting bot in polling mode...")
+        logger.info("=" * 60)
+        logger.info("✅ БОТ УСПЕШНО ЗАПУЩЕН В РЕЖИМЕ POLLING")
+        logger.info("=" * 60)
         await dp.start_polling(
             bot,
             handle_signals=False
         )
-
-    # >>> НАЧАЛО НОВОГО БЛОКА - РЕГИСТРАЦИЯ МАРШРУТОВ ДЛЯ N8N CALLBACKS <<<
-    # Используем WEBHOOK_PATH_CONF как базовый путь, к которому добавляем специфичные эндпоинты для n8n
-    # Убедитесь, что эти пути не конфликтуют с final_webhook_path_for_aiohttp
-
-    # Путь для результатов проверки ДЗ
-    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result", handle_n8n_hw_approval)
-    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
-    app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",handle_n8n_expert_answer)
-
-    logger.info(f"Зарегистрированы дополнительные маршруты для n8n callbacks на базе {WEBHOOK_PATH_CONF.rstrip('/')}:")
-    logger.info(f" - /n8n_hw_result")
-    logger.info(f" - /n8n_hw_processing_error")
-    logger.info(f" - /n8n_expert_answer_callback")
-    # >>> КОНЕЦ НОВОГО БЛОКА <<<
-
-
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host=WEBAPP_HOST_CONF, port=WEBAPP_PORT_CONF)
-
-    try:
-        await site.start()
-        actual_host_log = "всех интерфейсах (IPv4/IPv6)" if WEBAPP_HOST_CONF in ('::', '0.0.0.0') else WEBAPP_HOST_CONF
-        logger.info(
-            f"Bot webhook server started on {actual_host_log}, port {WEBAPP_PORT_CONF}. Listening on path: {final_webhook_path_for_aiohttp}")
-        await asyncio.Event().wait() # Поддерживает работу приложения
-    except Exception as e5221:
-        logger.critical(f"Не удалось запустить веб-сервер: {e5221}", exc_info=True)
-    finally:
-        logger.info("Остановка веб-сервера...")
-        await runner.cleanup()
-        logger.info("Веб-сервер остановлен.")
 
 # ==========================================
 # ОБРАБОТЧИКИ ЗАГРУЗКИ КОНТЕНТА (content_uploader)
