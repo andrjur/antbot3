@@ -126,7 +126,7 @@ async def test_db():
             old_value TEXT,
             new_value TEXT,
             details TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     

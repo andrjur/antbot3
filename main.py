@@ -1152,7 +1152,7 @@ async def init_db():
                     course_type TEXT DEFAULT 'LESSON_BASED', -- или  бывает (новые) `TASK_BASED`.
                     message_interval REAL NOT NULL DEFAULT 24,
                     description TEXT COLLATE NOCASE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             await conn.commit()
@@ -1166,7 +1166,7 @@ async def init_db():
                 lesson_num INTEGER NOT NULL,
                 message_id INTEGER NOT NULL,
                 approved_by INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 FOREIGN KEY (course_id) REFERENCES courses(course_id)
             )
@@ -1262,7 +1262,7 @@ async def init_db():
                     user_id INTEGER NOT NULL,
                     course_id TEXT,
                     review_text TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
             ''')
@@ -1292,7 +1292,7 @@ async def init_db():
                     course_numeric_id INTEGER NOT NULL,
                     lesson_num INTEGER NOT NULL,
                     student_message_id INTEGER,           -- ID исходного сообщения студента с ДЗ (опционально, но полезно)
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (student_user_id) REFERENCES users(user_id),
                     FOREIGN KEY (course_numeric_id) REFERENCES courses(id) -- или courses(course_id) если id числовой
                 )
@@ -2918,7 +2918,7 @@ async def process_homework_command(
                     """SELECT admin_message_id, student_user_id, course_numeric_id, lesson_num
                        FROM pending_admin_homework
                        WHERE admin_chat_id = ? 
-                       ORDER BY created_at DESC 
+                       ORDER BY admin_message_id DESC 
                        LIMIT 1""",
                     (message.chat.id,)
                 )
@@ -3945,10 +3945,10 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             # Убедитесь, что таблица course_reviews существует
-            # CREATE TABLE IF NOT EXISTS course_reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, course_id TEXT, review_text TEXT, created_at TIMESTAMP);
+            # CREATE TABLE IF NOT EXISTS course_reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, course_id TEXT, review_text TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
             await conn.execute(
-                "INSERT INTO course_reviews (user_id, course_id, review_text, created_at) VALUES (?, ?, ?, ?)",
-                (user_id, course_id_for_review, review_text_raw, datetime.now(pytz.utc))
+                "INSERT INTO course_reviews (user_id, course_id, review_text) VALUES (?, ?, ?)",
+                (user_id, course_id_for_review, review_text_raw)
             )
             await conn.commit()
         await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хотите пройти!"),

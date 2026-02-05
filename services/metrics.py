@@ -206,7 +206,7 @@ async def update_active_users_metric(db_file):
             # За 24 часа
             day_ago = (now - timedelta(days=1)).isoformat()
             cursor = await conn.execute(
-                "SELECT COUNT(DISTINCT user_id) FROM user_actions_log WHERE created_at > ?",
+                "SELECT COUNT(DISTINCT user_id) FROM user_actions_log WHERE timestamp > ?",
                 (day_ago,)
             )
             result = await cursor.fetchone()
@@ -215,7 +215,7 @@ async def update_active_users_metric(db_file):
             # За 7 дней
             week_ago = (now - timedelta(days=7)).isoformat()
             cursor = await conn.execute(
-                "SELECT COUNT(DISTINCT user_id) FROM user_actions_log WHERE created_at > ?",
+                "SELECT COUNT(DISTINCT user_id) FROM user_actions_log WHERE timestamp > ?",
                 (week_ago,)
             )
             result = await cursor.fetchone()
@@ -224,7 +224,7 @@ async def update_active_users_metric(db_file):
             # За 30 дней
             month_ago = (now - timedelta(days=30)).isoformat()
             cursor = await conn.execute(
-                "SELECT COUNT(DISTINCT user_id) FROM user_actions_log WHERE created_at > ?",
+                "SELECT COUNT(DISTINCT user_id) FROM user_actions_log WHERE timestamp > ?",
                 (month_ago,)
             )
             result = await cursor.fetchone()
