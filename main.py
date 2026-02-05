@@ -30,6 +30,12 @@ from services.metrics import (
 from services.monitoring import setup_metrics_endpoints
 from services.health import health_check_endpoint, liveness_probe, readiness_probe
 
+# ---- ИМПОРТ ДЛЯ ЗАГРУЗКИ КОНТЕНТА ----
+try:
+    import content_uploader
+except Exception as e:
+    logging.warning(f"Не удалось загрузить content_uploader: {e}")
+
 
 # Для генерации подписи Robokassa (примерный, нужно проверить актуальность)
 #import decimal

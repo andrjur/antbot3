@@ -20,8 +20,8 @@ route:
 receivers:
   - name: 'telegram'
     telegram_configs:
-      - bot_token: '8058427977:AAHpR5i4uyk_rUQM1ZvAVZxZSwlVPFpEk6c'  # ALERT_BOT_TOKEN
-        chat_id: -1002591981307  # ADMIN_GROUP_ID
+      - bot_token: '${ALERT_BOT_TOKEN}'  # Установите в .env
+        chat_id: ${ADMIN_GROUP_ID}  # Установите в .env
         message: |
           {{ range .Alerts }}
           ⚠️ *{{ .Annotations.summary }}*
@@ -34,8 +34,8 @@ receivers:
 
   - name: 'telegram-critical'
     telegram_configs:
-      - bot_token: '8058427977:AAHpR5i4uyk_rUQM1ZvAVZxZSwlVPFpEk6c'  # ALERT_BOT_TOKEN
-        chat_id: -1002591981307  # ADMIN_GROUP_ID
+      - bot_token: '${ALERT_BOT_TOKEN}'  # Установите в .env
+        chat_id: ${ADMIN_GROUP_ID}  # Установите в .env
         message: |
           🚨 *КРИТИЧЕСКАЯ ОШИБКА*
           
@@ -50,8 +50,8 @@ receivers:
 
   - name: 'telegram-warning'
     telegram_configs:
-      - bot_token: '8058427977:AAHpR5i4uyk_rUQM1ZvAVZxZSwlVPFpEk6c'  # ALERT_BOT_TOKEN
-        chat_id: -1002591981307  # ADMIN_GROUP_ID
+      - bot_token: '${ALERT_BOT_TOKEN}'  # Установите в .env
+        chat_id: ${ADMIN_GROUP_ID}  # Установите в .env
         message: |
           ⚡ *Предупреждение*
           
