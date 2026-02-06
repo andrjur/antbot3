@@ -269,7 +269,8 @@ def get_metrics_response():
     from aiohttp import web
     return web.Response(
         body=generate_latest(),
-        content_type=CONTENT_TYPE_LATEST
+        content_type="text/plain",
+        charset="utf-8"
     )
 
 

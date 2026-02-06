@@ -2697,6 +2697,67 @@ async def import_db(message: types.Message):  # types.Message instead of Message
         await message.answer("❌ Произошла ошибка при импорте базы данных.", parse_mode=None)
 
 
+@dp.message(Command("add_course"), F.chat.id == ADMIN_GROUP_ID)
+@db_exception_handler
+async def cmd_add_course(message: types.Message, command: CommandObject):
+    """
+    Добавляет новый курс.
+    Формат: /add_course <group_id> <course_id> <code1> <code2> <code3>
+    Пример: /add_course -10012345678 python_start code123 code456 code789
+    """
+    global settings, COURSE_GROUPS
+    
+    if not command.args:
+        await message.answer(
+            "⚠️ Неверный формат.\n"
+            "Используйте: `/add_course <group_id> <course_id> <code1> <code2> <code3>`",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+
+    args = command.args.split()
+    if len(args) < 5:
+        await message.answer("⚠️ Недостаточно аргументов. Нужно указать ID группы, ID курса и 3 кода.", parse_mode=None)
+        return
+
+    group_id_str = args[0]
+    course_id = args[1]
+    code1 = args[2]
+    code2 = args[3]
+    code3 = args[4]
+
+    # Обновляем глобальные настройки в памяти
+    if "groups" not in settings:
+        settings["groups"] = {}
+    if "activation_codes" not in settings:
+        settings["activation_codes"] = {}
+        
+    settings["groups"][group_id_str] = course_id
+    
+    # Добавляем коды (по умолчанию ставим версии v1, v2, v3)
+    settings["activation_codes"][code1] = {"course": course_id, "version": "v1"}
+    settings["activation_codes"][code2] = {"course": course_id, "version": "v2"}
+    settings["activation_codes"][code3] = {"course": course_id, "version": "v3"}
+
+    # Сохраняем в БД и обновляем COURSE_GROUPS
+    try:
+        await process_add_course_to_db(course_id, group_id_str, code1, code2, code3)
+        
+        # Добавляем группу в список разрешенных
+        group_id_int = int(group_id_str)
+        if group_id_int not in COURSE_GROUPS:
+            COURSE_GROUPS.append(group_id_int)
+        
+        await message.answer(
+            f"✅ Курс *{escape_md(course_id)}* успешно добавлен\\!\n"
+            f"Группа: `{escape_md(group_id_str)}`\n"
+            f"Коды: `{escape_md(code1)}`, `{escape_md(code2)}`, `{escape_md(code3)}`",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Админ добавил курс {course_id} через команду /add_course.")
+    except Exception as e:
+        logger.error(f"Ошибка при выполнении команды /add_course: {e}")
+        await message.answer("❌ Произошла ошибка при добавлении курса. Проверьте логи.", parse_mode=None)
 
 
 async def update_settings_file():
