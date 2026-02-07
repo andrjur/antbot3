@@ -5678,7 +5678,9 @@ async def handle_text(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is not None:
         logger.info(f"handle_text: пропускаем, есть активное состояние FSM: {current_state}")
-        return  # Пропускаем, пусть сработает FSM-обработчик
+        # Используем continue_propagation чтобы пропустить другим обработчикам
+        from aiogram.dispatcher.event.bases import UNHANDLED
+        return UNHANDLED
     
     user_id = message.from_user.id
     text = message.text.strip()
@@ -5687,7 +5689,8 @@ async def handle_text(message: types.Message, state: FSMContext):
     # Игнорируем команды (они должны обрабатываться другими обработчиками)
     if text.startswith('/'):
         logger.info(f"handle_text: игнорируем команду {text}")
-        return
+        from aiogram.dispatcher.event.bases import UNHANDLED
+        return UNHANDLED
 
     if text == "/cancel":
         await message.reply("Действие отменено.", parse_mode=None)
@@ -6482,7 +6485,9 @@ async def handle_user_content(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is not None:
         logger.info(f"handle_user_content: пропускаем, есть активное состояние FSM: {current_state}")
-        return  # Пропускаем, пусть сработает FSM-обработчик
+        # Используем continue_propagation чтобы пропустить другим обработчикам
+        from aiogram.dispatcher.event.bases import UNHANDLED
+        return UNHANDLED
     
     user_id = message.from_user.id
     try:
