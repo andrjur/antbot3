@@ -6788,33 +6788,48 @@ class UploadLesson(StatesGroup):
 @dp.message(Command("upload_lesson"))
 async def cmd_upload_lesson(message: types.Message, state: FSMContext):
     """Начало загрузки урока"""
-    if message.from_user.id not in ADMIN_IDS_CONF:
+    # Загружаем админов из .env прямо здесь
+    admin_ids_str = os.getenv("ADMIN_IDS", "")
+    admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
+    
+    if message.from_user.id not in admin_ids:
         await message.answer("❌ Эта команда только для администраторов.")
         return
     
+    # Получаем список курсов из настроек
+    courses_list = "\n".join([f"{i+1}. {course_id}" for i, course_id in enumerate(settings.get("groups", {}).values())])
+    
     await message.answer(
-        "📚 Загрузка урока\n\n"
-        "Выберите курс:\n"
-        "1. женственность15\n"
-        "2. база\n\n"
-        "Или введите ID курса:"
+        f"📚 Загрузка урока\n\n"
+        f"Выберите курс:\n"
+        f"{courses_list}\n\n"
+        f"Или введите ID курса:"
     )
     await state.set_state(UploadLesson.waiting_course)
 
 @dp.message(UploadLesson.waiting_course)
 async def process_course(message: types.Message, state: FSMContext):
     """Обработка выбора курса"""
-    course_map = {
-        "1": "женственность15",
-        "2": "база",
-        "женственность15": "женственность15",
-        "база": "база"
-    }
+    text = message.text.strip()
     
-    course_id = course_map.get(message.text.lower().strip())
-    if not course_id:
-        await message.answer("❌ Неизвестный курс. Введите 1, 2 или ID курса:")
-        return
+    # Получаем курсы из settings
+    available_courses = list(settings.get("groups", {}).values())
+    
+    # Проверяем если ввели номер
+    try:
+        idx = int(text) - 1
+        if 0 <= idx < len(available_courses):
+            course_id = available_courses[idx]
+        else:
+            await message.answer(f"❌ Номер курса должен быть от 1 до {len(available_courses)}:")
+            return
+    except ValueError:
+        # Проверяем если ввели ID курса напрямую
+        if text in available_courses:
+            course_id = text
+        else:
+            await message.answer(f"❌ Неизвестный курс. Доступные: {', '.join(available_courses)}")
+            return
     
     await state.update_data(course_id=course_id)
     await message.answer("🔢 Введите номер урока (например: 1, 2, 3...):")
