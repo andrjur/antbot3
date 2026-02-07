@@ -2777,10 +2777,10 @@ async def update_settings_file():
                 "activation_codes": {}
             }
 
-            cursor = await conn.execute("SELECT code_word, course_id, course_type FROM course_activation_codes")
+            cursor = await conn.execute("SELECT code_word, course_id, version_id FROM course_activation_codes")
             activation_codes = await cursor.fetchall()
-            for code_word, course_id, course_type in activation_codes:
-                settings["activation_codes"][code_word] = f"{course_id}:{course_type}"
+            for code_word, course_id, version_id in activation_codes:
+                settings["activation_codes"][code_word] = f"{course_id}:{version_id}"
 
             with open("settings.json", "w") as f:
                 json.dump(settings, f, indent=4)
@@ -5676,6 +5676,11 @@ async def handle_text(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     text = message.text.strip()
     logger.info(f"handle_text: {text=} {user_id=}")
+
+    # Игнорируем команды (они должны обрабатываться другими обработчиками)
+    if text.startswith('/'):
+        logger.info(f"handle_text: игнорируем команду {text}")
+        return
 
     if text == "/cancel":
         await message.reply("Действие отменено.", parse_mode=None)
