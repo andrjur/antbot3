@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 from aiogram.exceptions import TelegramBadRequest
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F, md
-from aiogram.filters import Command, CommandStart, BaseFilter, CommandObject
+from aiogram.filters import Command, CommandStart, BaseFilter, CommandObject, StateFilter
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery, ForceReply
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -1858,12 +1858,13 @@ async def _handle_missing_lesson_content(user_id: int, course_id: str, lesson_nu
         f"⚠️ Контент для урока {lesson_num} не найден в курсе {course_id}, "
         f"хотя такой номер урока допустим (всего {total_lessons} уроков)."
     )
-    course_title_safe = escape_md(await get_course_title(course_id))
+    # ИСПРАВЛЕНИЕ: Убрали MarkdownV2, чтобы избежать ошибки с точками
+    course_title_safe = await get_course_title(course_id)
     await bot.send_message(
         user_id,
         f"Извините, урок №{lesson_num} для курса «{course_title_safe}» временно недоступен или еще не был добавлен. "
         f"Пожалуйста, попробуйте позже или свяжитесь с поддержкой.",
-        parse_mode=ParseMode.MARKDOWN_V2  # Текст формируется безопасно
+        parse_mode=None
     )
 
 async def scheduled_lesson_check(user_id: int):
@@ -5667,7 +5668,7 @@ async def handle_support_message(message: types.Message, state: FSMContext):
 
 # =========================== теперь всё остальное
 
-@dp.message(F.text, check_state)
+@dp.message(F.text, StateFilter(None))  # Работает только если нет активного FSM состояния
 @db_exception_handler
 async def handle_text(message: types.Message, state: FSMContext):
     """
@@ -6468,7 +6469,7 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
 
 
 #  Обработчик входящего контента от пользователя
-@dp.message(F.photo | F.video | F.document | F.text)
+@dp.message(F.photo | F.video | F.document | F.text, StateFilter(None))  # Работает только если нет активного FSM состояния
 async def handle_user_content(message: types.Message):
     """Обработчик пользовательского контента для ДЗ"""
     user_id = message.from_user.id
