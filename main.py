@@ -5668,12 +5668,18 @@ async def handle_support_message(message: types.Message, state: FSMContext):
 
 # =========================== теперь всё остальное
 
-@dp.message(F.text, StateFilter(None))  # Работает только если нет активного FSM состояния
+@dp.message(F.text)
 @db_exception_handler
 async def handle_text(message: types.Message, state: FSMContext):
     """
     Минималистичный обработчик текста. Проверяет курс и передаёт дальше.
     """
+    # Проверяем, есть ли активное FSM состояние
+    current_state = await state.get_state()
+    if current_state is not None:
+        logger.info(f"handle_text: пропускаем, есть активное состояние FSM: {current_state}")
+        return  # Пропускаем, пусть сработает FSM-обработчик
+    
     user_id = message.from_user.id
     text = message.text.strip()
     logger.info(f"handle_text: {text=} {user_id=}")
@@ -6469,9 +6475,15 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
 
 
 #  Обработчик входящего контента от пользователя
-@dp.message(F.photo | F.video | F.document | F.text, StateFilter(None))  # Работает только если нет активного FSM состояния
-async def handle_user_content(message: types.Message):
+@dp.message(F.photo | F.video | F.document | F.text)
+async def handle_user_content(message: types.Message, state: FSMContext):
     """Обработчик пользовательского контента для ДЗ"""
+    # Проверяем, есть ли активное FSM состояние
+    current_state = await state.get_state()
+    if current_state is not None:
+        logger.info(f"handle_user_content: пропускаем, есть активное состояние FSM: {current_state}")
+        return  # Пропускаем, пусть сработает FSM-обработчик
+    
     user_id = message.from_user.id
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
