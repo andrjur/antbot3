@@ -2765,6 +2765,33 @@ async def cmd_add_course(message: types.Message, command: CommandObject):
         await message.answer("❌ Произошла ошибка при добавлении курса. Проверьте логи.", parse_mode=None)
 
 
+@dp.message(Command("admin_reset"))
+async def cmd_admin_reset(message: types.Message, state: FSMContext):
+    """
+    Полностью удаляет прогресс пользователя из базы.
+    Используйте это, чтобы бот перестал слать уроки админу.
+    """
+    user_id = message.from_user.id
+    
+    # Сначала жестко сбрасываем любые диалоги
+    await state.clear()
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Удаляем записи о прохождении курсов
+            await conn.execute("DELETE FROM user_courses WHERE user_id = ?", (user_id,))
+            # Удаляем задачи планировщика (если есть в памяти)
+            await stop_lesson_schedule_task(user_id)
+            await conn.commit()
+            
+        logger.info(f"Админ {user_id} сбросил свой статус студента.")
+        await message.answer("✅ Я забыл, что вы студент. Больше никаких уведомлений и уроков. Только админка.", parse_mode=None)
+        
+    except Exception as e:
+        logger.error(f"Ошибка admin_reset: {e}")
+        await message.answer(f"Ошибка сброса: {e}")
+
+
 async def update_settings_file():
     """Обновляет файл settings.json с информацией о курсах."""
     try:
@@ -6803,26 +6830,41 @@ class UploadLesson(StatesGroup):
     waiting_level = State()
     waiting_content = State()
 
-@dp.message(Command("upload_lesson"))
+# StateFilter("*") означает "Ловить эту команду в ЛЮБОМ состоянии"
+@dp.message(Command("upload_lesson"), StateFilter("*"))
 async def cmd_upload_lesson(message: types.Message, state: FSMContext):
-    """Начало загрузки урока"""
-    # Загружаем админов из .env прямо здесь
+    """
+    Начало загрузки урока.
+    Принудительно прерывает любые другие процессы.
+    """
+    # 1. Сразу сбрасываем всё, что было до этого
+    await state.clear()
+
+    # Проверка на админа
     admin_ids_str = os.getenv("ADMIN_IDS", "")
-    admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
-    
+    # Делаем список админов надежно
+    try:
+        admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
+    except:
+        admin_ids = []
+
     if message.from_user.id not in admin_ids:
-        await message.answer("❌ Эта команда только для администраторов.")
+        # Игнорируем не-админов молча или шлем лесом
         return
-    
-    # Получаем список курсов из настроек
-    courses_list = "\n".join([f"{i+1}. {course_id}" for i, course_id in enumerate(settings.get("groups", {}).values())])
-    
+
+    # Получаем список курсов
+    courses_list_str = "Нет доступных курсов."
+    if settings.get("groups"):
+        courses_list_str = "\n".join([f"{i+1}. {c_id}" for i, c_id in enumerate(settings["groups"].values())])
+
     await message.answer(
-        f"📚 Загрузка урока\n\n"
-        f"Выберите курс:\n"
-        f"{courses_list}\n\n"
-        f"Или введите ID курса:"
+        f"🛠 **РЕЖИМ ЗАГРУЗКИ**\n\n"
+        f"Доступные курсы:\n{courses_list_str}\n\n"
+        f"👇 Введите **ID курса** или его **номер** из списка:",
+        parse_mode="Markdown"
     )
+
+    # Переводим в состояние ожидания курса
     await state.set_state(UploadLesson.waiting_course)
 
 @dp.message(UploadLesson.waiting_course)
