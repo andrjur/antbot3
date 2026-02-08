@@ -2792,6 +2792,232 @@ async def cmd_admin_reset(message: types.Message, state: FSMContext):
         await message.answer(f"Ошибка сброса: {e}")
 
 
+# =========================== ЗАГРУЗКА УРОКОВ (UPLOAD LESSON) ===========================
+
+class UploadLesson(StatesGroup):
+    """FSM для загрузки урока"""
+    waiting_course = State()
+    waiting_lesson_num = State()
+    waiting_level = State()
+    waiting_content = State()
+
+# StateFilter("*") означает "Ловить эту команду в ЛЮБОМ состоянии"
+@dp.message(Command("upload_lesson"), StateFilter("*"))
+async def cmd_upload_lesson(message: types.Message, state: FSMContext):
+    """
+    Начало загрузки урока.
+    Принудительно прерывает любые другие процессы.
+    """
+    # 1. Сразу сбрасываем всё, что было до этого
+    await state.clear()
+
+    # Проверка на админа
+    admin_ids_str = os.getenv("ADMIN_IDS", "")
+    # Делаем список админов надежно
+    try:
+        admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
+    except:
+        admin_ids = []
+
+    if message.from_user.id not in admin_ids:
+        # Игнорируем не-админов молча или шлем лесом
+        return
+
+    # Получаем список курсов
+    courses_list_str = "Нет доступных курсов."
+    if settings.get("groups"):
+        courses_list_str = "\n".join([f"{i+1}. {c_id}" for i, c_id in enumerate(settings["groups"].values())])
+
+    await message.answer(
+        f"🛠 **РЕЖИМ ЗАГРУЗКИ**\n\n"
+        f"Доступные курсы:\n{courses_list_str}\n\n"
+        f"👇 Введите **ID курса** или его **номер** из списка:",
+        parse_mode="Markdown"
+    )
+
+    # Переводим в состояние ожидания курса
+    await state.set_state(UploadLesson.waiting_course)
+
+@dp.message(UploadLesson.waiting_course)
+async def process_course(message: types.Message, state: FSMContext):
+    """Обработка выбора курса"""
+    text = message.text.strip()
+    
+    # Получаем курсы из settings
+    available_courses = list(settings.get("groups", {}).values())
+    
+    # Проверяем если ввели номер
+    try:
+        idx = int(text) - 1
+        if 0 <= idx < len(available_courses):
+            course_id = available_courses[idx]
+        else:
+            await message.answer(f"❌ Номер курса должен быть от 1 до {len(available_courses)}:")
+            return
+    except ValueError:
+        # Проверяем если ввели ID курса напрямую
+        if text in available_courses:
+            course_id = text
+        else:
+            await message.answer(f"❌ Неизвестный курс. Доступные: {', '.join(available_courses)}")
+            return
+    
+    await state.update_data(course_id=course_id)
+    await message.answer("🔢 Введите номер урока (например: 1, 2, 3...):")
+    await state.set_state(UploadLesson.waiting_lesson_num)
+
+@dp.message(UploadLesson.waiting_lesson_num)
+async def process_lesson_num(message: types.Message, state: FSMContext):
+    """Обработка номера урока"""
+    try:
+        lesson_num = int(message.text.strip())
+        if lesson_num < 1:
+            await message.answer("❌ Номер урока должен быть больше 0.")
+            return
+    except ValueError:
+        await message.answer("❌ Введите число.")
+        return
+    
+    await state.update_data(lesson_num=lesson_num)
+    await message.answer(
+        "🎯 Введите уровень сложности:\n"
+        "1 - Базовый\n"
+        "2 - Средний\n"
+        "3 - Продвинутый"
+    )
+    await state.set_state(UploadLesson.waiting_level)
+
+@dp.message(UploadLesson.waiting_level)
+async def process_level(message: types.Message, state: FSMContext):
+    """Обработка уровня"""
+    try:
+        level = int(message.text.strip())
+        if level not in [1, 2, 3]:
+            await message.answer("❌ Уровень должен быть 1, 2 или 3.")
+            return
+    except ValueError:
+        await message.answer("❌ Введите число 1, 2 или 3.")
+        return
+    
+    await state.update_data(level=level)
+    await message.answer(
+        "📝 Отправьте контент урока:\n\n"
+        "Можно отправить:\n"
+        "• Текст\n"
+        "• Фото (с подписью)\n"
+        "• Видео (с подписью)\n"
+        "• Документ\n\n"
+        "Для домашнего задания добавьте #hw в подписи к файлу."
+    )
+    await state.set_state(UploadLesson.waiting_content)
+
+@dp.message(UploadLesson.waiting_content, F.content_type.in_({'text', 'photo', 'video', 'document'}))
+async def process_content(message: types.Message, state: FSMContext):
+    """Обработка контента урока"""
+    data = await state.get_data()
+    course_id = data['course_id']
+    lesson_num = data['lesson_num']
+    level = data['level']
+    
+    content_type = message.content_type
+    text = message.caption or message.text or ""
+    file_id = None
+    
+    is_homework = '#hw' in text
+    hw_type = None
+    
+    if is_homework:
+        if '#type_photo' in text:
+            hw_type = 'photo'
+        elif '#type_video' in text:
+            hw_type = 'video'
+        elif '#type_file' in text:
+            hw_type = 'file'
+        else:
+            hw_type = 'text'
+        
+        import re
+        text = re.sub(r'#hw|#type_\w+', '', text).strip()
+    
+    if content_type == 'photo':
+        file_id = message.photo[-1].file_id
+    elif content_type == 'video':
+        file_id = message.video.file_id
+    elif content_type == 'document':
+        file_id = message.document.file_id
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute('''
+                INSERT INTO group_messages 
+                (group_id, lesson_num, course_id, content_type, is_homework, hw_type, text, file_id, level)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                f'direct_upload_{message.from_user.id}',
+                lesson_num,
+                course_id,
+                content_type,
+                is_homework,
+                hw_type,
+                text,
+                file_id,
+                level
+            ))
+            await conn.commit()
+        
+        hw_status = "✅ Да" if is_homework else "❌ Нет"
+        await message.answer(
+            f"✅ Урок успешно загружен!\n\n"
+            f"📚 Курс: {course_id}\n"
+            f"🔢 Урок: {lesson_num}\n"
+            f"🎯 Уровень: {level}\n"
+            f"📝 Тип: {content_type}\n"
+            f"🏠 ДЗ: {hw_status}\n\n"
+            f"Отправьте ещё контент или /cancel для выхода."
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка загрузки урока: {e}")
+        await message.answer(f"❌ Ошибка при сохранении: {e}")
+
+@dp.message(Command("list_lessons"))
+async def cmd_list_lessons(message: types.Message):
+    """Показать список загруженных уроков"""
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        await message.answer("❌ Только для администраторов.")
+        return
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute('''
+                SELECT course_id, lesson_num, content_type, is_homework, level 
+                FROM group_messages 
+                WHERE group_id LIKE 'direct_upload_%'
+                ORDER BY course_id, lesson_num
+            ''')
+            rows = await cursor.fetchall()
+            
+            if not rows:
+                await message.answer("📭 Пока нет загруженных уроков.")
+                return
+            
+            result = "📚 Загруженные уроки:\n\n"
+            for row in rows:
+                course_id, lesson_num, content_type, is_homework, level = row
+                hw_marker = " 🏠" if is_homework else ""
+                result += f"• {course_id} - Урок {lesson_num}{hw_marker}\n"
+            
+            await message.answer(result)
+            
+    except Exception as e:
+        logger.error(f"Ошибка получения списка: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+logger.info("✅ Обработчики загрузки контента зарегистрированы")
+
+# =========================== КОНЕЦ ЗАГРУЗКИ УРОКОВ ===========================
+
+
 async def update_settings_file():
     """Обновляет файл settings.json с информацией о курсах."""
     try:
@@ -5779,7 +6005,7 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 
 
 # ----------------- новый обработчик и текстовой домашки и фото -------- от пользователя ------------
-@dp.message(F.content_type.in_({'photo', 'document', 'text'}), F.chat.type == "private")
+@dp.message(F.content_type.in_({'photo', 'document', 'text'}), F.chat.type == "private", ~F.text.startswith('/'))
 @db_exception_handler
 async def handle_homework(message: types.Message):
     """Обрабатывает отправку домашних заданий (фото/документы/текст)"""
@@ -6810,232 +7036,6 @@ async def main():
         )
 
 # ==========================================
-# ОБРАБОТЧИКИ ЗАГРУЗКИ КОНТЕНТА (content_uploader)
-# ==========================================
-
-class UploadLesson(StatesGroup):
-    """FSM для загрузки урока"""
-    waiting_course = State()
-    waiting_lesson_num = State()
-    waiting_level = State()
-    waiting_content = State()
-
-# StateFilter("*") означает "Ловить эту команду в ЛЮБОМ состоянии"
-@dp.message(Command("upload_lesson"), StateFilter("*"))
-async def cmd_upload_lesson(message: types.Message, state: FSMContext):
-    """
-    Начало загрузки урока.
-    Принудительно прерывает любые другие процессы.
-    """
-    # 1. Сразу сбрасываем всё, что было до этого
-    await state.clear()
-
-    # Проверка на админа
-    admin_ids_str = os.getenv("ADMIN_IDS", "")
-    # Делаем список админов надежно
-    try:
-        admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
-    except:
-        admin_ids = []
-
-    if message.from_user.id not in admin_ids:
-        # Игнорируем не-админов молча или шлем лесом
-        return
-
-    # Получаем список курсов
-    courses_list_str = "Нет доступных курсов."
-    if settings.get("groups"):
-        courses_list_str = "\n".join([f"{i+1}. {c_id}" for i, c_id in enumerate(settings["groups"].values())])
-
-    await message.answer(
-        f"🛠 **РЕЖИМ ЗАГРУЗКИ**\n\n"
-        f"Доступные курсы:\n{courses_list_str}\n\n"
-        f"👇 Введите **ID курса** или его **номер** из списка:",
-        parse_mode="Markdown"
-    )
-
-    # Переводим в состояние ожидания курса
-    await state.set_state(UploadLesson.waiting_course)
-
-@dp.message(UploadLesson.waiting_course)
-async def process_course(message: types.Message, state: FSMContext):
-    """Обработка выбора курса"""
-    text = message.text.strip()
-    
-    # Получаем курсы из settings
-    available_courses = list(settings.get("groups", {}).values())
-    
-    # Проверяем если ввели номер
-    try:
-        idx = int(text) - 1
-        if 0 <= idx < len(available_courses):
-            course_id = available_courses[idx]
-        else:
-            await message.answer(f"❌ Номер курса должен быть от 1 до {len(available_courses)}:")
-            return
-    except ValueError:
-        # Проверяем если ввели ID курса напрямую
-        if text in available_courses:
-            course_id = text
-        else:
-            await message.answer(f"❌ Неизвестный курс. Доступные: {', '.join(available_courses)}")
-            return
-    
-    await state.update_data(course_id=course_id)
-    await message.answer("🔢 Введите номер урока (например: 1, 2, 3...):")
-    await state.set_state(UploadLesson.waiting_lesson_num)
-
-@dp.message(UploadLesson.waiting_lesson_num)
-async def process_lesson_num(message: types.Message, state: FSMContext):
-    """Обработка номера урока"""
-    try:
-        lesson_num = int(message.text.strip())
-        if lesson_num < 1:
-            await message.answer("❌ Номер урока должен быть больше 0.")
-            return
-    except ValueError:
-        await message.answer("❌ Введите число.")
-        return
-    
-    await state.update_data(lesson_num=lesson_num)
-    await message.answer(
-        "🎯 Введите уровень сложности:\n"
-        "1 - Базовый\n"
-        "2 - Средний\n"
-        "3 - Продвинутый"
-    )
-    await state.set_state(UploadLesson.waiting_level)
-
-@dp.message(UploadLesson.waiting_level)
-async def process_level(message: types.Message, state: FSMContext):
-    """Обработка уровня"""
-    try:
-        level = int(message.text.strip())
-        if level not in [1, 2, 3]:
-            await message.answer("❌ Уровень должен быть 1, 2 или 3.")
-            return
-    except ValueError:
-        await message.answer("❌ Введите число 1, 2 или 3.")
-        return
-    
-    await state.update_data(level=level)
-    await message.answer(
-        "📝 Отправьте контент урока:\n\n"
-        "Можно отправить:\n"
-        "• Текст\n"
-        "• Фото (с подписью)\n"
-        "• Видео (с подписью)\n"
-        "• Документ\n\n"
-        "Для домашнего задания добавьте #hw в подписи к файлу."
-    )
-    await state.set_state(UploadLesson.waiting_content)
-
-@dp.message(UploadLesson.waiting_content, F.content_type.in_({'text', 'photo', 'video', 'document'}))
-async def process_content(message: types.Message, state: FSMContext):
-    """Обработка контента урока"""
-    data = await state.get_data()
-    course_id = data['course_id']
-    lesson_num = data['lesson_num']
-    level = data['level']
-    
-    content_type = message.content_type
-    text = message.caption or message.text or ""
-    file_id = None
-    
-    is_homework = '#hw' in text
-    hw_type = None
-    
-    if is_homework:
-        if '#type_photo' in text:
-            hw_type = 'photo'
-        elif '#type_video' in text:
-            hw_type = 'video'
-        elif '#type_file' in text:
-            hw_type = 'file'
-        else:
-            hw_type = 'text'
-        
-        import re
-        text = re.sub(r'#hw|#type_\w+', '', text).strip()
-    
-    if content_type == 'photo':
-        file_id = message.photo[-1].file_id
-    elif content_type == 'video':
-        file_id = message.video.file_id
-    elif content_type == 'document':
-        file_id = message.document.file_id
-    
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute('''
-                INSERT INTO group_messages 
-                (group_id, lesson_num, course_id, content_type, is_homework, hw_type, text, file_id, level)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                f'direct_upload_{message.from_user.id}',
-                lesson_num,
-                course_id,
-                content_type,
-                is_homework,
-                hw_type,
-                text,
-                file_id,
-                level
-            ))
-            await conn.commit()
-        
-        hw_status = "✅ Да" if is_homework else "❌ Нет"
-        await message.answer(
-            f"✅ Урок успешно загружен!\n\n"
-            f"📚 Курс: {course_id}\n"
-            f"🔢 Урок: {lesson_num}\n"
-            f"🎯 Уровень: {level}\n"
-            f"📝 Тип: {content_type}\n"
-            f"🏠 ДЗ: {hw_status}\n\n"
-            f"Отправьте ещё контент или /cancel для выхода."
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка загрузки урока: {e}")
-        await message.answer(f"❌ Ошибка при сохранении: {e}")
-
-@dp.message(Command("list_lessons"))
-async def cmd_list_lessons(message: types.Message):
-    """Показать список загруженных уроков"""
-    if message.from_user.id not in ADMIN_IDS_CONF:
-        await message.answer("❌ Только для администраторов.")
-        return
-    
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute('''
-                SELECT course_id, lesson_num, content_type, is_homework, level 
-                FROM group_messages 
-                WHERE group_id LIKE 'direct_upload_%'
-                ORDER BY course_id, lesson_num
-            ''')
-            rows = await cursor.fetchall()
-            
-            if not rows:
-                await message.answer("📭 Пока нет загруженных уроков.")
-                return
-            
-            result = "📚 Загруженные уроки:\n\n"
-            for row in rows:
-                course_id, lesson_num, content_type, is_homework, level = row
-                hw_marker = " 🏠" if is_homework else ""
-                result += f"• {course_id} - Урок {lesson_num}{hw_marker}\n"
-            
-            await message.answer(result)
-            
-    except Exception as e:
-        logger.error(f"Ошибка получения списка: {e}")
-        await message.answer(f"❌ Ошибка: {e}")
-
-logger.info("✅ Обработчики загрузки контента зарегистрированы")
-
-# ==========================================
-
 if __name__ == "__main__":
     # setup_logging() # Уже вызывается в начале main
     try:
