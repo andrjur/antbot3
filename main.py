@@ -2698,7 +2698,7 @@ async def import_db(message: types.Message):  # types.Message instead of Message
         await message.answer("❌ Произошла ошибка при импорте базы данных.", parse_mode=None)
 
 
-@dp.message(Command("add_course"), F.chat.id == ADMIN_GROUP_ID)
+@dp.message(Command("add_course"), F.from_user.id.in_(ADMIN_IDS_CONF))
 async def cmd_add_course(message: types.Message, command: CommandObject):
     """
     Добавляет новый курс.
