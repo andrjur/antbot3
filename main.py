@@ -5695,7 +5695,7 @@ async def handle_support_message(message: types.Message, state: FSMContext):
 
 # =========================== теперь всё остальное
 
-@dp.message(F.text)
+@dp.message(F.text, ~F.text.startswith('/'))  # Игнорируем команды (они обрабатываются отдельно)
 @db_exception_handler
 async def handle_text(message: types.Message, state: FSMContext):
     """
@@ -5712,16 +5712,6 @@ async def handle_text(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     text = message.text.strip()
     logger.info(f"handle_text: {text=} {user_id=}")
-
-    # Игнорируем команды (они должны обрабатываться другими обработчиками)
-    if text.startswith('/'):
-        logger.info(f"handle_text: игнорируем команду {text}")
-        from aiogram.dispatcher.event.bases import UNHANDLED
-        return UNHANDLED
-
-    if text == "/cancel":
-        await message.reply("Действие отменено.", parse_mode=None)
-        return
 
     async with aiosqlite.connect(DB_FILE) as conn:
         cursor = await conn.execute(
@@ -6401,7 +6391,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 f"Не удалось отправить даже fallback сообщение об ошибке меню пользователю {user_id}: {e_fallback}")
 
 # Обработчик последний - чтобы не мешал другим обработчикам работать. Порядок имеет значение
-@dp.message(F.text)  # Фильтр только для текстовых сообщений
+@dp.message(F.text, ~F.text.startswith('/'))  # Игнорируем команды
 async def handle_activation_code(message: types.Message): # handle_activation_code process_message
     """Проверяет код активации и выдаёт уроки, если всё окей"""
     user_id = message.from_user.id
@@ -6505,7 +6495,7 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
 
 
 #  Обработчик входящего контента от пользователя
-@dp.message(F.photo | F.video | F.document | F.text)
+@dp.message(F.photo | F.video | F.document | (F.text & ~F.text.startswith('/')))
 async def handle_user_content(message: types.Message, state: FSMContext):
     """Обработчик пользовательского контента для ДЗ"""
     # Проверяем, есть ли активное FSM состояние
