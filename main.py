@@ -2698,13 +2698,17 @@ async def import_db(message: types.Message):  # types.Message instead of Message
         await message.answer("❌ Произошла ошибка при импорте базы данных.", parse_mode=None)
 
 
-@dp.message(Command("add_course"), F.from_user.id.in_(ADMIN_IDS_CONF))
+@dp.message(Command("add_course"))
 async def cmd_add_course(message: types.Message, command: CommandObject):
     """
     Добавляет новый курс.
     Формат: /add_course <group_id> <course_id> <code1> <code2> <code3>
     Пример: /add_course -10012345678 python_start code1 code2 code3
     """
+    # Проверка админа (внутри функции, а не в декораторе)
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        return
+    
     if not command.args:
         await message.answer(
             "⚠️ Неверный формат.\n"
