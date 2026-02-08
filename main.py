@@ -282,6 +282,13 @@ class SelectNewTariffToUpgradeCallback(CallbackData, prefix="sel_tariff_upg"):
     # Для кнопки достаточно знать, на какой тариф переходим.
 
 
+class UploadLessonAction(CallbackData, prefix="upload_lesson"):
+    """Callback для действий при загрузке уроков"""
+    action: str  # "more" - ещё контент, "next" - следующий урок, "done" - завершить
+    course_id: str
+    lesson_num: int
+
+
 class RepeatLessonForm(StatesGroup):
     waiting_for_lesson_number_to_repeat = State()
 
@@ -2959,6 +2966,27 @@ async def process_content(message: types.Message, state: FSMContext):
         
         hw_status = "✅ Да" if is_homework else "❌ Нет"
         level_info = f"🎯 Уровень: {level}\n" if level > 1 else ""
+        
+        # Создаем inline-клавиатуру для следующих действий
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📎 Добавить ещё",
+                    callback_data=UploadLessonAction(action="more", course_id=course_id, lesson_num=lesson_num).pack()
+                ),
+                InlineKeyboardButton(
+                    text="📚 Следующий урок",
+                    callback_data=UploadLessonAction(action="next", course_id=course_id, lesson_num=lesson_num).pack()
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Завершить",
+                    callback_data=UploadLessonAction(action="done", course_id=course_id, lesson_num=lesson_num).pack()
+                )
+            ]
+        ])
+        
         await message.answer(
             f"✅ Урок успешно загружен!\n\n"
             f"📚 Курс: {course_id}\n"
@@ -2966,12 +2994,55 @@ async def process_content(message: types.Message, state: FSMContext):
             f"{level_info}"
             f"📝 Тип: {content_type}\n"
             f"🏠 ДЗ: {hw_status}\n\n"
-            f"Отправьте ещё контент или /cancel для выхода."
+            f"Выберите действие:",
+            reply_markup=keyboard
         )
         
     except Exception as e:
         logger.error(f"Ошибка загрузки урока: {e}")
         await message.answer(f"❌ Ошибка при сохранении: {e}")
+
+@dp.callback_query(UploadLessonAction.filter())
+async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: UploadLessonAction, state: FSMContext):
+    """Обработка действий после загрузки урока"""
+    action = callback_data.action
+    course_id = callback_data.course_id
+    lesson_num = callback_data.lesson_num
+    
+    if action == "more":
+        # Остаемся в том же состоянии, можно добавлять ещё контент
+        await callback.message.edit_text(
+            f"📎 Добавьте ещё контент к уроку {lesson_num} курса {course_id}\n\n"
+            f"Можно отправить: текст, фото, видео, документ"
+        )
+        await state.set_state(UploadLesson.waiting_content)
+        
+    elif action == "next":
+        # Переходим к следующему уроку
+        next_lesson = lesson_num + 1
+        await state.update_data(course_id=course_id, lesson_num=next_lesson)
+        await callback.message.edit_text(
+            f"📚 Курс: {course_id}\n"
+            f"🔢 Урок: {next_lesson}\n\n"
+            f"📝 Отправьте контент урока:\n"
+            f"• Текст\n"
+            f"• Фото (с подписью)\n"
+            f"• Видео (с подписью)\n"
+            f"• Документ\n\n"
+            f"Для домашнего задания добавьте #hw в подписи к файлу.\n\n"
+            f"💡 Для уровня 2 или 3 добавьте *LEVEL 2 или *LEVEL 3 в начало текста"
+        )
+        await state.set_state(UploadLesson.waiting_content)
+        
+    elif action == "done":
+        # Завершаем загрузку
+        await state.clear()
+        await callback.message.edit_text(
+            "✅ Загрузка уроков завершена!\n\n"
+            "Для загрузки новых уроков используйте /upload_lesson"
+        )
+    
+    await callback.answer()
 
 @dp.message(Command("list_lessons"))
 async def cmd_list_lessons(message: types.Message):
