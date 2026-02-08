@@ -2881,7 +2881,7 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
         await message.answer("❌ Введите число.")
         return
     
-    await state.update_data(lesson_num=lesson_num, level=1)  # Уровень всегда 1 (единый)
+    await state.update_data(lesson_num=lesson_num)
     await message.answer(
         "📝 Отправьте контент урока:\n\n"
         "Можно отправить:\n"
@@ -2889,21 +2889,31 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
         "• Фото (с подписью)\n"
         "• Видео (с подписью)\n"
         "• Документ\n\n"
-        "Для домашнего задания добавьте #hw в подписи к файлу."
+        "Для домашнего задания добавьте #hw в подписи к файлу.\n\n"
+        "💡 Для уровня 2 или 3 добавьте *LEVEL 2 или *LEVEL 3 в начало текста"
     )
     await state.set_state(UploadLesson.waiting_content)
 
 @dp.message(UploadLesson.waiting_content, F.content_type.in_({'text', 'photo', 'video', 'document'}))
 async def process_content(message: types.Message, state: FSMContext):
     """Обработка контента урока"""
+    import re
+    
     data = await state.get_data()
     course_id = data['course_id']
     lesson_num = data['lesson_num']
-    level = data['level']
     
     content_type = message.content_type
     text = message.caption or message.text or ""
     file_id = None
+    
+    # Парсим уровень из текста (*LEVEL X), по умолчанию 1
+    level = 1
+    level_match = re.search(r"\*LEVEL (\d+)", text)
+    if level_match:
+        level = int(level_match.group(1))
+        # Удаляем тег из текста перед сохранением
+        text = re.sub(r"\*LEVEL (\d+)", "", text).strip()
     
     is_homework = '#hw' in text
     hw_type = None
@@ -2918,7 +2928,6 @@ async def process_content(message: types.Message, state: FSMContext):
         else:
             hw_type = 'text'
         
-        import re
         text = re.sub(r'#hw|#type_\w+', '', text).strip()
     
     if content_type == 'photo':
@@ -2949,10 +2958,12 @@ async def process_content(message: types.Message, state: FSMContext):
             await conn.commit()
         
         hw_status = "✅ Да" if is_homework else "❌ Нет"
+        level_info = f"🎯 Уровень: {level}\n" if level > 1 else ""
         await message.answer(
             f"✅ Урок успешно загружен!\n\n"
             f"📚 Курс: {course_id}\n"
             f"🔢 Урок: {lesson_num}\n"
+            f"{level_info}"
             f"📝 Тип: {content_type}\n"
             f"🏠 ДЗ: {hw_status}\n\n"
             f"Отправьте ещё контент или /cancel для выхода."
