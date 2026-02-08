@@ -2706,74 +2706,170 @@ async def import_db(message: types.Message):  # types.Message instead of Message
 
 
 @dp.message(Command("add_course"))
-async def cmd_add_course(message: types.Message, command: CommandObject):
+async def cmd_add_course(message: types.Message, state: FSMContext):
     """
-    Добавляет новый курс.
-    Формат: /add_course <group_id> <course_id> <code1> <code2> <code3>
-    Пример: /add_course -10012345678 python_start code1 code2 code3
+    Интерактивное добавление нового курса через FSM.
     """
-    # Проверка админа (внутри функции, а не в декораторе)
+    # Проверка админа
     if message.from_user.id not in ADMIN_IDS_CONF:
         return
     
-    if not command.args:
-        await message.answer(
-            "⚠️ Неверный формат.\n"
-            "Используйте: `/add_course <group_id> <course_id> <code1> <code2> <code3>`",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return
+    await state.set_state(AddCourseFSM.waiting_group_id)
+    await message.answer(
+        "🆕 Создание нового курса\n\n"
+        "Шаг 1/6: Введите ID группы Telegram\n"
+        "Пример: `-1001234567890`\n\n"
+        "💡 Чтобы узнать ID группы:\n"
+        "1. Добавьте бота @getidsbot в группу\n"
+        "2. Он покажет ID (начинается с -100)"
+    )
 
-    args = command.args.split()
-    if len(args) < 5:
-        await message.answer("⚠️ Недостаточно аргументов. Нужно указать ID группы, ID курса и 3 кода.", parse_mode=None)
-        return
 
-    # Очистка ID группы от лишних тире и пробелов
-    raw_group_id = args[0].strip()
-    # Если начинается с нескольких тире, оставляем одно
+@dp.message(AddCourseFSM.waiting_group_id)
+async def process_course_group_id(message: types.Message, state: FSMContext):
+    """Обработка ID группы"""
+    raw_group_id = message.text.strip()
+    
+    # Очистка ID группы
     if raw_group_id.startswith("--"):
         raw_group_id = "-" + raw_group_id.lstrip("-")
     
-    group_id_str = raw_group_id
-    course_id = args[1]
-    code1 = args[2]
-    code2 = args[3]
-    code3 = args[4]
-
-    # Обновляем глобальные настройки в памяти
-    global settings
-    settings["groups"][group_id_str] = course_id
+    await state.update_data(group_id=raw_group_id)
+    await state.set_state(AddCourseFSM.waiting_course_id)
     
-    # Добавляем коды с обязательным полем price
-    # v1 - Solo, v2 - Group, v3 - VIP (как пример)
+    await message.answer(
+        "Шаг 2/6: Введите ID курса\n"
+        "Примеры: `python_base`, `design_pro`, `sprint2`\n\n"
+        "💡 Используйте только латинские буквы, цифры и _"
+    )
+
+
+@dp.message(AddCourseFSM.waiting_course_id)
+async def process_course_id(message: types.Message, state: FSMContext):
+    """Обработка ID курса"""
+    course_id = message.text.strip().lower()
+    
+    await state.update_data(course_id=course_id)
+    await state.set_state(AddCourseFSM.waiting_description)
+    
+    await message.answer(
+        "Шаг 3/6: Введите описание курса\n\n"
+        "Это описание будет показываться студентам при активации.\n"
+        "Можно использовать Markdown (*жирный*, _курсив_)\n\n"
+        "💡 Чтобы пропустить, отправьте \"-\""
+    )
+
+
+@dp.message(AddCourseFSM.waiting_description)
+async def process_course_description(message: types.Message, state: FSMContext):
+    """Обработка описания курса"""
+    description = message.text.strip()
+    
+    if description == "-":
+        description = ""
+    
+    await state.update_data(description=description)
+    await state.set_state(AddCourseFSM.waiting_code1)
+    
+    await message.answer(
+        "Шаг 4/6: Введите код активации для тарифа v1 (Соло)\n"
+        "Пример: `solo2024`, `base_v1`\n\n"
+        "💡 Этот код даст доступ к базовому тарифу без проверки ДЗ"
+    )
+
+
+@dp.message(AddCourseFSM.waiting_code1)
+async def process_course_code1(message: types.Message, state: FSMContext):
+    """Обработка кода 1"""
+    code1 = message.text.strip()
+    
+    await state.update_data(code1=code1)
+    await state.set_state(AddCourseFSM.waiting_code2)
+    
+    await message.answer(
+        "Шаг 5/6: Введите код активации для тарифа v2 (с проверкой)\n"
+        "Пример: `pro2024`, `base_v2`\n\n"
+        "💡 Этот код даст доступ с проверкой домашних заданий"
+    )
+
+
+@dp.message(AddCourseFSM.waiting_code2)
+async def process_course_code2(message: types.Message, state: FSMContext):
+    """Обработка кода 2"""
+    code2 = message.text.strip()
+    
+    await state.update_data(code2=code2)
+    await state.set_state(AddCourseFSM.waiting_code3)
+    
+    await message.answer(
+        "Шаг 6/6: Введите код активации для тарифа v3 (Премиум)\n"
+        "Пример: `vip2024`, `base_v3`\n\n"
+        "💡 Этот код даст доступ к премиум тарифу"
+    )
+
+
+@dp.message(AddCourseFSM.waiting_code3)
+async def process_course_code3(message: types.Message, state: FSMContext):
+    """Обработка кода 3 и сохранение курса"""
+    code3 = message.text.strip()
+    
+    # Получаем все данные
+    data = await state.get_data()
+    group_id = data['group_id']
+    course_id = data['course_id']
+    description = data.get('description', '')
+    code1 = data['code1']
+    code2 = data['code2']
+    
+    # Обновляем глобальные настройки
+    global settings
+    settings["groups"][group_id] = course_id
+    
+    # Добавляем коды активации
     settings["activation_codes"][code1] = {"course": course_id, "version": "v1", "price": 0}
     settings["activation_codes"][code2] = {"course": course_id, "version": "v2", "price": 0}
     settings["activation_codes"][code3] = {"course": course_id, "version": "v3", "price": 0}
-
-    # Сохраняем в БД и обновляем settings.json
+    
+    # Сохраняем описание курса если есть
+    if description:
+        if "course_descriptions" not in settings:
+            settings["course_descriptions"] = {}
+        settings["course_descriptions"][course_id] = description
+    
+    # Сохраняем в БД
     try:
-        await process_add_course_to_db(course_id, group_id_str, code1, code2, code3)
+        await process_add_course_to_db(course_id, group_id, code1, code2, code3)
         
-        # Безопасное добавление в список разрешенных групп
+        # Добавляем в список разрешенных групп
         try:
-            group_id_int = int(group_id_str)
+            group_id_int = int(group_id)
             if group_id_int not in COURSE_GROUPS:
                 COURSE_GROUPS.append(group_id_int)
         except ValueError:
-            await message.answer(f"⚠️ Курс добавлен, но ID группы '{group_id_str}' некорректный (не число). Бот может не видеть сообщения оттуда.")
-            return
-
-        await message.answer(
-            f"✅ Курс *{escape_md(course_id)}* успешно добавлен\\!\n"
-            f"Группа: `{escape_md(group_id_str)}`\n"
-            f"Коды: `{escape_md(code1)}`, `{escape_md(code2)}`, `{escape_md(code3)}`",
-            parse_mode=ParseMode.MARKDOWN_V2
+            pass
+        
+        # Формируем сообщение с результатом
+        result_msg = (
+            f"✅ Курс *{escape_md(course_id)}* успешно создан!\n\n"
+            f"📍 Группа: `{escape_md(group_id)}`\n"
+            f"🔑 Коды активации:\n"
+            f"  • v1 (Соло): `{escape_md(code1)}`\n"
+            f"  • v2 (Проверка): `{escape_md(code2)}`\n"
+            f"  • v3 (Премиум): `{escape_md(code3)}`"
         )
-        logger.info(f"Админ добавил курс {course_id} через команду.")
+        
+        if description:
+            result_msg += f"\n\n📝 Описание: {description[:100]}{'...' if len(description) > 100 else ''}"
+        
+        await message.answer(result_msg, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Админ создал курс {course_id} с описанием через FSM")
+        
     except Exception as e:
-        logger.error(f"Ошибка при выполнении команды /add_course: {e}", exc_info=True)
-        await message.answer("❌ Произошла ошибка при добавлении курса. Проверьте логи.", parse_mode=None)
+        logger.error(f"Ошибка при создании курса: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка при создании курса: {e}")
+    
+    finally:
+        await state.clear()
 
 
 @dp.message(Command("admin_reset"))
@@ -2810,6 +2906,17 @@ class UploadLesson(StatesGroup):
     waiting_course = State()
     waiting_lesson_num = State()
     waiting_content = State()
+
+
+class AddCourseFSM(StatesGroup):
+    """FSM для добавления нового курса"""
+    waiting_group_id = State()
+    waiting_course_id = State()
+    waiting_description = State()
+    waiting_code1 = State()
+    waiting_code2 = State()
+    waiting_code3 = State()
+
 
 # StateFilter("*") означает "Ловить эту команду в ЛЮБОМ состоянии"
 @dp.message(Command("upload_lesson"), StateFilter("*"))
@@ -2896,10 +3003,10 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
         "• Фото (с подписью)\n"
         "• Видео (с подписью)\n"
         "• Документ\n\n"
-        "Для домашнего задания добавьте #hw в подписи к файлу.\n\n"
-        "💡 Теги для настройки:\n"
-        "• *LEVEL 2 или *LEVEL 3 - уровень сложности\n"
-        "• *HW_TYPE photo/text/video/file - тип ответа на ДЗ"
+        "Для домашнего задания добавьте #hw или *hw в подписи к файлу.\n\n"
+        "💡 Теги для настройки (работают # и *):\n"
+        "• #LEVEL 2 / *LEVEL 2 - уровень сложности\n"
+        "• #HW_TYPE photo / *HW_TYPE photo - тип ответа на ДЗ"
     )
     await state.set_state(UploadLesson.waiting_content)
 
@@ -2916,36 +3023,35 @@ async def process_content(message: types.Message, state: FSMContext):
     text = message.caption or message.text or ""
     file_id = None
     
-    # Парсим уровень из текста (*LEVEL X), по умолчанию 1
+    # Парсим уровень из текста (*LEVEL X или #LEVEL X), по умолчанию 1
     level = 1
-    level_match = re.search(r"\*LEVEL (\d+)", text)
+    level_match = re.search(r"[*#]LEVEL\s*(\d+)", text, re.IGNORECASE)
     if level_match:
         level = int(level_match.group(1))
         # Удаляем тег из текста перед сохранением
-        text = re.sub(r"\*LEVEL (\d+)", "", text).strip()
+        text = re.sub(r"[*#]LEVEL\s*\d+", "", text, flags=re.IGNORECASE).strip()
     
-    # Парсим тип домашнего задания (*HW_TYPE), по умолчанию определяется по контенту
+    # Парсим тип домашнего задания (*HW_TYPE или #HW_TYPE)
     hw_type = None
-    hw_type_match = re.search(r"\*HW_TYPE\s*(\w+)", text)
+    hw_type_match = re.search(r"[*#]HW_TYPE\s*(\w+)", text, re.IGNORECASE)
     if hw_type_match:
         hw_type = hw_type_match.group(1).lower()
         # Удаляем тег из текста перед сохранением
-        text = re.sub(r"\*HW_TYPE\s*(\w+)", "", text).strip()
+        text = re.sub(r"[*#]HW_TYPE\s*\w+", "", text, flags=re.IGNORECASE).strip()
     
-    is_homework = '#hw' in text
+    # Парсим маркер домашнего задания (#hw или *hw)
+    is_homework = re.search(r"[*#]hw", text, re.IGNORECASE) is not None
     
     if is_homework:
-        if not hw_type:  # Если не задан через *HW_TYPE
-            if '#type_photo' in text:
-                hw_type = 'photo'
-            elif '#type_video' in text:
-                hw_type = 'video'
-            elif '#type_file' in text:
-                hw_type = 'file'
+        if not hw_type:  # Если не задан через *HW_TYPE или #HW_TYPE
+            type_match = re.search(r"[*#]type_(\w+)", text, re.IGNORECASE)
+            if type_match:
+                hw_type = type_match.group(1).lower()
             else:
                 hw_type = 'text'
         
-        text = re.sub(r'#hw|#type_\w+', '', text).strip()
+        # Удаляем все теги ДЗ из текста
+        text = re.sub(r"[*#]hw|[*#]type_\w+", "", text, flags=re.IGNORECASE).strip()
     
     if content_type == 'photo':
         file_id = message.photo[-1].file_id
@@ -3039,10 +3145,10 @@ async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: Up
             f"• Фото (с подписью)\n"
             f"• Видео (с подписью)\n"
             f"• Документ\n\n"
-            f"Для домашнего задания добавьте #hw в подписи к файлу.\n\n"
-            f"💡 Теги для настройки:\n"
-            f"• *LEVEL 2 или *LEVEL 3 - уровень сложности\n"
-            f"• *HW_TYPE photo/text/video/file - тип ответа на ДЗ"
+            f"Для домашнего задания добавьте #hw или *hw в подписи к файлу.\n\n"
+            f"💡 Теги для настройки (работают # и *):\n"
+            f"• #LEVEL 2 / *LEVEL 2 - уровень сложности\n"
+            f"• #HW_TYPE photo / *HW_TYPE photo - тип ответа на ДЗ"
         )
         await state.set_state(UploadLesson.waiting_content)
         
