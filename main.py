@@ -2897,7 +2897,9 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
         "• Видео (с подписью)\n"
         "• Документ\n\n"
         "Для домашнего задания добавьте #hw в подписи к файлу.\n\n"
-        "💡 Для уровня 2 или 3 добавьте *LEVEL 2 или *LEVEL 3 в начало текста"
+        "💡 Теги для настройки:\n"
+        "• *LEVEL 2 или *LEVEL 3 - уровень сложности\n"
+        "• *HW_TYPE photo/text/video/file - тип ответа на ДЗ"
     )
     await state.set_state(UploadLesson.waiting_content)
 
@@ -2922,18 +2924,26 @@ async def process_content(message: types.Message, state: FSMContext):
         # Удаляем тег из текста перед сохранением
         text = re.sub(r"\*LEVEL (\d+)", "", text).strip()
     
-    is_homework = '#hw' in text
+    # Парсим тип домашнего задания (*HW_TYPE), по умолчанию определяется по контенту
     hw_type = None
+    hw_type_match = re.search(r"\*HW_TYPE\s*(\w+)", text)
+    if hw_type_match:
+        hw_type = hw_type_match.group(1).lower()
+        # Удаляем тег из текста перед сохранением
+        text = re.sub(r"\*HW_TYPE\s*(\w+)", "", text).strip()
+    
+    is_homework = '#hw' in text
     
     if is_homework:
-        if '#type_photo' in text:
-            hw_type = 'photo'
-        elif '#type_video' in text:
-            hw_type = 'video'
-        elif '#type_file' in text:
-            hw_type = 'file'
-        else:
-            hw_type = 'text'
+        if not hw_type:  # Если не задан через *HW_TYPE
+            if '#type_photo' in text:
+                hw_type = 'photo'
+            elif '#type_video' in text:
+                hw_type = 'video'
+            elif '#type_file' in text:
+                hw_type = 'file'
+            else:
+                hw_type = 'text'
         
         text = re.sub(r'#hw|#type_\w+', '', text).strip()
     
@@ -3030,7 +3040,9 @@ async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: Up
             f"• Видео (с подписью)\n"
             f"• Документ\n\n"
             f"Для домашнего задания добавьте #hw в подписи к файлу.\n\n"
-            f"💡 Для уровня 2 или 3 добавьте *LEVEL 2 или *LEVEL 3 в начало текста"
+            f"💡 Теги для настройки:\n"
+            f"• *LEVEL 2 или *LEVEL 3 - уровень сложности\n"
+            f"• *HW_TYPE photo/text/video/file - тип ответа на ДЗ"
         )
         await state.set_state(UploadLesson.waiting_content)
         
