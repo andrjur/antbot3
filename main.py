@@ -2802,7 +2802,6 @@ class UploadLesson(StatesGroup):
     """FSM для загрузки урока"""
     waiting_course = State()
     waiting_lesson_num = State()
-    waiting_level = State()
     waiting_content = State()
 
 # StateFilter("*") означает "Ловить эту команду в ЛЮБОМ состоянии"
@@ -2882,28 +2881,7 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
         await message.answer("❌ Введите число.")
         return
     
-    await state.update_data(lesson_num=lesson_num)
-    await message.answer(
-        "🎯 Введите уровень сложности:\n"
-        "1 - Базовый\n"
-        "2 - Средний\n"
-        "3 - Продвинутый"
-    )
-    await state.set_state(UploadLesson.waiting_level)
-
-@dp.message(UploadLesson.waiting_level)
-async def process_level(message: types.Message, state: FSMContext):
-    """Обработка уровня"""
-    try:
-        level = int(message.text.strip())
-        if level not in [1, 2, 3]:
-            await message.answer("❌ Уровень должен быть 1, 2 или 3.")
-            return
-    except ValueError:
-        await message.answer("❌ Введите число 1, 2 или 3.")
-        return
-    
-    await state.update_data(level=level)
+    await state.update_data(lesson_num=lesson_num, level=1)  # Уровень всегда 1 (единый)
     await message.answer(
         "📝 Отправьте контент урока:\n\n"
         "Можно отправить:\n"
@@ -2954,8 +2932,8 @@ async def process_content(message: types.Message, state: FSMContext):
         async with aiosqlite.connect(DB_FILE) as conn:
             await conn.execute('''
                 INSERT INTO group_messages 
-                (group_id, lesson_num, course_id, content_type, is_homework, hw_type, text, file_id, level)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (group_id, lesson_num, course_id, content_type, is_homework, hw_type, text, file_id, level, message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 f'direct_upload_{message.from_user.id}',
                 lesson_num,
@@ -2965,7 +2943,8 @@ async def process_content(message: types.Message, state: FSMContext):
                 hw_type,
                 text,
                 file_id,
-                level
+                level,
+                message.message_id
             ))
             await conn.commit()
         
@@ -2974,7 +2953,6 @@ async def process_content(message: types.Message, state: FSMContext):
             f"✅ Урок успешно загружен!\n\n"
             f"📚 Курс: {course_id}\n"
             f"🔢 Урок: {lesson_num}\n"
-            f"🎯 Уровень: {level}\n"
             f"📝 Тип: {content_type}\n"
             f"🏠 ДЗ: {hw_status}\n\n"
             f"Отправьте ещё контент или /cancel для выхода."
