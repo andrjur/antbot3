@@ -1140,6 +1140,10 @@ async def process_add_course_to_db(course_id, group_id, code1, code2, code3):
 async def backup_settings_file():
     """Создает бэкап файла settings.json."""
     try:
+        if not os.path.isfile("settings.json"):
+            logger.warning("⚠️ settings.json не существует или является директорией, пропускаю бэкап")
+            return
+
         timestamp = datetime.now(pytz.utc).strftime("%Y-%m-%d_%H-%M-%S")
         backup_file = f"settings_{timestamp}.json"
         shutil.copy("settings.json", backup_file)
@@ -3546,6 +3550,15 @@ logger.info("✅ Обработчики загрузки контента зар
 async def update_settings_file():
     """Обновляет файл settings.json с информацией о курсах."""
     try:
+        # Проверяем что settings.json не является директорией
+        if os.path.isdir("settings.json"):
+            logger.warning("⚠️ settings.json существует как директория, удаляю...")
+            try:
+                shutil.rmtree("settings.json")
+                logger.info("✅ Директория settings.json удалена")
+            except Exception as e_cleanup:
+                logger.error(f"❌ Ошибка при удалении директории settings.json: {e_cleanup}")
+
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute("SELECT course_id, group_id FROM courses")
             courses = await cursor.fetchall()
@@ -3553,8 +3566,9 @@ async def update_settings_file():
             # Загружаем текущие настройки чтобы сохранить message_interval и другие поля
             current_settings = {}
             try:
-                with open("settings.json", "r", encoding="utf-8") as f:
-                    current_settings = json.load(f)
+                if os.path.isfile("settings.json"):
+                    with open("settings.json", "r", encoding="utf-8") as f:
+                        current_settings = json.load(f)
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
 
