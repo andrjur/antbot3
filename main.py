@@ -3049,11 +3049,11 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     
     summary += (
         f"\n🔑 Коды активации:\n"
-        f"  • v1 (Соло): `{escape_md(code1)}`\n"
-        f"  • v2 (Проверка): `{escape_md(code2)}`\n"
-        f"  • v3 (Премиум): `{escape_md(code3)}`\n\n"
-        f"💾 Будет сохранено в settings.json\n\n"
-        f"*Создать курс?* (да/нет)"
+        f"  • v1 \(Соло\): `{escape_md(code1)}`\n"
+        f"  • v2 \(Проверка\): `{escape_md(code2)}`\n"
+        f"  • v3 \(Премиум\): `{escape_md(code3)}`\n\n"
+        f"💾 Будет сохранено в settings\.json\n\n"
+        f"*Создать курс?* \(да/нет\)"
     )
     
     await state.set_state(AddCourseFSM.waiting_confirmation)
