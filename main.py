@@ -4317,26 +4317,34 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
             current_course = await cursor.fetchone()
             logger.info(f"cmd_start: current_course = {current_course}")
 
-            # Если у пользователя нет активного курса, предлагаем активировать
+            # Если у пользователя нет активного курса
             if not current_course:
-                logger.info(f"cmd_start: No active course found for {user_id}, asking for activation code")
-                await message.answer(escape_md("❌ Нет активных курсов. Активируйте курс через код"), parse_mode="MarkdownV2")
-
-                try:
-                    if not os.path.exists("ask_parol.jpg"):
-                        raise FileNotFoundError("Файл ask_parol.jpg не найден")
-
-                    # InputFile должен принимать путь к файлу, а не открытый файл
-                    await bot.send_photo(
-                        chat_id=user_id,
-                        photo=types.FSInputFile("ask_parol.jpg")  # Используем FSInputFile для файловой системы
+                # Проверяем, является ли пользователь админом
+                if user_id in ADMIN_IDS_CONF:
+                    logger.info(f"cmd_start: Admin {user_id} has no active course, showing admin menu")
+                    await message.answer(
+                        escape_md("👑 Вы администратор бота.\n\nУ вас нет активных курсов. Если нужно активировать курс для тестирования, используйте код активации."),
+                        parse_mode="MarkdownV2"
                     )
-                except FileNotFoundError as fnf_error:
-                    logger.error(f"Файл не найден: {fnf_error}")
-                    await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
-                except Exception as e2875:
-                    logger.error(f"Ошибка при отправке фото: {e2875}", exc_info=True)
-                    await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
+                else:
+                    logger.info(f"cmd_start: No active course found for {user_id}, asking for activation code")
+                    await message.answer(escape_md("❌ Нет активных курсов. Активируйте курс через код"), parse_mode="MarkdownV2")
+
+                    try:
+                        if not os.path.exists("ask_parol.jpg"):
+                            raise FileNotFoundError("Файл ask_parol.jpg не найден")
+
+                        # InputFile должен принимать путь к файлу, а не открытый файл
+                        await bot.send_photo(
+                            chat_id=user_id,
+                            photo=types.FSInputFile("ask_parol.jpg")  # Используем FSInputFile для файловой системы
+                        )
+                    except FileNotFoundError as fnf_error:
+                        logger.error(f"Файл не найден: {fnf_error}")
+                        await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
+                    except Exception as e2875:
+                        logger.error(f"Ошибка при отправке фото: {e2875}", exc_info=True)
+                        await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
 
                 return
 
@@ -7468,7 +7476,7 @@ async def main():
     dp.shutdown.register(on_shutdown)
 
     if use_webhook:
-        app = web.Application()
+        app = web.Application(access_log=None)
 
         # Формируем финальный путь для регистрации в aiohttp
         final_webhook_path_for_aiohttp = f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}" #01-07
