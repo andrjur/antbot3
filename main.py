@@ -7476,7 +7476,7 @@ async def main():
     dp.shutdown.register(on_shutdown)
 
     if use_webhook:
-        app = web.Application(access_log=None)
+        app = web.Application()
 
         # Формируем финальный путь для регистрации в aiohttp
         final_webhook_path_for_aiohttp = f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}" #01-07
@@ -7513,8 +7513,8 @@ async def main():
         logger.info(f"   - /n8n_hw_processing_error")
         logger.info(f"   - /n8n_expert_answer_callback")
         
-        # Запускаем веб-сервер
-        runner = web.AppRunner(app)
+        # Запускаем веб-сервер (без access-логов)
+        runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, host=WEBAPP_HOST_CONF, port=WEBAPP_PORT_CONF)
         await site.start()
