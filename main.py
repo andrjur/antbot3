@@ -2706,14 +2706,25 @@ async def import_db(message: types.Message):  # types.Message instead of Message
 
 
 @dp.message(Command("add_course"))
-async def cmd_add_course(message: types.Message, state: FSMContext):
+async def cmd_add_course(message: types.Message, state: FSMContext, command: CommandObject):
     """
-    Интерактивное добавление нового курса через FSM.
+    Добавление нового курса.
+    Поддерживает два режима:
+    - Старый формат: /add_course <group_id> <course_id> <code1> <code2> <code3>
+    - Новый FSM: /add_course (без аргументов) - пошаговое создание
     """
     # Проверка админа
     if message.from_user.id not in ADMIN_IDS_CONF:
         return
     
+    # Проверяем старый формат (с аргументами)
+    if command.args:
+        args = command.args.split()
+        if len(args) >= 5:
+            # Старый формат - быстрое создание
+            return await create_course_old_format(message, args)
+    
+    # Новый FSM формат
     await state.set_state(AddCourseFSM.waiting_group_id)
     await message.answer(
         "🆕 Создание нового курса\n\n"
@@ -2721,8 +2732,64 @@ async def cmd_add_course(message: types.Message, state: FSMContext):
         "Пример: `-1001234567890`\n\n"
         "💡 Чтобы узнать ID группы:\n"
         "1. Добавьте бота @getidsbot в группу\n"
-        "2. Он покажет ID (начинается с -100)"
+        "2. Он покажет ID (начинается с -100)\n\n"
+        "💡 Для отмены отправьте /cancel"
     )
+
+
+async def create_course_old_format(message: types.Message, args: list):
+    """Быстрое создание курса в старом формате"""
+    # Очистка ID группы
+    raw_group_id = args[0].strip()
+    if raw_group_id.startswith("--"):
+        raw_group_id = "-" + raw_group_id.lstrip("-")
+    
+    group_id_str = raw_group_id
+    course_id = args[1]
+    code1, code2, code3 = args[2], args[3], args[4]
+    
+    # Проверка дубликатов
+    if course_id in settings.get("groups", {}).values():
+        await message.answer(f"❌ Курс `{course_id}` уже существует!", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+    
+    for code in [code1, code2, code3]:
+        if code in settings.get("activation_codes", {}):
+            await message.answer(f"❌ Код активации `{code}` уже используется!", parse_mode=ParseMode.MARKDOWN_V2)
+            return
+    
+    # Сохранение
+    settings["groups"][group_id_str] = course_id
+    settings["activation_codes"][code1] = {"course": course_id, "version": "v1", "price": 0}
+    settings["activation_codes"][code2] = {"course": course_id, "version": "v2", "price": 0}
+    settings["activation_codes"][code3] = {"course": course_id, "version": "v3", "price": 0}
+    
+    await process_add_course_to_db(course_id, group_id_str, code1, code2, code3)
+    
+    try:
+        group_id_int = int(group_id_str)
+        if group_id_int not in COURSE_GROUPS:
+            COURSE_GROUPS.append(group_id_int)
+    except ValueError:
+        pass
+    
+    # Сохраняем settings.json явно
+    await update_settings_file()
+    
+    await message.answer(
+        f"✅ Курс *{escape_md(course_id)}* создан (быстрый формат)!\n\n"
+        f"📍 Группа: `{escape_md(group_id_str)}`\n"
+        f"🔑 Коды: `{escape_md(code1)}`, `{escape_md(code2)}`, `{escape_md(code3)}`\n\n"
+        f"💾 Настройки сохранены в settings.json",
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+
+@dp.message(Command("cancel"), StateFilter(AddCourseFSM))
+async def cancel_add_course(message: types.Message, state: FSMContext):
+    """Отмена создания курса"""
+    await state.clear()
+    await message.answer("❌ Создание курса отменено. Данные не сохранены.")
 
 
 @dp.message(AddCourseFSM.waiting_group_id)
@@ -2811,6 +2878,8 @@ async def process_course_code2(message: types.Message, state: FSMContext):
 @dp.message(AddCourseFSM.waiting_code3)
 async def process_course_code3(message: types.Message, state: FSMContext):
     """Обработка кода 3 и сохранение курса"""
+    global settings
+    
     code3 = message.text.strip()
     
     # Получаем все данные
@@ -2821,8 +2890,27 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     code1 = data['code1']
     code2 = data['code2']
     
+    # Проверка дубликатов
+    if course_id in settings.get("groups", {}).values():
+        await message.answer(
+            f"❌ Курс `{escape_md(course_id)}` уже существует!\n\n"
+            f"Создание отменено. Используйте /add_course для создания нового курса.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        await state.clear()
+        return
+    
+    for code in [code1, code2, code3]:
+        if code in settings.get("activation_codes", {}):
+            await message.answer(
+                f"❌ Код активации `{escape_md(code)}` уже используется!\n\n"
+                f"Создание отменено. Используйте /add_course для создания нового курса.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            await state.clear()
+            return
+    
     # Обновляем глобальные настройки
-    global settings
     settings["groups"][group_id] = course_id
     
     # Добавляем коды активации
@@ -2840,6 +2928,9 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     try:
         await process_add_course_to_db(course_id, group_id, code1, code2, code3)
         
+        # Явно сохраняем settings.json
+        await update_settings_file()
+        
         # Добавляем в список разрешенных групп
         try:
             group_id_int = int(group_id)
@@ -2855,11 +2946,12 @@ async def process_course_code3(message: types.Message, state: FSMContext):
             f"🔑 Коды активации:\n"
             f"  • v1 (Соло): `{escape_md(code1)}`\n"
             f"  • v2 (Проверка): `{escape_md(code2)}`\n"
-            f"  • v3 (Премиум): `{escape_md(code3)}`"
+            f"  • v3 (Премиум): `{escape_md(code3)}`\n\n"
+            f"💾 Настройки сохранены в settings.json"
         )
         
         if description:
-            result_msg += f"\n\n📝 Описание: {description[:100]}{'...' if len(description) > 100 else ''}"
+            result_msg += f"\n📝 Описание: {description[:100]}{'...' if len(description) > 100 else ''}"
         
         await message.answer(result_msg, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"Админ создал курс {course_id} с описанием через FSM")
@@ -2870,6 +2962,59 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     
     finally:
         await state.clear()
+
+
+@dp.message(Command("edit_course_description"))
+async def cmd_edit_course_description(message: types.Message, command: CommandObject):
+    """
+    Редактирование описания существующего курса.
+    Формат: /edit_course_description <course_id> <новое_описание>
+    Пример: /edit_course_description sprint2 Новое описание курса
+    """
+    # Проверка админа
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        return
+    
+    if not command.args:
+        await message.answer(
+            "⚠️ Укажите ID курса и новое описание\n"
+            "Пример: `/edit_course_description sprint2 Новое описание`",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+    
+    args = command.args.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("⚠️ Нужно указать ID курса и новое описание", parse_mode=None)
+        return
+    
+    course_id = args[0].strip().lower()
+    new_description = args[1].strip()
+    
+    # Проверяем существование курса
+    if course_id not in settings.get("groups", {}).values():
+        await message.answer(
+            f"❌ Курс `{escape_md(course_id)}` не найден!",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+    
+    # Сохраняем описание
+    if "course_descriptions" not in settings:
+        settings["course_descriptions"] = {}
+    
+    settings["course_descriptions"][course_id] = new_description
+    
+    # Явно сохраняем settings.json
+    await update_settings_file()
+    
+    await message.answer(
+        f"✅ Описание курса `{escape_md(course_id)}` обновлено!\n\n"
+        f"📝 Новое описание: {new_description[:100]}{'...' if len(new_description) > 100 else ''}\n\n"
+        f"💾 Настройки сохранены в settings.json",
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    logger.info(f"Админ обновил описание курса {course_id}")
 
 
 @dp.message(Command("admin_reset"))
