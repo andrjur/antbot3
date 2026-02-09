@@ -403,7 +403,7 @@ async def populate_course_versions(settings):
                 if not existing_record:
                     # Get title and price from settings
                     version_title = settings["tariff_names"].get(version_id, "Базовый")
-                    version_price = data["price"]
+                    version_price = data.get("price", 0)
 
                     # Insert the record if it doesn't exist
                     await conn.execute("""
@@ -1124,7 +1124,7 @@ async def process_add_course_to_db(course_id, group_id, code1, code2, code3):
                         code,
                         code_info["course"],
                         code_info["version"],
-                        code_info["price"]
+                        code_info.get("price", 0)
                     ))
 
             await conn.commit()
@@ -3550,19 +3550,37 @@ async def update_settings_file():
             cursor = await conn.execute("SELECT course_id, group_id FROM courses")
             courses = await cursor.fetchall()
 
+            # Загружаем текущие настройки чтобы сохранить message_interval и другие поля
+            current_settings = {}
+            try:
+                with open("settings.json", "r", encoding="utf-8") as f:
+                    current_settings = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+
             settings = {
-                "message_interval": 24,
+                "message_interval": current_settings.get("message_interval", 12),
+                "tariff_names": current_settings.get("tariff_names", {
+                    "v1": "Соло",
+                    "v2": "с проверкой",
+                    "v3": "Премиум"
+                }),
                 "groups": {group_id: course_id for course_id, group_id in courses},
-                "activation_codes": {}
+                "activation_codes": {},
+                "course_descriptions": current_settings.get("course_descriptions", {})
             }
 
-            cursor = await conn.execute("SELECT code_word, course_id, version_id FROM course_activation_codes")
+            cursor = await conn.execute("SELECT code_word, course_id, version_id, price_rub FROM course_activation_codes")
             activation_codes = await cursor.fetchall()
-            for code_word, course_id, version_id in activation_codes:
-                settings["activation_codes"][code_word] = f"{course_id}:{version_id}"
+            for code_word, course_id, version_id, price_rub in activation_codes:
+                settings["activation_codes"][code_word] = {
+                    "course": course_id,
+                    "version": version_id,
+                    "price": price_rub if price_rub else 0
+                }
 
-            with open("settings.json", "w") as f:
-                json.dump(settings, f, indent=4)
+            with open("settings.json", "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=4)
 
             logger.info("Файл settings.json обновлен.")
 
