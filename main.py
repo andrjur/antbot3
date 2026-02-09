@@ -414,9 +414,42 @@ async def populate_course_versions(settings):
         logger.error(f"Ошибка при заполнении таблицы course_versions: {e265}")
 
 
+async def create_default_settings():
+    """Создает файл settings.json с настройками по умолчанию."""
+    default_settings = {
+        "message_interval": 24,
+        "tariff_names": {
+            "v1": "Соло",
+            "v2": "с проверкой",
+            "v3": "Премиум"
+        },
+        "groups": {},
+        "activation_codes": {},
+        "course_descriptions": {}
+    }
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(default_settings, f, ensure_ascii=False, indent=4)
+        logger.info(f"✅ Создан новый файл настроек: {SETTINGS_FILE}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании файла настроек: {e}")
+    return default_settings
+
+
 async def load_settings():
     """Загружает настройки из файла settings.json и заполняет таблицу course_versions."""
     logger.info(f"333444 load_settings ")
+    
+    # Проверяем, если settings.json существует как директория - удаляем её
+    if os.path.isdir(SETTINGS_FILE):
+        logger.warning(f"⚠️ {SETTINGS_FILE} существует как директория, удаляю...")
+        try:
+            import shutil
+            shutil.rmtree(SETTINGS_FILE)
+            logger.info(f"✅ Директория {SETTINGS_FILE} удалена")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при удалении директории {SETTINGS_FILE}: {e}")
+    
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -432,28 +465,19 @@ async def load_settings():
         except json.JSONDecodeError:
             logger.error("8889 Ошибка при декодировании JSON.")
             return {"groups": {}, "activation_codes": {}}
+        except IsADirectoryError:
+            logger.error(f"❌ {SETTINGS_FILE} является директорией, а не файлом!")
+            # Удаляем директорию и создаем заново
+            try:
+                import shutil
+                shutil.rmtree(SETTINGS_FILE)
+                logger.info(f"✅ Директория {SETTINGS_FILE} удалена")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при удалении директории: {e}")
+            return await create_default_settings()
     else:
         logger.warning(f"Файл настроек {SETTINGS_FILE} не найден, создаю новый с настройками по умолчанию.")
-        # Создаем дефолтные настройки
-        default_settings = {
-            "message_interval": 24,
-            "tariff_names": {
-                "v1": "Соло",
-                "v2": "с проверкой",
-                "v3": "Премиум"
-            },
-            "groups": {},
-            "activation_codes": {},
-            "course_descriptions": {}
-        }
-        # Сохраняем в файл
-        try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(default_settings, f, ensure_ascii=False, indent=4)
-            logger.info(f"✅ Создан новый файл настроек: {SETTINGS_FILE}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при создании файла настроек: {e}")
-        return default_settings
+        return await create_default_settings()
 
 settings=dict() # делаем глобальный пустой словарь
 
