@@ -440,17 +440,22 @@ async def load_settings():
     """Загружает настройки из файла settings.json и заполняет таблицу course_versions."""
     logger.info(f"333444 load_settings ")
     
-    # Проверяем, если settings.json существует как директория - удаляем её
+    # Если settings.json существует как директория - удаляем её и создаем файл
     if os.path.isdir(SETTINGS_FILE):
-        logger.warning(f"⚠️ {SETTINGS_FILE} существует как директория, удаляю...")
+        logger.warning(f"⚠️ {SETTINGS_FILE} существует как директория, удаляю и создаю файл...")
         try:
             import shutil
             shutil.rmtree(SETTINGS_FILE)
             logger.info(f"✅ Директория {SETTINGS_FILE} удалена")
+            # Сразу создаем дефолтный файл
+            return await create_default_settings()
         except Exception as e:
             logger.error(f"❌ Ошибка при удалении директории {SETTINGS_FILE}: {e}")
+            # Возвращаем дефолтные настройки даже если не удалось удалить
+            return await create_default_settings()
     
-    if os.path.exists(SETTINGS_FILE):
+    # Пробуем открыть файл
+    if os.path.exists(SETTINGS_FILE) and os.path.isfile(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 logger.info(f"Загрузка настроек из файла: {SETTINGS_FILE}")
@@ -464,16 +469,9 @@ async def load_settings():
                 return settings
         except json.JSONDecodeError:
             logger.error("8889 Ошибка при декодировании JSON.")
-            return {"groups": {}, "activation_codes": {}}
-        except IsADirectoryError:
-            logger.error(f"❌ {SETTINGS_FILE} является директорией, а не файлом!")
-            # Удаляем директорию и создаем заново
-            try:
-                import shutil
-                shutil.rmtree(SETTINGS_FILE)
-                logger.info(f"✅ Директория {SETTINGS_FILE} удалена")
-            except Exception as e:
-                logger.error(f"❌ Ошибка при удалении директории: {e}")
+            return await create_default_settings()
+        except Exception as e:
+            logger.error(f"❌ Ошибка при чтении файла {SETTINGS_FILE}: {e}")
             return await create_default_settings()
     else:
         logger.warning(f"Файл настроек {SETTINGS_FILE} не найден, создаю новый с настройками по умолчанию.")
