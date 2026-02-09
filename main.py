@@ -432,9 +432,9 @@ async def create_default_settings():
             "-1002549199868": "base"
         },
         "activation_codes": {
-            "base1": {"course": "base", "version": "v1", "price": 0},
-            "base2": {"course": "base", "version": "v2", "price": 0},
-            "base3": {"course": "base", "version": "v3", "price": 0}
+            "base1": {"course": "base", "version": "v1"},
+            "base2": {"course": "base", "version": "v2"},
+            "base3": {"course": "base", "version": "v3"}
         },
         "course_descriptions": {}
     }
@@ -2642,7 +2642,7 @@ async def import_settings_to_db():
                     code,
                     code_info["course"],
                     code_info["version"],
-                    code_info["price"]
+                    code_info.get("price", 0)
                 ))
                 #logger.info(f"Added code: {code}")
 

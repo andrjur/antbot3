@@ -159,13 +159,7 @@ def sample_settings():
             "v2": "с проверкой",
             "v3": "Премиум"
         },
-        "groups": {
-            "-1002590412715": "женственность15",
-            "-1002549199868": "база"
-        },
-        "activation_codes": {
-            "x": {"course": "женственность15", "version": "v1", "price": 3000},
-            "y": {"course": "женственность15", "version": "v2", "price": 8000},
-            "test": {"course": "база", "version": "v1", "price": 5000}
-        }
+        "groups": {},
+        "activation_codes": {},
+        "course_descriptions": {}
     }
