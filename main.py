@@ -2727,8 +2727,8 @@ async def cmd_add_course(message: types.Message, state: FSMContext, command: Com
     # Новый FSM формат
     await state.set_state(AddCourseFSM.waiting_group_id)
     await message.answer(
-        "🆕 Создание нового курса\n\n"
-        "Шаг 1/6: Введите ID группы Telegram\n"
+        "🆕 Создание нового курса (7 шагов)\n\n"
+        "Шаг 1/7: Введите ID группы Telegram\n"
         "Пример: `-1001234567890`\n\n"
         "💡 Чтобы узнать ID группы:\n"
         "1. Добавьте бота @getidsbot в группу\n"
@@ -2805,7 +2805,7 @@ async def process_course_group_id(message: types.Message, state: FSMContext):
     await state.set_state(AddCourseFSM.waiting_course_id)
     
     await message.answer(
-        "Шаг 2/6: Введите ID курса\n"
+        "Шаг 2/7: Введите ID курса\n"
         "Примеры: `python_base`, `design_pro`, `sprint2`\n\n"
         "💡 Используйте только латинские буквы, цифры и _"
     )
@@ -2820,7 +2820,7 @@ async def process_course_id(message: types.Message, state: FSMContext):
     await state.set_state(AddCourseFSM.waiting_description)
     
     await message.answer(
-        "Шаг 3/6: Введите описание курса\n\n"
+        "Шаг 3/7: Введите описание курса\n\n"
         "Это описание будет показываться студентам при активации.\n"
         "Можно использовать Markdown (*жирный*, _курсив_)\n\n"
         "💡 Чтобы пропустить, отправьте \"-\""
@@ -2839,7 +2839,7 @@ async def process_course_description(message: types.Message, state: FSMContext):
     await state.set_state(AddCourseFSM.waiting_code1)
     
     await message.answer(
-        "Шаг 4/6: Введите код активации для тарифа v1 (Соло)\n"
+        "Шаг 4/7: Введите код активации для тарифа v1 (Соло)\n"
         "Пример: `solo2024`, `base_v1`\n\n"
         "💡 Этот код даст доступ к базовому тарифу без проверки ДЗ"
     )
@@ -2847,14 +2847,22 @@ async def process_course_description(message: types.Message, state: FSMContext):
 
 @dp.message(AddCourseFSM.waiting_code1)
 async def process_course_code1(message: types.Message, state: FSMContext):
-    """Обработка кода 1"""
+    """Обработка кода 1 с проверкой уникальности"""
     code1 = message.text.strip()
+    
+    # Проверка на дубликат
+    if code1 in settings.get("activation_codes", {}):
+        await message.answer(
+            f"❌ Код `{code1}` уже используется!\n"
+            f"Введите другой код для тарифа v1:"
+        )
+        return
     
     await state.update_data(code1=code1)
     await state.set_state(AddCourseFSM.waiting_code2)
     
     await message.answer(
-        "Шаг 5/6: Введите код активации для тарифа v2 (с проверкой)\n"
+        "Шаг 5/7: Введите код активации для тарифа v2 (с проверкой)\n"
         "Пример: `pro2024`, `base_v2`\n\n"
         "💡 Этот код даст доступ с проверкой домашних заданий"
     )
@@ -2862,14 +2870,32 @@ async def process_course_code1(message: types.Message, state: FSMContext):
 
 @dp.message(AddCourseFSM.waiting_code2)
 async def process_course_code2(message: types.Message, state: FSMContext):
-    """Обработка кода 2"""
+    """Обработка кода 2 с проверкой уникальности"""
     code2 = message.text.strip()
+    data = await state.get_data()
+    code1 = data.get('code1', '')
+    
+    # Проверка на дубликат
+    if code2 in settings.get("activation_codes", {}):
+        await message.answer(
+            f"❌ Код `{code2}` уже используется!\n"
+            f"Введите другой код для тарифа v2:"
+        )
+        return
+    
+    # Проверка что code2 != code1
+    if code2 == code1:
+        await message.answer(
+            f"❌ Код `{code2}` уже используется для тарифа v1!\n"
+            f"Введите уникальный код для тарифа v2:"
+        )
+        return
     
     await state.update_data(code2=code2)
     await state.set_state(AddCourseFSM.waiting_code3)
     
     await message.answer(
-        "Шаг 6/6: Введите код активации для тарифа v3 (Премиум)\n"
+        "Шаг 6/7: Введите код активации для тарифа v3 (Премиум)\n"
         "Пример: `vip2024`, `base_v3`\n\n"
         "💡 Этот код даст доступ к премиум тарифу"
     )
@@ -2877,10 +2903,68 @@ async def process_course_code2(message: types.Message, state: FSMContext):
 
 @dp.message(AddCourseFSM.waiting_code3)
 async def process_course_code3(message: types.Message, state: FSMContext):
-    """Обработка кода 3 и сохранение курса"""
+    """Обработка кода 3 и показ сводки для подтверждения"""
+    code3 = message.text.strip()
+    data = await state.get_data()
+    code1 = data.get('code1', '')
+    code2 = data.get('code2', '')
+    
+    # Проверка на дубликаты и уникальность
+    if code3 in settings.get("activation_codes", {}):
+        await message.answer(
+            f"❌ Код `{code3}` уже используется!\n"
+            f"Введите другой код для тарифа v3:"
+        )
+        return
+    
+    if code3 == code1 or code3 == code2:
+        await message.answer(
+            f"❌ Код `{code3}` уже используется для другого тарифа!\n"
+            f"Введите уникальный код для тарифа v3:"
+        )
+        return
+    
+    await state.update_data(code3=code3)
+    
+    # Получаем все данные для сводки
+    group_id = data['group_id']
+    course_id = data['course_id']
+    description = data.get('description', '')
+    
+    # Формируем сводку
+    summary = (
+        f"📋 *Сводка создаваемого курса*\n\n"
+        f"📚 Курс: `{escape_md(course_id)}`\n"
+        f"📍 Группа: `{escape_md(group_id)}`\n"
+    )
+    
+    if description:
+        summary += f"📝 Описание: {description[:50]}{'...' if len(description) > 50 else ''}\n"
+    
+    summary += (
+        f"\n🔑 Коды активации:\n"
+        f"  • v1 (Соло): `{escape_md(code1)}`\n"
+        f"  • v2 (Проверка): `{escape_md(code2)}`\n"
+        f"  • v3 (Премиум): `{escape_md(code3)}`\n\n"
+        f"💾 Будет сохранено в settings.json\n\n"
+        f"*Создать курс?* (да/нет)"
+    )
+    
+    await state.set_state(AddCourseFSM.waiting_confirmation)
+    await message.answer(summary, parse_mode=ParseMode.MARKDOWN_V2)
+
+
+@dp.message(AddCourseFSM.waiting_confirmation)
+async def process_course_confirmation(message: types.Message, state: FSMContext):
+    """Обработка подтверждения создания курса"""
     global settings
     
-    code3 = message.text.strip()
+    answer = message.text.strip().lower()
+    
+    if answer not in ['да', 'yes', 'д', 'y']:
+        await message.answer("❌ Создание курса отменено. Данные не сохранены.")
+        await state.clear()
+        return
     
     # Получаем все данные
     data = await state.get_data()
@@ -2889,31 +2973,16 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     description = data.get('description', '')
     code1 = data['code1']
     code2 = data['code2']
+    code3 = data['code3']
     
-    # Проверка дубликатов
+    # Проверка дубликатов (на всякий случай)
     if course_id in settings.get("groups", {}).values():
-        await message.answer(
-            f"❌ Курс `{escape_md(course_id)}` уже существует!\n\n"
-            f"Создание отменено. Используйте /add_course для создания нового курса.",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+        await message.answer(f"❌ Курс `{course_id}` уже существует!", parse_mode=ParseMode.MARKDOWN_V2)
         await state.clear()
         return
     
-    for code in [code1, code2, code3]:
-        if code in settings.get("activation_codes", {}):
-            await message.answer(
-                f"❌ Код активации `{escape_md(code)}` уже используется!\n\n"
-                f"Создание отменено. Используйте /add_course для создания нового курса.",
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-            await state.clear()
-            return
-    
     # Обновляем глобальные настройки
     settings["groups"][group_id] = course_id
-    
-    # Добавляем коды активации
     settings["activation_codes"][code1] = {"course": course_id, "version": "v1", "price": 0}
     settings["activation_codes"][code2] = {"course": course_id, "version": "v2", "price": 0}
     settings["activation_codes"][code3] = {"course": course_id, "version": "v3", "price": 0}
@@ -2939,22 +3008,12 @@ async def process_course_code3(message: types.Message, state: FSMContext):
         except ValueError:
             pass
         
-        # Формируем сообщение с результатом
-        result_msg = (
-            f"✅ Курс *{escape_md(course_id)}* успешно создан!\n\n"
-            f"📍 Группа: `{escape_md(group_id)}`\n"
-            f"🔑 Коды активации:\n"
-            f"  • v1 (Соло): `{escape_md(code1)}`\n"
-            f"  • v2 (Проверка): `{escape_md(code2)}`\n"
-            f"  • v3 (Премиум): `{escape_md(code3)}`\n\n"
-            f"💾 Настройки сохранены в settings.json"
+        await message.answer(
+            f"✅ Курс *{escape_md(course_id)}* успешно создан и сохранён!\n\n"
+            f"💾 Настройки записаны в settings.json",
+            parse_mode=ParseMode.MARKDOWN_V2
         )
-        
-        if description:
-            result_msg += f"\n📝 Описание: {description[:100]}{'...' if len(description) > 100 else ''}"
-        
-        await message.answer(result_msg, parse_mode=ParseMode.MARKDOWN_V2)
-        logger.info(f"Админ создал курс {course_id} с описанием через FSM")
+        logger.info(f"Админ создал курс {course_id} через FSM с подтверждением")
         
     except Exception as e:
         logger.error(f"Ошибка при создании курса: {e}", exc_info=True)
@@ -3061,6 +3120,7 @@ class AddCourseFSM(StatesGroup):
     waiting_code1 = State()
     waiting_code2 = State()
     waiting_code3 = State()
+    waiting_confirmation = State()  # Новое состояние для подтверждения
 
 
 # StateFilter("*") означает "Ловить эту команду в ЛЮБОМ состоянии"
