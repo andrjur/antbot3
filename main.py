@@ -297,6 +297,17 @@ class AskExpertState(StatesGroup):
     waiting_for_expert_question = State()
 
 
+class AddCourseFSM(StatesGroup):
+    """FSM для добавления нового курса"""
+    waiting_group_id = State()
+    waiting_course_id = State()
+    waiting_description = State()
+    waiting_code1 = State()
+    waiting_code2 = State()
+    waiting_code3 = State()
+    waiting_confirmation = State()
+
+
 # декоратор для обработки ошибок в БД
 def db_exception_handler(func):
     @functools.wraps(func)
@@ -422,8 +433,27 @@ async def load_settings():
             logger.error("8889 Ошибка при декодировании JSON.")
             return {"groups": {}, "activation_codes": {}}
     else:
-        logger.warning("Файл настроек не найден, используются настройки по умолчанию.")
-        return {"groups": {}, "activation_codes": {}}
+        logger.warning(f"Файл настроек {SETTINGS_FILE} не найден, создаю новый с настройками по умолчанию.")
+        # Создаем дефолтные настройки
+        default_settings = {
+            "message_interval": 24,
+            "tariff_names": {
+                "v1": "Соло",
+                "v2": "с проверкой",
+                "v3": "Премиум"
+            },
+            "groups": {},
+            "activation_codes": {},
+            "course_descriptions": {}
+        }
+        # Сохраняем в файл
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(default_settings, f, ensure_ascii=False, indent=4)
+            logger.info(f"✅ Создан новый файл настроек: {SETTINGS_FILE}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при создании файла настроек: {e}")
+        return default_settings
 
 settings=dict() # делаем глобальный пустой словарь
 
@@ -2576,9 +2606,20 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
         channel_reports.append(report)
 
     logger.warning("перед отправкой сообщения админам")
+    
+    # Проверяем, был ли только что создан settings.json
+    settings_status = ""
+    if not os.path.exists(SETTINGS_FILE):
+        settings_status = "\n⚠️ Файл settings.json не найден и будет создан при первом добавлении курса\n"
+    elif len(settings.get("groups", {})) == 0:
+        settings_status = "\n💡 Settings.json загружен, но курсы ещё не добавлены\n"
+    
     # Формирование текста сообщения для администраторов
-    message_text = "Бот запущен\n\nСтатус групп курсов:\n" + "\n".join(channel_reports) + \
-                   "\nможно: /add_course <group_id> <course_id> <code1> <code2> <code3>"
+    message_text = "🚀 Бот запущен\n\n📊 Статус групп курсов:\n" + "\n".join(channel_reports) + \
+                   settings_status + \
+                   "\n🔧 Команды:\n/add_course - создать новый курс (пошагово)\n" + \
+                   "/add_course <group_id> <course_id> <code1> <code2> <code3> - быстрое создание\n" + \
+                   "/upload_lesson - загрузить уроки"
 
     # Отправка сообщения в группу администраторов
     try:
@@ -3110,17 +3151,6 @@ class UploadLesson(StatesGroup):
     waiting_course = State()
     waiting_lesson_num = State()
     waiting_content = State()
-
-
-class AddCourseFSM(StatesGroup):
-    """FSM для добавления нового курса"""
-    waiting_group_id = State()
-    waiting_course_id = State()
-    waiting_description = State()
-    waiting_code1 = State()
-    waiting_code2 = State()
-    waiting_code3 = State()
-    waiting_confirmation = State()  # Новое состояние для подтверждения
 
 
 # StateFilter("*") означает "Ловить эту команду в ЛЮБОМ состоянии"
