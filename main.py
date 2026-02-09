@@ -289,6 +289,11 @@ class UploadLessonAction(CallbackData, prefix="upload_lesson"):
     lesson_num: int
 
 
+class ConfirmCourseCreationCallback(CallbackData, prefix="confirm_course"):
+    """Callback для подтверждения создания курса"""
+    action: str  # "yes" или "no"
+
+
 class RepeatLessonForm(StatesGroup):
     waiting_for_lesson_number_to_repeat = State()
 
@@ -3053,25 +3058,33 @@ async def process_course_code3(message: types.Message, state: FSMContext):
         f"  • v2 \(Проверка\): `{escape_md(code2)}`\n"
         f"  • v3 \(Премиум\): `{escape_md(code3)}`\n\n"
         f"💾 Будет сохранено в settings\.json\n\n"
-        f"*Создать курс?* \(да/нет\)"
+        f"*Создать курс?*"
     )
-    
+
+    # Создаем инлайн кнопки для подтверждения
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, создать", callback_data=ConfirmCourseCreationCallback(action="yes").pack()),
+            InlineKeyboardButton(text="❌ Нет, отменить", callback_data=ConfirmCourseCreationCallback(action="no").pack())
+        ]
+    ])
+
     await state.set_state(AddCourseFSM.waiting_confirmation)
-    await message.answer(summary, parse_mode=ParseMode.MARKDOWN_V2)
+    await message.answer(summary, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
 
 
-@dp.message(AddCourseFSM.waiting_confirmation)
-async def process_course_confirmation(message: types.Message, state: FSMContext):
-    """Обработка подтверждения создания курса"""
+@dp.callback_query(AddCourseFSM.waiting_confirmation, ConfirmCourseCreationCallback.filter())
+async def process_course_confirmation(callback: CallbackQuery, callback_data: ConfirmCourseCreationCallback, state: FSMContext):
+    """Обработка подтверждения создания курса через инлайн кнопки"""
     global settings
-    
-    answer = message.text.strip().lower()
-    
-    if answer not in ['да', 'yes', 'д', 'y']:
-        await message.answer("❌ Создание курса отменено. Данные не сохранены.")
+
+    await callback.answer()
+
+    if callback_data.action == "no":
+        await callback.message.edit_text("❌ Создание курса отменено. Данные не сохранены.")
         await state.clear()
         return
-    
+
     # Получаем все данные
     data = await state.get_data()
     group_id = data['group_id']
@@ -3080,32 +3093,32 @@ async def process_course_confirmation(message: types.Message, state: FSMContext)
     code1 = data['code1']
     code2 = data['code2']
     code3 = data['code3']
-    
+
     # Проверка дубликатов (на всякий случай)
     if course_id in settings.get("groups", {}).values():
-        await message.answer(f"❌ Курс `{course_id}` уже существует!", parse_mode=ParseMode.MARKDOWN_V2)
+        await callback.message.edit_text(f"❌ Курс `{course_id}` уже существует\!", parse_mode=ParseMode.MARKDOWN_V2)
         await state.clear()
         return
-    
+
     # Обновляем глобальные настройки
     settings["groups"][group_id] = course_id
     settings["activation_codes"][code1] = {"course": course_id, "version": "v1", "price": 0}
     settings["activation_codes"][code2] = {"course": course_id, "version": "v2", "price": 0}
     settings["activation_codes"][code3] = {"course": course_id, "version": "v3", "price": 0}
-    
+
     # Сохраняем описание курса если есть
     if description:
         if "course_descriptions" not in settings:
             settings["course_descriptions"] = {}
         settings["course_descriptions"][course_id] = description
-    
+
     # Сохраняем в БД
     try:
         await process_add_course_to_db(course_id, group_id, code1, code2, code3)
-        
+
         # Явно сохраняем settings.json
         await update_settings_file()
-        
+
         # Добавляем в список разрешенных групп
         try:
             group_id_int = int(group_id)
@@ -3113,18 +3126,18 @@ async def process_course_confirmation(message: types.Message, state: FSMContext)
                 COURSE_GROUPS.append(group_id_int)
         except ValueError:
             pass
-        
-        await message.answer(
-            f"✅ Курс *{escape_md(course_id)}* успешно создан и сохранён!\n\n"
-            f"💾 Настройки записаны в settings.json",
+
+        await callback.message.edit_text(
+            f"✅ Курс *{escape_md(course_id)}* успешно создан и сохранён\!\n\n"
+            f"💾 Настройки записаны в settings\.json",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         logger.info(f"Админ создал курс {course_id} через FSM с подтверждением")
-        
+
     except Exception as e:
         logger.error(f"Ошибка при создании курса: {e}", exc_info=True)
-        await message.answer(f"❌ Ошибка при создании курса: {e}")
-    
+        await callback.message.edit_text(f"❌ Ошибка при создании курса: {e}")
+
     finally:
         await state.clear()
 
