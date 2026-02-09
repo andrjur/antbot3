@@ -422,14 +422,20 @@ async def populate_course_versions(settings):
 async def create_default_settings():
     """Создает файл settings.json с настройками по умолчанию."""
     default_settings = {
-        "message_interval": 24,
+        "message_interval": 12,
         "tariff_names": {
             "v1": "Соло",
             "v2": "с проверкой",
             "v3": "Премиум"
         },
-        "groups": {},
-        "activation_codes": {},
+        "groups": {
+            "-1002549199868": "base"
+        },
+        "activation_codes": {
+            "base1": {"course": "base", "version": "v1", "price": 0},
+            "base2": {"course": "base", "version": "v2", "price": 0},
+            "base3": {"course": "base", "version": "v3", "price": 0}
+        },
         "course_descriptions": {}
     }
     try:
@@ -1641,6 +1647,19 @@ def escape_md(text):
     """Экранирует специальные символы для MarkdownV2."""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(r'([{}])'.format(re.escape(escape_chars)), r'\\\1', text)
+
+
+def get_unique_course_id(course_id: str, existing_courses: set) -> str:
+    """Генерирует уникальный ID курса, добавляя цифры если нужно."""
+    if course_id not in existing_courses:
+        return course_id
+    
+    counter = 1
+    new_course_id = f"{course_id}{counter}"
+    while new_course_id in existing_courses:
+        counter += 1
+        new_course_id = f"{course_id}{counter}"
+    return new_course_id
 
 
 # логирование действий пользователя
@@ -2858,10 +2877,16 @@ async def create_course_old_format(message: types.Message, args: list):
     course_id = args[1]
     code1, code2, code3 = args[2], args[3], args[4]
     
-    # Проверка дубликатов
-    if course_id in settings.get("groups", {}).values():
-        await message.answer(f"❌ Курс `{course_id}` уже существует!", parse_mode=ParseMode.MARKDOWN_V2)
-        return
+    # Проверка дубликатов - если курс существует, добавляем цифру
+    existing_courses = set(settings.get("groups", {}).values())
+    original_course_id = course_id
+    course_id = get_unique_course_id(course_id, existing_courses)
+    
+    if course_id != original_course_id:
+        await message.answer(
+            f"⚠️ Курс `{original_course_id}` уже существует. Используем `{course_id}`.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
     
     for code in [code1, code2, code3]:
         if code in settings.get("activation_codes", {}):
@@ -3094,11 +3119,16 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
     code2 = data['code2']
     code3 = data['code3']
 
-    # Проверка дубликатов (на всякий случай)
-    if course_id in settings.get("groups", {}).values():
-        await callback.message.edit_text(f"❌ Курс `{course_id}` уже существует\!", parse_mode=ParseMode.MARKDOWN_V2)
-        await state.clear()
-        return
+    # Проверка дубликатов - если курс существует, добавляем цифру
+    existing_courses = set(settings.get("groups", {}).values())
+    original_course_id = course_id
+    course_id = get_unique_course_id(course_id, existing_courses)
+    
+    if course_id != original_course_id:
+        await callback.message.edit_text(
+            f"⚠️ Курс `{original_course_id}` уже существует\. Используем `{course_id}`\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
 
     # Обновляем глобальные настройки
     settings["groups"][group_id] = course_id
