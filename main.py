@@ -479,6 +479,48 @@ async def load_settings():
         logger.warning(f"Файл настроек {SETTINGS_FILE} не найден, создаю новый с настройками по умолчанию.")
         return await create_default_settings()
 
+
+async def cleanup_orphaned_courses(settings_data: dict) -> tuple[int, list[str]]:
+    """
+    Удаляет активные записи из user_courses для курсов, которых нет в settings.json.
+    Возвращает (количество удаленных записей, список курсов).
+    """
+    valid_courses = set(settings_data.get("groups", {}).values())
+    deleted_count = 0
+    removed_courses = []
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Получаем все активные записи
+            cursor = await conn.execute(
+                "SELECT DISTINCT user_id, course_id FROM user_courses WHERE status = 'active'"
+            )
+            active_courses = await cursor.fetchall()
+            
+            for user_id, course_id in active_courses:
+                if course_id not in valid_courses:
+                    # Удаляем или деактивируем запись
+                    await conn.execute(
+                        "DELETE FROM user_courses WHERE user_id = ? AND course_id = ? AND status = 'active'",
+                        (user_id, course_id)
+                    )
+                    deleted_count += 1
+                    if course_id not in removed_courses:
+                        removed_courses.append(course_id)
+                    logger.info(f"🧹 Удалена активная запись: user_id={user_id}, course_id={course_id} (курс недоступен)")
+            
+            await conn.commit()
+            
+        if deleted_count > 0:
+            logger.info(f"🧹 Очищено {deleted_count} записей для недоступных курсов: {removed_courses}")
+        
+        return deleted_count, removed_courses
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при очистке осиротевших курсов: {e}")
+        return 0, []
+
+
 settings=dict() # делаем глобальный пустой словарь
 
 COURSE_GROUPS = []
@@ -7398,6 +7440,25 @@ async def main():
         logger.info(f"📋 Группы курсов: {len(settings.get('groups', {}))} групп загружено")
         for group_id, group_name in settings.get('groups', {}).items():
             logger.info(f"   - {group_name}: {group_id}")
+        
+        # Очистка "осиротевших" курсов (которых нет в settings.json)
+        deleted_count, removed_courses = await cleanup_orphaned_courses(settings)
+        if deleted_count > 0:
+            logger.warning(f"🧹 Удалено {deleted_count} активных записей для недоступных курсов: {removed_courses}")
+            # Уведомляем админов
+            try:
+                admin_notification = (
+                    f"⚠️ *Очистка базы данных*\n\n"
+                    f"Удалено {deleted_count} активных записей студентов\n"
+                    f"для недоступных курсов (отсутствуют в settings.json):\n"
+                )
+                for course in removed_courses:
+                    admin_notification += f"  • `{escape_md(course)}`\n"
+                admin_notification += "\nСтуденты отписаны от этих курсов."
+                await bot.send_message(ADMIN_GROUP_ID, admin_notification, parse_mode=ParseMode.MARKDOWN_V2)
+                logger.info("📨 Админы уведомлены об очистке осиротевших курсов")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при отправке уведомления админам: {e}")
     else:
         COURSE_GROUPS = []
         logger.warning("⚠️ Настройки 'groups' не загружены или отсутствуют, COURSE_GROUPS пуст.")
