@@ -3004,7 +3004,8 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     )
     
     if description:
-        summary += f"📝 Описание: {description[:50]}{'...' if len(description) > 50 else ''}\n"
+        safe_desc = escape_md(description[:50] + ('...' if len(description) > 50 else ''))
+        summary += f"📝 Описание: {safe_desc}\n"
     
     summary += (
         f"\n🔑 Коды активации:\n"
