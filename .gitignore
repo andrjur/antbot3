@@ -7,6 +7,12 @@
 bot.db
 *.db
 
+# Settings (local file, use settings.json.example as template)
+settings.json
+
+# Backups
+settings_*.json
+
 # Logs
 logs/
 *.log
