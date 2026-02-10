@@ -3551,6 +3551,7 @@ async def cmd_list_lessons(message: types.Message):
                     )
                 ])
             
+            logger.info(f"cmd_list_lessons: найдено {len(rows)} уроков")
             await message.answer(result, reply_markup=keyboard)
             
     except Exception as e:
@@ -3579,41 +3580,56 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
         return
     
     await callback.answer()
+    logger.info(f"callback_view_lesson: просмотр урока {callback_data.course_id}-{callback_data.lesson_num}")
     
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute('''
-                SELECT course_id, lesson_num, content_type, is_homework, text, file_id 
+                SELECT course_id, lesson_num, content_type, is_homework, text, file_id, level 
                 FROM group_messages 
                 WHERE course_id = ? AND lesson_num = ?
+                ORDER BY level
             ''', (callback_data.course_id, callback_data.lesson_num))
             
-            row = await cursor.fetchone()
-            if not row:
+            rows = await cursor.fetchall()
+            
+            if not rows:
                 await callback.message.edit_text("❌ Урок не найден.")
                 return
             
-            course_id, lesson_num, content_type, is_homework, text, file_id = row
+            course_id = rows[0][0]
+            lesson_num = rows[0][1]
             
-            hw_marker = " 🏠 ДЗ" if is_homework else ""
+            hw_marker = " 🏠 ДЗ" if rows[0][3] else ""
             content_type_ru = {
                 'text': '📝 Текст',
                 'photo': '📷 Фото',
                 'video': '🎬 Видео',
                 'document': '📄 Документ'
-            }.get(content_type, '❓ Неизвестно')
+            }.get(rows[0][2], '❓ Неизвестно')
             
-            result = (
-                f"📚 **Урок {lesson_num} курса {course_id}**{hw_marker}\n\n"
-                f"📌 Тип: {content_type_ru}\n\n"
-            )
+            result = f"📚 **Урок {lesson_num} курса {course_id}**{hw_marker}\n\n📌 Тип: {content_type_ru}\n\n"
             
-            if text:
-                result += f"📝 Текст:\n{text[:200]}{'...' if len(text) > 200 else ''}\n\n"
-            if file_id:
-                result += f"📎 File ID: `{file_id}`\n\n"
+            parts_count = len(rows)
             
-            result += "⬆️ Нажмите на кнопку ниже, чтобы вернуться к списку"
+            if parts_count > 1:
+                result += f"⚠️ Урок загружен в {parts_count} частях:\n\n"
+            
+            for i, row in enumerate(rows, 1):
+                lesson_part = row[4] if len(row) > 4 else ""
+                part_num = f" (часть {i})" if parts_count > 1 else ""
+                
+                if row[2] == 'text' and row[3]:
+                    result += f"📝 Часть{i}: Текст{lesson_part}{part_num}\n\n{row[3]}\n\n"
+                elif row[2] == 'photo' and row[4]:
+                    result += f"📷 Часть{i}: Фото{lesson_part}{part_num}\n\n"
+                    await bot.send_photo(chat_id=callback.from_user.id, photo=types.FSInputFile.from_url(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{row[4]}"))
+                elif row[2] == 'video' and row[4]:
+                    result += f"🎬 Часть{i}: Видео{lesson_part}{part_num}\n\n"
+                    await bot.send_video(chat_id=callback.from_user.id, video=types.FSInputFile.from_url(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{row[4]}"))
+                elif row[2] == 'document' and row[4]:
+                    result += f"📄 Часть{i}: Документ{lesson_part}{part_num}\n\n"
+                    await bot.send_document(chat_id=callback.from_user.id, document=types.FSInputFile.from_url(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{row[4]}"))
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Вернуться", callback_data=BackToListCallback().pack())]
