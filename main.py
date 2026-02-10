@@ -300,6 +300,13 @@ class BackToListCallback(CallbackData, prefix="back_list"):
     pass
 
 
+class DeleteLessonPartCallback(CallbackData, prefix="delete_part"):
+    """Callback для удаления части урока"""
+    course_id: str
+    lesson_num: int
+    part_num: int
+
+
 class RepeatLessonForm(StatesGroup):
     waiting_for_lesson_number_to_repeat = State()
 
@@ -3548,6 +3555,12 @@ async def cmd_list_lessons(message: types.Message):
                     InlineKeyboardButton(
                         text=f"👁️ {course_id}-{lesson_num}",
                         callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack()
+                    ),
+                    InlineKeyboardButton(
+                        text=f"🗑️",
+                        callback_data=DeleteLessonPartCallback(
+                            course_id=course_id, lesson_num=lesson_num, part_num=level, action="confirm"
+                        ).pack()
                     )
                 ])
             
@@ -3564,12 +3577,18 @@ async def cmd_list_lessons(message: types.Message):
 @dp.callback_query(BackToListCallback.filter())
 async def callback_back_to_list(callback: CallbackQuery):
     """Возврат к списку уроков"""
+    await callback.answer()
+    await cmd_list_lessons(callback.message)
+
+
+@dp.callback_query(ViewLessonCallback.filter())
+async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLessonCallback):
+    """Показать содержимое урока при нажатии кнопки"""
     if callback.from_user.id not in ADMIN_IDS_CONF:
         await callback.answer("❌ Только для администраторов.", show_alert=True)
         return
     
     await callback.answer()
-    await cmd_list_lessons(callback.message)
 
 
 @dp.callback_query(ViewLessonCallback.filter())
@@ -3639,7 +3658,152 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
             
     except Exception as e:
         logger.error(f"Ошибка просмотра урока: {e}")
+            await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("delete_lesson_part"))
+async def cmd_delete_lesson_part(message: types.Message, command: CommandObject):
+    """Удаление части урока"""
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        await message.answer("❌ Только для администраторов.")
+        return
+    
+    args = command.args.split() if command.args else []
+    if len(args) != 3:
+        await message.answer("❌ Неверный формат. Используйте: /delete_lesson_part <course_id> <lesson_num> <part_num>")
+        return
+    
+    course_id = args[0]
+    lesson_num = int(args[1])
+    part_num = int(args[2])
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Проверяем что часть существует
+            cursor = await conn.execute('''
+                SELECT course_id, lesson_num, content_type, text, file_id 
+                FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ? AND level = ?
+            ''', (course_id, lesson_num, part_num))
+            
+            row = await cursor.fetchone()
+            if not row:
+                await message.answer(f"❌ Часть {part_num} урока {lesson_num} курса {course_id} не найдена.")
+                return
+            
+            # Удаляем часть
+            await conn.execute('''
+                DELETE FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ? AND level = ?
+            ''', (course_id, lesson_num, part_num))
+            
+            await conn.commit()
+            logger.info(f"cmd_delete_lesson_part: удалена часть {part_num} урока {lesson_num} курса {course_id}")
+            await message.answer(f"✅ Часть {part_num} урока {lesson_num} курса {course_id} удалена.")
+            
+    except Exception as e:
+        logger.error(f"Ошибка удаления части урока: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.callback_query(DeleteLessonPartCallback.filter())
+async def callback_delete_lesson_part(callback: CallbackQuery, callback_data: DeleteLessonPartCallback):
+    """Подтверждение и удаление части урока"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Получаем инфо о части
+            cursor = await conn.execute('''
+                SELECT course_id, lesson_num, level, content_type, text, file_id 
+                FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ? AND level = ?
+            ''', (callback_data.course_id, callback_data.lesson_num, callback_data.part_num))
+            
+            row = await cursor.fetchone()
+            if not row:
+                await callback.message.edit_text("❌ Часть урока не найдена.")
+                return
+            
+            course_id, lesson_num, level, content_type, text, file_id = row
+            
+            # Если action = "confirm" - удаляем часть
+            if callback_data.action == "confirm":
+                await conn.execute('''
+                    DELETE FROM group_messages 
+                    WHERE course_id = ? AND lesson_num = ? AND level = ?
+                ''', (course_id, lesson_num, level))
+                await conn.commit()
+                logger.info(f"cmd_delete_lesson_part: удалена часть {level} урока {lesson_num} курса {course_id}")
+                await callback.message.edit_text(f"✅ Часть {level} урока {lesson_num} курса {course_id} удалена.")
+            
+            # action не указан - показываем подтверждение
+            else:
+                content_type_ru = {
+                    'text': '📝 Текст',
+                    'photo': '📷 Фото',
+                    'video': '🎬 Видео',
+                    'document': '📄 Документ'
+                }.get(content_type, '❓ Неизвестно')
+                
+                result = (
+                    f"📚 Удалить часть {level} урока {lesson_num} курса {course_id}?\n\n"
+                    f"📌 Тип: {content_type_ru}\n\n"
+                )
+                
+                if text:
+                    result += f"📝 Текст:\n{text[:100]}{'...' if len(text) > 100 else ''}\n\n"
+                if file_id:
+                    result += f"📎 File ID: `{file_id}`\n\n"
+                
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="✅ Да, удалить", 
+                        callback_data=DeleteLessonPartCallback(
+                            course_id=course_id, lesson_num=lesson_num, part_num=level, action="confirm"
+                        ).pack()
+                    )],
+                    [InlineKeyboardButton(text="❌ Отмена", callback_data=BackToListCallback().pack())]
+                ])
+                
+                await callback.message.edit_text(result, reply_markup=keyboard)
+                logger.info(f"callback_delete_lesson_part: запрос на удаление части {level} урока {lesson_num} курса {course_id}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при работе с частью урока: {e}")
         await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("remind"))
+async def cmd_remind(message: types.Message, command: CommandObject):
+    """Напоминание пользователю"""
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        await message.answer("❌ Только для администраторов.")
+        return
+    
+    args = command.args.split() if command.args else []
+    if len(args) != 2:
+        await message.answer("❌ Неверный формат. Используйте: /remind <user_id> <message>")
+        return
+    
+    user_id = int(args[0])
+    remind_message = args[1]
+    
+    try:
+        # Формируем ссылку на пользователя
+        user_link = f"[tg://resolve?domain=user&id={user_id}]"
+        
+        await bot.send_message(chat_id=user_id, text=f"⏰ Напоминание:\n\n{remind_message}")
+        await message.answer(f"✅ Сообщение отправлено пользователю {user_id}")
+        logger.info(f"cmd_remind: отправлено напоминание user_id={user_id}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки напоминания: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
 
 # =========================== КОНЕЦ ЗАГРУЗКИ УРОКОВ ===========================
 
