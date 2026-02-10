@@ -1,21 +1,17 @@
 {
-    "message_interval": 0.125,
+    "message_interval": 12,
 	"tariff_names": {
-	    "v1": "Соло",
-	    "v2": "с проверкой",
-	    "v3": "Премиум"
+	    "v1": "Solo",
+	    "v2": "coach",
+	    "v3": "premium"
 	  },
     "groups": {
-        "-1002590412715": "женственность15",
-        "-1002549199868": "база"
+        "-1002549199868": "base"
     },
     "activation_codes": {
-        "x": {"course": "женственность15", "version": "v1", "price": 3000},
-        "y": {"course": "женственность15", "version": "v2", "price": 8000},
-        "z": {"course": "женственность15", "version": "v3", "price": 12000},
-        "1": {"course": "база", "version": "v1", "price": 5000},
-        "2": {"course": "база", "version": "v2", "price": 7000},
-        "3": {"course": "база", "version": "v3", "price": 18000}
+        "b1": {"course": "base", "version": "v1", "price": 5000},
+        "b22": {"course": "base", "version": "v2", "price": 7000},
+        "bvip": {"course": "base", "version": "v3", "price": 18000}
     }
 }
 

@@ -3096,10 +3096,10 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     
     summary += (
         f"\n🔑 Коды активации:\n"
-        f"  • v1 \(Соло\): `{escape_md(code1)}`\n"
-        f"  • v2 \(Проверка\): `{escape_md(code2)}`\n"
-        f"  • v3 \(Премиум\): `{escape_md(code3)}`\n\n"
-        f"💾 Будет сохранено в settings\.json\n\n"
+        f"  • v1 \\(Соло\\): `{escape_md(code1)}`\n"
+        f"  • v2 \\(Проверка\\): `{escape_md(code2)}`\n"
+        f"  • v3 \\(Премиум\\): `{escape_md(code3)}`\n\n"
+        f"💾 Будет сохранено в settings\\.json\n\n"
         f"*Создать курс?*"
     )
 
@@ -3143,7 +3143,7 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
     
     if course_id != original_course_id:
         await callback.message.edit_text(
-            f"⚠️ Курс `{original_course_id}` уже существует\. Используем `{course_id}`\.",
+            f"⚠️ Курс `{original_course_id}` уже существует\\. Используем `{course_id}`\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
@@ -3175,8 +3175,8 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
             pass
 
         await callback.message.edit_text(
-            f"✅ Курс *{escape_md(course_id)}* успешно создан и сохранён\!\n\n"
-            f"💾 Настройки записаны в settings\.json",
+            f"✅ Курс *{escape_md(course_id)}* успешно создан и сохранён\\!\n\n"
+            f"💾 Настройки записаны в settings\\.json",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         logger.info(f"Админ создал курс {course_id} через FSM с подтверждением")
@@ -3598,57 +3598,65 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
     
     await callback.answer()
     
-    rows = await cursor.fetchall()
-    
-    logger.info(f"callback_view_lesson: получено {len(rows)} частей урока")
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute('''
+                SELECT course_id, lesson_num, content_type, text, file_id 
+                FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ?
+            ''', (callback_data.course_id, callback_data.lesson_num))
             
-            if not rows:
-                await callback.message.edit_text("❌ Урок не найден.")
-                return
+            rows = await cursor.fetchall()
+        
+        logger.info(f"callback_view_lesson: получено {len(rows)} частей урока")
+        
+        if not rows:
+            await callback.message.edit_text("❌ Урок не найден.")
+            return
+        
+        course_id = rows[0][0]
+        lesson_num = rows[0][1]
+        
+        hw_marker = " 🏠 ДЗ" if rows[0][3] else ""
+        content_type_ru = {
+            'text': '📝 Текст',
+            'photo': '📷 Фото',
+            'video': '🎬 Видео',
+            'document': '📄 Документ'
+        }.get(rows[0][2], '❓ Неизвестно')
+        
+        result = f"📚 **Урок {lesson_num} курса {course_id}**{hw_marker}\n\n📌 Тип: {content_type_ru}\n\n"
+        
+        parts_count = len(rows)
+        
+        if parts_count > 1:
+            result += f"⚠️ Урок загружен в {parts_count} частях:\n\n"
+        
+        for i, row in enumerate(rows, 1):
+            lesson_part = row[4] if len(row) > 4 else ""
+            part_num = f" (часть {i})" if parts_count > 1 else ""
             
-            course_id = rows[0][0]
-            lesson_num = rows[0][1]
-            
-            hw_marker = " 🏠 ДЗ" if rows[0][3] else ""
-            content_type_ru = {
-                'text': '📝 Текст',
-                'photo': '📷 Фото',
-                'video': '🎬 Видео',
-                'document': '📄 Документ'
-            }.get(rows[0][2], '❓ Неизвестно')
-            
-            result = f"📚 **Урок {lesson_num} курса {course_id}**{hw_marker}\n\n📌 Тип: {content_type_ru}\n\n"
-            
-            parts_count = len(rows)
-            
-            if parts_count > 1:
-                result += f"⚠️ Урок загружен в {parts_count} частях:\n\n"
-            
-            for i, row in enumerate(rows, 1):
-                lesson_part = row[4] if len(row) > 4 else ""
-                part_num = f" (часть {i})" if parts_count > 1 else ""
-                
-                if row[2] == 'text' and row[3]:
-                    result += f"📝 Часть{i}: Текст{lesson_part}{part_num}\n\n{row[3]}\n\n"
-                elif row[2] == 'photo' and row[4]:
-                    result += f"📷 Часть{i}: Фото{lesson_part}{part_num}\n\n"
-                    await bot.send_photo(chat_id=callback.from_user.id, photo=types.FSInputFile.from_url(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{row[4]}"))
-                elif row[2] == 'video' and row[4]:
-                    result += f"🎬 Часть{i}: Видео{lesson_part}{part_num}\n\n"
-                    await bot.send_video(chat_id=callback.from_user.id, video=types.FSInputFile.from_url(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{row[4]}"))
-                elif row[2] == 'document' and row[4]:
-                    result += f"📄 Часть{i}: Документ{lesson_part}{part_num}\n\n"
-                    await bot.send_document(chat_id=callback.from_user.id, document=types.FSInputFile.from_url(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{row[4]}"))
-            
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Вернуться", callback_data=BackToListCallback().pack())]
-            ])
-            
-            await callback.message.edit_text(result, reply_markup=keyboard)
-            
+            if row[2] == 'text' and row[3]:
+                result += f"📝 Часть{i}: Текст{lesson_part}{part_num}\n\n{row[3]}\n\n"
+            elif row[2] == 'photo' and row[4]:
+                result += f"📷 Часть{i}: Фото{lesson_part}{part_num}\n\n"
+                await bot.send_photo(chat_id=callback.from_user.id, photo=row[4])
+            elif row[2] == 'video' and row[4]:
+                result += f"🎬 Часть{i}: Видео{lesson_part}{part_num}\n\n"
+                await bot.send_video(chat_id=callback.from_user.id, video=row[4])
+            elif row[2] == 'document' and row[4]:
+                result += f"📄 Часть{i}: Документ{lesson_part}{part_num}\n\n"
+                await bot.send_document(chat_id=callback.from_user.id, document=row[4])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Вернуться", callback_data=BackToListCallback().pack())]
+        ])
+        
+        await callback.message.edit_text(result, reply_markup=keyboard)
+        
     except Exception as e:
         logger.error(f"Ошибка просмотра урока: {e}")
-            await callback.message.edit_text(f"❌ Ошибка: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
 
 
 @dp.message(Command("delete_lesson_part"))
