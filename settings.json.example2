@@ -5,7 +5,17 @@
         "v2": "coach",
         "v3": "premium"
     },
-    "groups": {},
-    "activation_codes": {},
-    "course_descriptions": {}
+    "groups": {
+        "-1002549199868": "base",
+		"-1003710956962": "sprint2"
+    },
+    "activation_codes": {
+        "b1": {"course": "base", "version": "v1", "price": 5000},
+        "b22": {"course": "base", "version": "v2", "price": 7000},
+        "bvip": {"course": "base", "version": "v3", "price": 18000},
+		"sprint1": {"course": "sprint2", "version": "v1", "price": 5000},
+        "sprintpro": {"course": "sprint2", "version": "v2", "price": 7000},
+        "sprint2vip": {"course": "sprint2", "version": "v3", "price": 18000}
+
+    }
 }
