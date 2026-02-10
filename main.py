@@ -3525,6 +3525,8 @@ async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: Up
 @dp.message(Command("list_lessons"))
 async def cmd_list_lessons(message: types.Message):
     """Показать список загруженных уроков"""
+    logger.info(f"cmd_list_lessons START: user_id={message.from_user.id}")
+    
     if message.from_user.id not in ADMIN_IDS_CONF:
         await message.answer("❌ Только для администраторов.")
         return
@@ -3539,8 +3541,10 @@ async def cmd_list_lessons(message: types.Message):
             ''')
             rows = await cursor.fetchall()
             
+            logger.info(f"cmd_list_lessons: найдено {len(rows)} уроков в базе данных")
             if not rows:
                 await message.answer("📭 Пока нет загруженных уроков.")
+                logger.info(f"cmd_list_lessons: нет уроков для user_id={message.from_user.id}")
                 return
             
             result = "📚 Загруженные уроки:\n\n"
@@ -3564,7 +3568,7 @@ async def cmd_list_lessons(message: types.Message):
                     )
                 ])
             
-            logger.info(f"cmd_list_lessons: найдено {len(rows)} уроков")
+            logger.info(f"cmd_list_lessons: отправлено {len(rows)} уроков в списке")
             await message.answer(result, reply_markup=keyboard)
             
     except Exception as e:
@@ -3577,40 +3581,26 @@ async def cmd_list_lessons(message: types.Message):
 @dp.callback_query(BackToListCallback.filter())
 async def callback_back_to_list(callback: CallbackQuery):
     """Возврат к списку уроков"""
+    logger.info(f"callback_back_to_list START: user_id={callback.from_user.id}")
     await callback.answer()
+    logger.info(f"callback_back_to_list SUCCESS: возвращаем к списку уроков")
     await cmd_list_lessons(callback.message)
 
 
 @dp.callback_query(ViewLessonCallback.filter())
 async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLessonCallback):
     """Показать содержимое урока при нажатии кнопки"""
+    logger.info(f"callback_view_lesson START: user_id={callback.from_user.id}, course_id={callback_data.course_id}, lesson_num={callback_data.lesson_num}")
+    
     if callback.from_user.id not in ADMIN_IDS_CONF:
         await callback.answer("❌ Только для администраторов.", show_alert=True)
         return
     
     await callback.answer()
-
-
-@dp.callback_query(ViewLessonCallback.filter())
-async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLessonCallback):
-    """Показать содержимое урока при нажатии кнопки"""
-    if callback.from_user.id not in ADMIN_IDS_CONF:
-        await callback.answer("❌ Только для администраторов.", show_alert=True)
-        return
     
-    await callback.answer()
-    logger.info(f"callback_view_lesson: просмотр урока {callback_data.course_id}-{callback_data.lesson_num}")
+    rows = await cursor.fetchall()
     
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute('''
-                SELECT course_id, lesson_num, content_type, is_homework, text, file_id, level 
-                FROM group_messages 
-                WHERE course_id = ? AND lesson_num = ?
-                ORDER BY level
-            ''', (callback_data.course_id, callback_data.lesson_num))
-            
-            rows = await cursor.fetchall()
+    logger.info(f"callback_view_lesson: получено {len(rows)} частей урока")
             
             if not rows:
                 await callback.message.edit_text("❌ Урок не найден.")
@@ -3664,6 +3654,8 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
 @dp.message(Command("delete_lesson_part"))
 async def cmd_delete_lesson_part(message: types.Message, command: CommandObject):
     """Удаление части урока"""
+    logger.info(f"cmd_delete_lesson_part START: user_id={message.from_user.id}, args={command.args}")
+    
     if message.from_user.id not in ADMIN_IDS_CONF:
         await message.answer("❌ Только для администраторов.")
         return
@@ -3709,6 +3701,8 @@ async def cmd_delete_lesson_part(message: types.Message, command: CommandObject)
 @dp.callback_query(DeleteLessonPartCallback.filter())
 async def callback_delete_lesson_part(callback: CallbackQuery, callback_data: DeleteLessonPartCallback):
     """Подтверждение и удаление части урока"""
+    logger.info(f"callback_delete_lesson_part START: user_id={callback.from_user.id}, course_id={callback_data.course_id}, lesson_num={callback_data.lesson_num}, part_num={callback_data.part_num}, action={callback_data.action}")
+    
     if callback.from_user.id not in ADMIN_IDS_CONF:
         await callback.answer("❌ Только для администраторов.", show_alert=True)
         return
@@ -3739,7 +3733,9 @@ async def callback_delete_lesson_part(callback: CallbackQuery, callback_data: De
                 ''', (course_id, lesson_num, level))
                 await conn.commit()
                 logger.info(f"cmd_delete_lesson_part: удалена часть {level} урока {lesson_num} курса {course_id}")
+                
                 await callback.message.edit_text(f"✅ Часть {level} урока {lesson_num} курса {course_id} удалена.")
+                logger.info(f"cmd_delete_lesson_part SUCCESS: часть {level} урока {lesson_num} курса {course_id} удалена")
             
             # action не указан - показываем подтверждение
             else:
@@ -3781,6 +3777,8 @@ async def callback_delete_lesson_part(callback: CallbackQuery, callback_data: De
 @dp.message(Command("remind"))
 async def cmd_remind(message: types.Message, command: CommandObject):
     """Напоминание пользователю"""
+    logger.info(f"cmd_remind START: user_id={message.from_user.id}, args={command.args}")
+    
     if message.from_user.id not in ADMIN_IDS_CONF:
         await message.answer("❌ Только для администраторов.")
         return
@@ -3799,7 +3797,7 @@ async def cmd_remind(message: types.Message, command: CommandObject):
         
         await bot.send_message(chat_id=user_id, text=f"⏰ Напоминание:\n\n{remind_message}")
         await message.answer(f"✅ Сообщение отправлено пользователю {user_id}")
-        logger.info(f"cmd_remind: отправлено напоминание user_id={user_id}")
+        logger.info(f"cmd_remind SUCCESS: отправлено напоминание user_id={user_id}, msg={remind_message[:100]}")
         
     except Exception as e:
         logger.error(f"Ошибка отправки напоминания: {e}")
@@ -4372,7 +4370,7 @@ async def cb_stop_current_course(query: types.CallbackQuery, callback_data: Main
     course_numeric_id_to_stop = callback_data.course_id_numeric
     course_id_to_stop_str = await get_course_id_str(course_numeric_id_to_stop)
 
-    logger.info(f"Пользователь {user_id} хочет остановить курс {course_id_to_stop_str} ({course_numeric_id_to_stop})")
+    logger.info(f"cb_stop_current_course START: user_id={user_id}, stop_course_id={course_id_to_stop_str} (numeric: {course_numeric_id_to_stop})")
 
     try:
         # Деактивируем курс (ставим статус 'inactive' или 'paused')
@@ -4382,14 +4380,16 @@ async def cb_stop_current_course(query: types.CallbackQuery, callback_data: Main
         await query.answer(escape_md(message_text), show_alert=True)
 
         if success:
+            logger.info(f"cb_stop_current_course SUCCESS: курс {course_id_to_stop_str} деактивирован для user {user_id}")
             await query.message.edit_text(
                 escape_md(f"Курс «{await get_course_title(course_id_to_stop_str)}» был остановлен.\n"
-                          "Вы можете выбрать другой курс или активировать новый."),
+                           "Вы можете выбрать другой курс или активировать новый."),
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             # Перенаправляем на выбор другого курса
             await cb_select_other_course(query, state)  # Переиспользуем существующий обработчик
         else:
+            logger.warning(f"cb_stop_current_course FAILED: не удалось деактивировать курс {course_id_to_stop_str} для user {user_id}")
             # Если деактивация не удалась, можно просто обновить меню или ничего не делать
             pass
 
@@ -7269,7 +7269,9 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
     """Отправляет главное меню активного курса, отображая прогресс и опции."""
     logger.info(
         f"send_main_menu START: user_id={user_id}, course_id='{course_id}', lesson_num={lesson_num}, version_id='{version_id}', "
-        f"homework_pending={homework_pending}, hw_type='{hw_type}', level={user_course_level_for_menu}")
+        f"homework_pending={homework_pending}, hw_type='{hw_type}', level={user_course_level_for_menu}"
+    )
+    
     try:
         course_numeric_id = await get_course_id_int(course_id)
         if course_numeric_id == 0 and course_id:  # Если get_course_id_int вернул 0, но course_id был
@@ -7427,8 +7429,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 (sent_message.message_id, user_id, course_id)
             )
             await conn_update_menu.commit()
-        logger.info(f"send_main_menu END: Успешно отправлено меню для user_id={user_id}, course_id='{course_id}'")
-
+            logger.info(f"send_main_menu END: Успешно отправлено меню для user_id={user_id}, course_id='{course_id}', menu_message_id={sent_message.message_id}")
     except Exception as e_sm_outer:  # Уникальный идентификатор ошибки
         logger.critical(f"КРИТИЧЕСКАЯ ОШИБКА в send_main_menu для user {user_id}, course {course_id}: {e_sm_outer}",
                      exc_info=True)
