@@ -307,6 +307,11 @@ class DeleteLessonPartCallback(CallbackData, prefix="delete_part"):
     part_num: int
 
 
+class ConfirmCourseCreationCallback(CallbackData, prefix="confirm_course"):
+    """Callback для подтверждения создания курса"""
+    action: str
+
+
 class RepeatLessonForm(StatesGroup):
     waiting_for_lesson_number_to_repeat = State()
 
