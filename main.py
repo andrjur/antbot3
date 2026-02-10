@@ -305,6 +305,7 @@ class DeleteLessonPartCallback(CallbackData, prefix="delete_part"):
     course_id: str
     lesson_num: int
     part_num: int
+    action: str
 
 
 class ConfirmCourseCreationCallback(CallbackData, prefix="confirm_course"):
