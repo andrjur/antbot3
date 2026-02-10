@@ -289,9 +289,15 @@ class UploadLessonAction(CallbackData, prefix="upload_lesson"):
     lesson_num: int
 
 
-class ConfirmCourseCreationCallback(CallbackData, prefix="confirm_course"):
-    """Callback для подтверждения создания курса"""
-    action: str  # "yes" или "no"
+class ViewLessonCallback(CallbackData, prefix="view_lesson"):
+    """Callback для просмотра содержимого урока"""
+    course_id: str
+    lesson_num: int
+
+
+class BackToListCallback(CallbackData, prefix="back_list"):
+    """Callback для возврата к списку уроков"""
+    pass
 
 
 class RepeatLessonForm(StatesGroup):
@@ -3531,18 +3537,93 @@ async def cmd_list_lessons(message: types.Message):
                 return
             
             result = "📚 Загруженные уроки:\n\n"
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+            
             for row in rows:
                 course_id, lesson_num, content_type, is_homework, level = row
                 hw_marker = " 🏠" if is_homework else ""
                 result += f"• {course_id} - Урок {lesson_num}{hw_marker}\n"
+                
+                keyboard.inline_keyboard.append([
+                    InlineKeyboardButton(
+                        text=f"👁️ {course_id}-{lesson_num}",
+                        callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack()
+                    )
+                ])
             
-            await message.answer(result)
+            await message.answer(result, reply_markup=keyboard)
             
     except Exception as e:
         logger.error(f"Ошибка получения списка: {e}")
         await message.answer(f"❌ Ошибка: {e}")
 
-logger.info("✅ Обработчики загрузки контента зарегистрированы")
+    logger.info("✅ Обработчики загрузки контента зарегистрированы")
+
+
+@dp.callback_query(BackToListCallback.filter())
+async def callback_back_to_list(callback: CallbackQuery):
+    """Возврат к списку уроков"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    await cmd_list_lessons(callback.message)
+
+
+@dp.callback_query(ViewLessonCallback.filter())
+async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLessonCallback):
+    """Показать содержимое урока при нажатии кнопки"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute('''
+                SELECT course_id, lesson_num, content_type, is_homework, text, file_id 
+                FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ?
+            ''', (callback_data.course_id, callback_data.lesson_num))
+            
+            row = await cursor.fetchone()
+            if not row:
+                await callback.message.edit_text("❌ Урок не найден.")
+                return
+            
+            course_id, lesson_num, content_type, is_homework, text, file_id = row
+            
+            hw_marker = " 🏠 ДЗ" if is_homework else ""
+            content_type_ru = {
+                'text': '📝 Текст',
+                'photo': '📷 Фото',
+                'video': '🎬 Видео',
+                'document': '📄 Документ'
+            }.get(content_type, '❓ Неизвестно')
+            
+            result = (
+                f"📚 **Урок {lesson_num} курса {course_id}**{hw_marker}\n\n"
+                f"📌 Тип: {content_type_ru}\n\n"
+            )
+            
+            if text:
+                result += f"📝 Текст:\n{text[:200]}{'...' if len(text) > 200 else ''}\n\n"
+            if file_id:
+                result += f"📎 File ID: `{file_id}`\n\n"
+            
+            result += "⬆️ Нажмите на кнопку ниже, чтобы вернуться к списку"
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Вернуться", callback_data=BackToListCallback().pack())]
+            ])
+            
+            await callback.message.edit_text(result, reply_markup=keyboard)
+            
+    except Exception as e:
+        logger.error(f"Ошибка просмотра урока: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
 
 # =========================== КОНЕЦ ЗАГРУЗКИ УРОКОВ ===========================
 
