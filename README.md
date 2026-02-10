@@ -147,6 +147,75 @@ ports:
 
 ---
 
+## 🗑️ Очистка базы данных (удаление старых курсов)
+
+Если в базе данных остались старые тестовые курсы, которые не нужны в `settings.json`, их можно удалить через SQLite:
+
+### 1. Подключение к базе данных
+```bash
+cd ~/antbot4
+sqlite3 bot.db
+```
+
+### 2. Удаление старого курса полностью (пример: "женственность15")
+```sql
+DELETE FROM user_courses WHERE course_id = 'женственность15';
+DELETE FROM course_activation_codes WHERE course_id = 'женственность15';
+DELETE FROM course_versions WHERE course_id = 'женственность15';
+DELETE FROM group_messages WHERE course_id = 'женственность15';
+DELETE FROM pending_admin_homework WHERE course_numeric_id IN (SELECT id FROM courses WHERE course_id = 'женственность15');
+DELETE FROM user_actions_log WHERE course_id = 'женственность15';
+DELETE FROM courses WHERE course_id = 'женственность15';
+```
+
+### 3. Переименование курса (пример: "база" → "base")
+```sql
+UPDATE user_courses SET course_id = 'base' WHERE course_id = 'база';
+UPDATE course_activation_codes SET course_id = 'base' WHERE course_id = 'база';
+UPDATE course_versions SET course_id = 'base' WHERE course_id = 'база';
+UPDATE group_messages SET course_id = 'base' WHERE course_id = 'база';
+UPDATE pending_admin_homework SET course_numeric_id = (SELECT id FROM courses WHERE course_id = 'base') WHERE course_numeric_id IN (SELECT id FROM courses WHERE course_id = 'база');
+UPDATE user_actions_log SET course_id = 'base' WHERE course_id = 'база';
+UPDATE courses SET course_id = 'base', title = 'base' WHERE course_id = 'база';
+```
+
+### 4. Выход из SQLite
+```sql
+.quit
+```
+
+### 5. Обновление settings.json вручную
+```bash
+nano settings.json
+```
+
+Оставить только нужные курсы и коды:
+```json
+{
+    "message_interval": 12,
+    "tariff_names": {
+        "v1": "Solo",
+        "v2": "coach",
+        "v3": "premium"
+    },
+    "groups": {
+        "-1002549199868": "base"
+    },
+    "activation_codes": {
+        "b1": {"course": "base", "version": "v1", "price": 5000},
+        "b22": {"course": "base", "version": "v2", "price": 7000},
+        "bvip": {"course": "base", "version": "v3", "price": 18000}
+    }
+}
+```
+
+### 6. Перезапуск бота
+```bash
+docker-compose restart bot
+```
+
+---
+
 ## 📊 Доступ к сервисам
 
 | Сервис | URL | Внутренний порт |
