@@ -1,0 +1,11 @@
+{
+    "message_interval": 12,
+    "tariff_names": {
+        "v1": "Solo",
+        "v2": "coach",
+        "v3": "premium"
+    },
+    "groups": {},
+    "activation_codes": {},
+    "course_descriptions": {}
+}
