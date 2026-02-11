@@ -7741,14 +7741,24 @@ async def main():
     logger.info("✅ BOT_TOKEN найден")
     
     # Проверяем режим работы: webhook или polling
-    use_webhook = bool(os.getenv("WEBHOOK_HOST"))
-    if not use_webhook:
-        logger.info("📡 Режим работы: POLLING")
-    else:
+    # WEBHOOK_MODE=true/false (по умолчанию true - webhook)
+    webhook_mode_env = os.getenv("WEBHOOK_MODE", "true").lower()
+    if webhook_mode_env in ["false", "0", "no", "off"]:
+        use_webhook = False
+        logger.info("📡 Режим работы: POLLING (WEBHOOK_MODE=false)")
+    elif os.getenv("WEBHOOK_HOST"):
+        use_webhook = True
         logger.info(f"📡 Режим работы: WEBHOOK")
         logger.info(f"   Host: {WEBHOOK_HOST_CONF}")
         logger.info(f"   Порт сервера: {webapp_port_str}")
         logger.info(f"   Хост приложения: {WEBAPP_HOST_CONF}")
+    else:
+        # По умолчанию webhook, но без настроенного WEBHOOK_HOST - ошибка
+        use_webhook = True
+        logger.warning("⚠️ WEBHOOK_MODE не указан или =true, но WEBHOOK_HOST не настроен!")
+        logger.warning("   Бот запустится в режиме webhook, но работать не будет.")
+        logger.warning("   Для включения polling: WEBHOOK_MODE=false")
+        logger.info(f"📡 Режим работы: WEBHOOK (ожидается настройка)")
     
     # Валидация webhook переменных (только для webhook режима)
     if use_webhook:
