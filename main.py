@@ -3542,7 +3542,6 @@ async def cmd_list_lessons(message: types.Message):
             cursor = await conn.execute('''
                 SELECT course_id, lesson_num, content_type, is_homework, level 
                 FROM group_messages 
-                WHERE group_id LIKE 'direct_upload_%'
                 ORDER BY course_id, lesson_num
             ''')
             rows = await cursor.fetchall()
