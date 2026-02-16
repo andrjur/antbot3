@@ -58,3 +58,9 @@ Thumbs.db
 temp.py
 temp/
 tmp/
+
+# Data directories
+n8n_data/
+grafana-data/
+prometheus-data/
+alertmanager-data/

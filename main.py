@@ -7647,20 +7647,27 @@ async def on_startup():
     # Явное указание global здесь не обязательно, если они уже определены на уровне модуля
     # и вы их только читаете
 
-   # final_webhook_path = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
-   # webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{final_webhook_path}"
+    # Проверяем режим работы
+    webhook_mode_env = os.getenv("WEBHOOK_MODE", "true").lower()
+    use_webhook = webhook_mode_env not in ["false", "0", "no", "off"]
 
-   # WEBHOOK_SECRET_PATH_CONF = os.getenv("WEBHOOK_SECRET_PATH")  # Путь для секретного ключа вебхука 01-07
-   # WEBHOOK_SECRET_TOKEN_CONF = os.getenv("WEBHOOK_SECRET_TOKEN")
+    if use_webhook:
+        # final_webhook_path = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
+        # webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{final_webhook_path}"
 
-    webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{WEBHOOK_SECRET_PATH_CONF.strip('/')}"
+        # WEBHOOK_SECRET_PATH_CONF = os.getenv("WEBHOOK_SECRET_PATH")  # Путь для секретного ключа вебхука 01-07
+        # WEBHOOK_SECRET_TOKEN_CONF = os.getenv("WEBHOOK_SECRET_TOKEN")
 
-    await bot.set_webhook(
-        webhook_url,
-        drop_pending_updates=True,
-        secret_token=WEBHOOK_SECRET_TOKEN_CONF  # <--- ДОБАВИТЬ ЭТОТ АРГУМЕНТ
-    )
-    logger.info(f"Webhook set to: {webhook_url}")
+        webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{WEBHOOK_SECRET_PATH_CONF.strip('/')}"
+
+        await bot.set_webhook(
+            webhook_url,
+            drop_pending_updates=True,
+            secret_token=WEBHOOK_SECRET_TOKEN_CONF  # <--- ДОБАВИТЬ ЭТОТ АРГУМЕНТ
+        )
+        logger.info(f"Webhook set to: {webhook_url}")
+    else:
+        logger.info("Skipping webhook setup (WEBHOOK_MODE=false)")
 
 
 
@@ -7683,8 +7690,16 @@ async def on_startup():
 async def on_shutdown():
     global bot
     logger.warning("Shutting down..")
-    await bot.delete_webhook()
-    logger.info("Webhook deleted.")
+
+    # Проверяем режим работы
+    webhook_mode_env = os.getenv("WEBHOOK_MODE", "true").lower()
+    use_webhook = webhook_mode_env not in ["false", "0", "no", "off"]
+
+    if use_webhook:
+        await bot.delete_webhook()
+        logger.info("Webhook deleted.")
+    else:
+        logger.info("Skipping webhook deletion (WEBHOOK_MODE=false)")
 
     logger.info("Cancelling background tasks...")
     if 'lesson_check_tasks' in globals() and lesson_check_tasks: # Проверка на существование
