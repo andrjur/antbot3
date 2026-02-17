@@ -3553,26 +3553,34 @@ async def cmd_list_lessons(message: types.Message):
                 logger.info(f"cmd_list_lessons: нет уроков для user_id={message.from_user.id}")
                 return
             
-            result = "📚 Загруженные уроки:\n\n"
+            result = f"📚 Загруженные уроки (всего: {len(rows)}):\n\n"
+            
+            # Ограничиваем кнопками только первые 40 уроков (лимит Telegram ~100 кнопок)
+            MAX_BUTTONS = 40
             keyboard = InlineKeyboardMarkup(inline_keyboard=[])
             
-            for row in rows:
+            for i, row in enumerate(rows):
                 course_id, lesson_num, content_type, is_homework, level = row
                 hw_marker = " 🏠" if is_homework else ""
                 result += f"• {course_id} - Урок {lesson_num}{hw_marker}\n"
                 
-                keyboard.inline_keyboard.append([
-                    InlineKeyboardButton(
-                        text=f"👁️ {course_id}-{lesson_num}",
-                        callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack()
-                    ),
-                    InlineKeyboardButton(
-                        text=f"🗑️",
-                        callback_data=DeleteLessonPartCallback(
-                            course_id=course_id, lesson_num=lesson_num, part_num=level, action="confirm"
-                        ).pack()
-                    )
-                ])
+                # Добавляем кнопки только для первых MAX_BUTTONS уроков
+                if i < MAX_BUTTONS:
+                    keyboard.inline_keyboard.append([
+                        InlineKeyboardButton(
+                            text=f"👁️ {course_id}-{lesson_num}",
+                            callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack()
+                        ),
+                        InlineKeyboardButton(
+                            text=f"🗑️",
+                            callback_data=DeleteLessonPartCallback(
+                                course_id=course_id, lesson_num=lesson_num, part_num=level, action="confirm"
+                            ).pack()
+                        )
+                    ])
+            
+            if len(rows) > MAX_BUTTONS:
+                result += f"\n⚠️ Показаны кнопки только для первых {MAX_BUTTONS} уроков."
             
             logger.info(f"cmd_list_lessons: отправлено {len(rows)} уроков в списке")
             await message.answer(result, reply_markup=keyboard)
