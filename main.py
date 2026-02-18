@@ -313,6 +313,20 @@ class ConfirmCourseCreationCallback(CallbackData, prefix="confirm_course"):
     action: str
 
 
+class LessonNavCallback(CallbackData, prefix="lesson_nav"):
+    """Callback для навигации по урокам"""
+    course_id: str
+    lesson_num: int
+    action: str  # prev, next, delete_part, add_content, manage_homework
+
+
+class LessonAddContentCallback(CallbackData, prefix="lesson_add"):
+    """Callback для добавления контента в урок"""
+    course_id: str
+    lesson_num: int
+    content_type: str  # text, photo, video, video_note, document
+
+
 class RepeatLessonForm(StatesGroup):
     waiting_for_lesson_number_to_repeat = State()
 
@@ -330,6 +344,23 @@ class AddCourseFSM(StatesGroup):
     waiting_code2 = State()
     waiting_code3 = State()
     waiting_confirmation = State()
+
+
+class AddContentFSM(StatesGroup):
+    """FSM для добавления контента в урок"""
+    waiting_content = State()
+    course_id = State()
+    lesson_num = State()
+    content_type = State()
+    is_homework = State()
+
+
+class ManageHomeworkFSM(StatesGroup):
+    """FSM для управления домашним заданием"""
+    waiting_homework_content = State()
+    course_id = State()
+    lesson_num = State()
+    action = State()  # add, edit, delete
 
 
 # декоратор для обработки ошибок в БД
@@ -3532,9 +3563,19 @@ async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: Up
 async def cmd_list_lessons(message: types.Message):
     """Показать список загруженных уроков"""
     logger.info(f"cmd_list_lessons START: user_id={message.from_user.id}")
+    await show_lessons_list(message.from_user.id, message.chat.id)
+    logger.info("✅ Обработчики загрузки контента зарегистрированы")
+
+
+async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
+    """Универсальная функция показа списка уроков"""
+    logger.info(f"show_lessons_list: user_id={user_id}, chat_id={chat_id}")
     
-    if message.from_user.id not in ADMIN_IDS_CONF:
-        await message.answer("❌ Только для администраторов.")
+    if user_id not in ADMIN_IDS_CONF:
+        if message_id:
+            await bot.edit_message_text("❌ Только для администраторов.", chat_id=chat_id, message_id=message_id)
+        else:
+            await bot.send_message(chat_id, "❌ Только для администраторов.")
         return
     
     try:
@@ -3547,15 +3588,16 @@ async def cmd_list_lessons(message: types.Message):
             ''')
             rows = await cursor.fetchall()
             
-            logger.info(f"cmd_list_lessons: найдено {len(rows)} уроков в базе данных")
+            logger.info(f"show_lessons_list: найдено {len(rows)} уроков")
             if not rows:
-                await message.answer("📭 Пока нет загруженных уроков.")
-                logger.info(f"cmd_list_lessons: нет уроков для user_id={message.from_user.id}")
+                text = "📭 Пока нет загруженных уроков."
+                if message_id:
+                    await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id)
+                else:
+                    await bot.send_message(chat_id, text)
                 return
             
             result = f"📚 Загруженные уроки (всего: {len(rows)}):\n\n"
-            
-            # Ограничиваем кнопками только первые 40 уроков (лимит Telegram ~100 кнопок)
             MAX_BUTTONS = 40
             keyboard = InlineKeyboardMarkup(inline_keyboard=[])
             
@@ -3564,7 +3606,6 @@ async def cmd_list_lessons(message: types.Message):
                 hw_marker = " 🏠" if is_homework else ""
                 result += f"• {course_id} - Урок {lesson_num}{hw_marker}\n"
                 
-                # Добавляем кнопки только для первых MAX_BUTTONS уроков
                 if i < MAX_BUTTONS:
                     keyboard.inline_keyboard.append([
                         InlineKeyboardButton(
@@ -3582,14 +3623,17 @@ async def cmd_list_lessons(message: types.Message):
             if len(rows) > MAX_BUTTONS:
                 result += f"\n⚠️ Показаны кнопки только для первых {MAX_BUTTONS} уроков."
             
-            logger.info(f"cmd_list_lessons: отправлено {len(rows)} уроков в списке")
-            await message.answer(result, reply_markup=keyboard)
-            
+            if message_id:
+                await bot.edit_message_text(result, chat_id=chat_id, message_id=message_id, reply_markup=keyboard)
+            else:
+                await bot.send_message(chat_id, result, reply_markup=keyboard)
+                
     except Exception as e:
-        logger.error(f"Ошибка получения списка: {e}")
-        await message.answer(f"❌ Ошибка: {e}")
-
-    logger.info("✅ Обработчики загрузки контента зарегистрированы")
+        logger.error(f"Ошибка show_lessons_list: {e}")
+        if message_id:
+            await bot.edit_message_text(f"❌ Ошибка: {e}", chat_id=chat_id, message_id=message_id)
+        else:
+            await bot.send_message(chat_id, f"❌ Ошибка: {e}")
 
 
 @dp.callback_query(BackToListCallback.filter())
@@ -3598,12 +3642,12 @@ async def callback_back_to_list(callback: CallbackQuery):
     logger.info(f"callback_back_to_list START: user_id={callback.from_user.id}")
     await callback.answer()
     logger.info(f"callback_back_to_list SUCCESS: возвращаем к списку уроков")
-    await cmd_list_lessons(callback.message)
+    await show_lessons_list(callback.from_user.id, callback.message.chat.id, callback.message.message_id)
 
 
 @dp.callback_query(ViewLessonCallback.filter())
 async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLessonCallback):
-    """Показать содержимое урока при нажатии кнопки"""
+    """Показать содержимое урока с улучшенным интерфейсом управления"""
     logger.info(f"callback_view_lesson START: user_id={callback.from_user.id}, course_id={callback_data.course_id}, lesson_num={callback_data.lesson_num}")
     
     if callback.from_user.id not in ADMIN_IDS_CONF:
@@ -3614,15 +3658,33 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
     
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
+            # Получаем части урока
             cursor = await conn.execute('''
-                SELECT course_id, lesson_num, content_type, text, file_id 
+                SELECT course_id, lesson_num, content_type, text, file_id, level, is_homework
                 FROM group_messages 
                 WHERE course_id = ? AND lesson_num = ?
+                ORDER BY level
             ''', (callback_data.course_id, callback_data.lesson_num))
             
             rows = await cursor.fetchall()
+            
+            # Проверяем наличие домашки
+            cursor_hw = await conn.execute('''
+                SELECT 1 FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ? AND is_homework = 1
+                LIMIT 1
+            ''', (callback_data.course_id, callback_data.lesson_num))
+            has_homework = await cursor_hw.fetchone() is not None
+            
+            # Проверяем общее количество уроков в курсе
+            cursor_count = await conn.execute('''
+                SELECT MAX(lesson_num) FROM group_messages 
+                WHERE course_id = ?
+            ''', (callback_data.course_id,))
+            max_lesson = await cursor_count.fetchone()
+            max_lesson_num = max_lesson[0] if max_lesson and max_lesson[0] else callback_data.lesson_num
         
-        logger.info(f"callback_view_lesson: получено {len(rows)} частей урока")
+        logger.info(f"callback_view_lesson: получено {len(rows)} частей урока, has_homework={has_homework}")
         
         if not rows:
             await callback.message.edit_text("❌ Урок не найден.")
@@ -3630,47 +3692,246 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
         
         course_id = rows[0][0]
         lesson_num = rows[0][1]
-        
-        hw_marker = " 🏠 ДЗ" if rows[0][3] else ""
-        content_type_ru = {
-            'text': '📝 Текст',
-            'photo': '📷 Фото',
-            'video': '🎬 Видео',
-            'document': '📄 Документ'
-        }.get(rows[0][2], '❓ Неизвестно')
-        
-        result = f"📚 **Урок {lesson_num} курса {course_id}**{hw_marker}\n\n📌 Тип: {content_type_ru}\n\n"
-        
         parts_count = len(rows)
         
-        if parts_count > 1:
-            result += f"⚠️ Урок загружен в {parts_count} частях:\n\n"
+        # Формируем заголовок
+        hw_status = "✅ ДЗ есть" if has_homework else "❌ Нет ДЗ"
+        result = f"📚 **Урок {lesson_num}** курса *{course_id}*\n"
+        result += f"📊 Частей: {parts_count} | {hw_status}\n\n"
         
+        # Показываем содержимое частей
         for i, row in enumerate(rows, 1):
-            lesson_part = row[4] if len(row) > 4 else ""
-            part_num = f" (часть {i})" if parts_count > 1 else ""
+            content_type, text, file_id, level, is_hw = row[2], row[3], row[4], row[5], row[6]
+            hw_marker = " 🏠" if is_hw else ""
             
-            if row[2] == 'text' and row[3]:
-                result += f"📝 Часть{i}: Текст{lesson_part}{part_num}\n\n{row[3]}\n\n"
-            elif row[2] == 'photo' and row[4]:
-                result += f"📷 Часть{i}: Фото{lesson_part}{part_num}\n\n"
-                await bot.send_photo(chat_id=callback.from_user.id, photo=row[4])
-            elif row[2] == 'video' and row[4]:
-                result += f"🎬 Часть{i}: Видео{lesson_part}{part_num}\n\n"
-                await bot.send_video(chat_id=callback.from_user.id, video=row[4])
-            elif row[2] == 'document' and row[4]:
-                result += f"📄 Часть{i}: Документ{lesson_part}{part_num}\n\n"
-                await bot.send_document(chat_id=callback.from_user.id, document=row[4])
+            if content_type == 'text' and text:
+                result += f"📝 Часть {i}{hw_marker}: Текст\n"
+                if len(text) > 100:
+                    result += f"_{text[:100]}..._\n\n"
+                else:
+                    result += f"_{text}_\n\n"
+            elif content_type == 'photo' and file_id:
+                result += f"📷 Часть {i}{hw_marker}: Фото\n"
+                await bot.send_photo(chat_id=callback.from_user.id, photo=file_id, caption=f"📷 Часть {i} урока {lesson_num}")
+            elif content_type == 'video' and file_id:
+                result += f"🎬 Часть {i}{hw_marker}: Видео\n"
+                await bot.send_video(chat_id=callback.from_user.id, video=file_id, caption=f"🎬 Часть {i} урока {lesson_num}")
+            elif content_type == 'video_note' and file_id:
+                result += f"🎯 Часть {i}{hw_marker}: Кружок\n"
+                await bot.send_video_note(chat_id=callback.from_user.id, video_note=file_id)
+            elif content_type == 'document' and file_id:
+                result += f"📄 Часть {i}{hw_marker}: Документ\n"
+                await bot.send_document(chat_id=callback.from_user.id, document=file_id, caption=f"📄 Часть {i} урока {lesson_num}")
         
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Вернуться", callback_data=BackToListCallback().pack())]
+        # Формируем клавиатуру управления
+        keyboard_rows = []
+        
+        # Навигация между уроками
+        nav_buttons = []
+        if lesson_num > 1:
+            nav_buttons.append(InlineKeyboardButton(
+                text="⬅️ Предыдущий",
+                callback_data=LessonNavCallback(course_id=course_id, lesson_num=lesson_num-1, action="nav").pack()
+            ))
+        nav_buttons.append(InlineKeyboardButton(
+            text=f"📚 {lesson_num}/{max_lesson_num}",
+            callback_data="lesson_num_info"
+        ))
+        if lesson_num < max_lesson_num:
+            nav_buttons.append(InlineKeyboardButton(
+                text="Следующий ➡️",
+                callback_data=LessonNavCallback(course_id=course_id, lesson_num=lesson_num+1, action="nav").pack()
+            ))
+        if nav_buttons:
+            keyboard_rows.append(nav_buttons)
+        
+        # Управление частями
+        if parts_count > 0:
+            keyboard_rows.append([InlineKeyboardButton(
+                text=f"🗑️ Удалить часть ({parts_count})",
+                callback_data=LessonNavCallback(course_id=course_id, lesson_num=lesson_num, action="delete_part").pack()
+            )])
+        
+        # Добавление контента
+        keyboard_rows.append([
+            InlineKeyboardButton(text="📝 Текст", callback_data=LessonAddContentCallback(course_id=course_id, lesson_num=lesson_num, content_type="text").pack()),
+            InlineKeyboardButton(text="📷 Фото", callback_data=LessonAddContentCallback(course_id=course_id, lesson_num=lesson_num, content_type="photo").pack()),
+            InlineKeyboardButton(text="🎬 Видео", callback_data=LessonAddContentCallback(course_id=course_id, lesson_num=lesson_num, content_type="video").pack()),
+        ])
+        keyboard_rows.append([
+            InlineKeyboardButton(text="🎯 Кружок", callback_data=LessonAddContentCallback(course_id=course_id, lesson_num=lesson_num, content_type="video_note").pack()),
+            InlineKeyboardButton(text="📄 Документ", callback_data=LessonAddContentCallback(course_id=course_id, lesson_num=lesson_num, content_type="document").pack()),
         ])
         
-        await callback.message.edit_text(result, reply_markup=keyboard)
+        # Управление домашкой
+        hw_text = "✏️ Редактировать ДЗ" if has_homework else "➕ Добавить ДЗ"
+        keyboard_rows.append([InlineKeyboardButton(
+            text=hw_text,
+            callback_data=LessonNavCallback(course_id=course_id, lesson_num=lesson_num, action="manage_homework").pack()
+        )])
+        
+        # Возврат к списку
+        keyboard_rows.append([InlineKeyboardButton(text="🔙 К списку уроков", callback_data=BackToListCallback().pack())])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+        
+        await callback.message.edit_text(result, reply_markup=keyboard, parse_mode="Markdown")
         
     except Exception as e:
         logger.error(f"Ошибка просмотра урока: {e}")
         await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.callback_query(LessonNavCallback.filter())
+async def callback_lesson_nav(callback: CallbackQuery, callback_data: LessonNavCallback, state: FSMContext):
+    """Обработка навигации по урокам"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    action = callback_data.action
+    course_id = callback_data.course_id
+    lesson_num = callback_data.lesson_num
+    
+    if action == "nav":
+        # Переход к другому уроку
+        logger.info(f"lesson_nav: переход к уроку {lesson_num} курса {course_id}")
+        # Создаем фейковый ViewLessonCallback и вызываем callback_view_lesson
+        view_callback = ViewLessonCallback(course_id=course_id, lesson_num=lesson_num)
+        await callback_view_lesson(callback, view_callback)
+    
+    elif action == "delete_part":
+        # Показываем список частей для удаления
+        logger.info(f"lesson_nav: удаление части урока {lesson_num} курса {course_id}")
+        try:
+            async with aiosqlite.connect(DB_FILE) as conn:
+                cursor = await conn.execute('''
+                    SELECT level, content_type, text, file_id 
+                    FROM group_messages 
+                    WHERE course_id = ? AND lesson_num = ?
+                    ORDER BY level
+                ''', (course_id, lesson_num))
+                rows = await cursor.fetchall()
+            
+            if not rows:
+                await callback.message.edit_text("❌ Урок пуст.")
+                return
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+            for i, row in enumerate(rows, 1):
+                level, content_type, text, file_id = row
+                content_emoji = {'text': '📝', 'photo': '📷', 'video': '🎬', 'video_note': '🎯', 'document': '📄'}.get(content_type, '❓')
+                keyboard.inline_keyboard.append([
+                    InlineKeyboardButton(
+                        text=f"{content_emoji} Часть {i} (уровень {level})",
+                        callback_data=DeleteLessonPartCallback(course_id=course_id, lesson_num=lesson_num, part_num=level, action="confirm").pack()
+                    )
+                ])
+            
+            keyboard.inline_keyboard.append([InlineKeyboardButton(
+                text="🔙 Назад к уроку",
+                callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack()
+            )])
+            
+            await callback.message.edit_text(
+                f"🗑️ Выберите часть для удаления:\n\nУрок {lesson_num} курса {course_id}",
+                reply_markup=keyboard
+            )
+            
+        except Exception as e:
+            logger.error(f"Ошибка при показе частей для удаления: {e}")
+            await callback.message.edit_text(f"❌ Ошибка: {e}")
+    
+    elif action == "manage_homework":
+        # Переходим к управлению домашкой
+        logger.info(f"lesson_nav: управление домашкой урока {lesson_num} курса {course_id}")
+        await state.set_state(ManageHomeworkFSM.waiting_homework_content)
+        await state.update_data(course_id=course_id, lesson_num=lesson_num)
+        
+        # Показываем текущую домашку если есть
+        try:
+            async with aiosqlite.connect(DB_FILE) as conn:
+                cursor = await conn.execute('''
+                    SELECT level, content_type, text, file_id 
+                    FROM group_messages 
+                    WHERE course_id = ? AND lesson_num = ? AND is_homework = 1
+                    ORDER BY level
+                ''', (course_id, lesson_num))
+                hw_rows = await cursor.fetchall()
+            
+            if hw_rows:
+                result = f"✏️ Текущее домашнее задание (урок {lesson_num}):\n\n"
+                for i, row in enumerate(hw_rows, 1):
+                    content_type, text, file_id = row[1], row[2], row[3]
+                    result += f"{i}. {content_type}: "
+                    if text:
+                        result += f"{text[:100]}...\n" if len(text) > 100 else f"{text}\n"
+                    else:
+                        result += "[медиа]\n"
+                
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🗑️ Удалить ДЗ", callback_data=f"hw_delete:{course_id}:{lesson_num}")],
+                    [InlineKeyboardButton(text="🔙 Назад к уроку", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())]
+                ])
+                
+                await callback.message.edit_text(result + "\n📝 Отправьте новое содержимое ДЗ (текст, фото, видео или документ):", reply_markup=keyboard)
+            else:
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Назад к уроку", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())]
+                ])
+                await callback.message.edit_text(
+                    f"➕ Добавление домашнего задания к уроку {lesson_num}\n\n"
+                    f"📝 Отправьте содержимое ДЗ (текст, фото, видео или документ):",
+                    reply_markup=keyboard
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при управлении домашкой: {e}")
+            await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.callback_query(LessonAddContentCallback.filter())
+async def callback_lesson_add_content(callback: CallbackQuery, callback_data: LessonAddContentCallback, state: FSMContext):
+    """Начало добавления контента в урок"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    course_id = callback_data.course_id
+    lesson_num = callback_data.lesson_num
+    content_type = callback_data.content_type
+    
+    logger.info(f"lesson_add_content: {content_type} в урок {lesson_num} курса {course_id}")
+    
+    # Устанавливаем состояние
+    await state.set_state(AddContentFSM.waiting_content)
+    await state.update_data(
+        course_id=course_id,
+        lesson_num=lesson_num,
+        content_type=content_type,
+        is_homework=False
+    )
+    
+    content_type_names = {
+        'text': 'текст',
+        'photo': 'фото',
+        'video': 'видео',
+        'video_note': 'кружок (видео-сообщение)',
+        'document': 'документ'
+    }
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())]
+    ])
+    
+    await callback.message.edit_text(
+        f"➕ Добавление {content_type_names.get(content_type, content_type)} в урок {lesson_num}\n\n"
+        f"📤 Отправьте {content_type_names.get(content_type, content_type)}:",
+        reply_markup=keyboard
+    )
 
 
 @dp.message(Command("delete_lesson_part"))
@@ -3790,10 +4051,154 @@ async def callback_delete_lesson_part(callback: CallbackQuery, callback_data: De
                 
                 await callback.message.edit_text(result, reply_markup=keyboard)
                 logger.info(f"callback_delete_lesson_part: запрос на удаление части {level} урока {lesson_num} курса {course_id}")
+                
+    except Exception as e:
+        logger.error(f"Ошибка в callback_delete_lesson_part: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.message(AddContentFSM.waiting_content)
+async def process_add_content(message: types.Message, state: FSMContext):
+    """Обработка добавления контента в урок"""
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        await message.answer("❌ Только для администраторов.")
+        await state.clear()
+        return
+    
+    data = await state.get_data()
+    course_id = data.get('course_id')
+    lesson_num = data.get('lesson_num')
+    content_type = data.get('content_type')
+    is_homework = data.get('is_homework', False)
+    
+    logger.info(f"process_add_content: добавление {content_type} в урок {lesson_num} курса {course_id}, is_homework={is_homework}")
+    
+    try:
+        # Определяем максимальный level для этого урока
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute('''
+                SELECT MAX(level) FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ?
+            ''', (course_id, lesson_num))
+            max_level = await cursor.fetchone()
+            new_level = (max_level[0] or 0) + 1
+            
+            # Получаем file_id и text в зависимости от типа контента
+            file_id = None
+            text_content = None
+            
+            if content_type == 'text':
+                text_content = message.text or message.caption
+            elif content_type == 'photo':
+                if message.photo:
+                    file_id = message.photo[-1].file_id
+                text_content = message.caption
+            elif content_type == 'video':
+                if message.video:
+                    file_id = message.video.file_id
+                text_content = message.caption
+            elif content_type == 'video_note':
+                if message.video_note:
+                    file_id = message.video_note.file_id
+            elif content_type == 'document':
+                if message.document:
+                    file_id = message.document.file_id
+                text_content = message.caption
+            
+            # Сохраняем в БД
+            await conn.execute('''
+                INSERT INTO group_messages (group_id, course_id, lesson_num, content_type, file_id, text, level, is_homework, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', ('direct_upload', course_id, lesson_num, content_type, file_id, text_content, new_level, is_homework, datetime.now().isoformat()))
+            
+            await conn.commit()
+            
+            content_type_names = {
+                'text': 'текст', 'photo': 'фото', 'video': 'видео',
+                'video_note': 'кружок', 'document': 'документ'
+            }
+            
+            hw_text = " (домашнее задание)" if is_homework else ""
+            await message.answer(
+                f"✅ {content_type_names.get(content_type, content_type).capitalize()}{hw_text} добавлен в урок {lesson_num} курса {course_id} (часть {new_level})!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="👁️ Просмотреть урок", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())]
+                ])
+            )
+            
+            logger.info(f"process_add_content: успешно добавлено в урок {lesson_num} курса {course_id}, level={new_level}")
             
     except Exception as e:
-        logger.error(f"Ошибка при работе с частью урока: {e}")
-        await callback.message.edit_text(f"❌ Ошибка: {e}")
+        logger.error(f"Ошибка добавления контента: {e}")
+        await message.answer(f"❌ Ошибка добавления контента: {e}")
+    
+    finally:
+        await state.clear()
+
+
+@dp.message(ManageHomeworkFSM.waiting_homework_content)
+async def process_manage_homework(message: types.Message, state: FSMContext):
+    """Обработка добавления/изменения домашнего задания"""
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        await message.answer("❌ Только для администраторов.")
+        await state.clear()
+        return
+    
+    data = await state.get_data()
+    course_id = data.get('course_id')
+    lesson_num = data.get('lesson_num')
+    
+    logger.info(f"process_manage_homework: обновление домашки для урока {lesson_num} курса {course_id}")
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Удаляем старую домашку если есть
+            await conn.execute('''
+                DELETE FROM group_messages 
+                WHERE course_id = ? AND lesson_num = ? AND is_homework = 1
+            ''', (course_id, lesson_num))
+            
+            # Определяем тип контента и получаем file_id/text
+            content_type = 'text'
+            file_id = None
+            text_content = message.text or message.caption
+            
+            if message.photo:
+                content_type = 'photo'
+                file_id = message.photo[-1].file_id
+            elif message.video:
+                content_type = 'video'
+                file_id = message.video.file_id
+            elif message.video_note:
+                content_type = 'video_note'
+                file_id = message.video_note.file_id
+            elif message.document:
+                content_type = 'document'
+                file_id = message.document.file_id
+            
+            # Добавляем новую домашку
+            await conn.execute('''
+                INSERT INTO group_messages (group_id, course_id, lesson_num, content_type, file_id, text, level, is_homework, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', ('direct_upload', course_id, lesson_num, content_type, file_id, text_content, 1, True, datetime.now().isoformat()))
+            
+            await conn.commit()
+            
+            await message.answer(
+                f"✅ Домашнее задание обновлено для урока {lesson_num} курса {course_id}!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="👁️ Просмотреть урок", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())]
+                ])
+            )
+            
+            logger.info(f"process_manage_homework: домашка обновлена для урока {lesson_num} курса {course_id}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка обновления домашки: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+    
+    finally:
+        await state.clear()
 
 
 @dp.message(Command("remind"))
