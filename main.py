@@ -3568,7 +3568,7 @@ async def cmd_list_lessons(message: types.Message):
 
 
 async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
-    """Универсальная функция показа списка уроков"""
+    """Универсальная функция показа списка уроков с группировкой"""
     logger.info(f"show_lessons_list: user_id={user_id}, chat_id={chat_id}")
     
     if user_id not in ADMIN_IDS_CONF:
@@ -3580,15 +3580,16 @@ async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
     
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
+            # Получаем все записи и группируем в Python для гибкости
             cursor = await conn.execute('''
-                SELECT course_id, lesson_num, content_type, is_homework, level 
+                SELECT course_id, lesson_num, content_type, is_homework
                 FROM group_messages 
                 WHERE lesson_num IS NOT NULL
                 ORDER BY course_id, lesson_num
             ''')
             rows = await cursor.fetchall()
             
-            logger.info(f"show_lessons_list: найдено {len(rows)} уроков")
+            logger.info(f"show_lessons_list: найдено {len(rows)} частей")
             if not rows:
                 text = "📭 Пока нет загруженных уроков."
                 if message_id:
@@ -3597,30 +3598,54 @@ async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
                     await bot.send_message(chat_id, text)
                 return
             
-            result = f"📚 Загруженные уроки (всего: {len(rows)}):\n\n"
+            # Группируем по урокам
+            lessons = {}  # (course_id, lesson_num) -> {types: set(), has_homework: bool, count: int}
+            for row in rows:
+                course_id, lesson_num, content_type, is_homework = row
+                key = (course_id, lesson_num)
+                if key not in lessons:
+                    lessons[key] = {'types': set(), 'has_homework': False, 'count': 0}
+                lessons[key]['types'].add(content_type)
+                lessons[key]['has_homework'] = lessons[key]['has_homework'] or is_homework
+                lessons[key]['count'] += 1
+            
+            # Эмодзи для типов контента
+            type_emojis = {
+                'text': '📝',
+                'photo': '📷',
+                'video': '🎬',
+                'video_note': '🎯',
+                'document': '📄'
+            }
+            
+            result = f"📚 Загруженные уроки (всего уроков: {len(lessons)}):\n\n"
             MAX_BUTTONS = 40
             keyboard = InlineKeyboardMarkup(inline_keyboard=[])
             
-            for i, row in enumerate(rows):
-                course_id, lesson_num, content_type, is_homework, level = row
-                hw_marker = " 🏠" if is_homework else ""
-                result += f"• {course_id} - Урок {lesson_num}{hw_marker}\n"
+            # Сортируем уроки
+            sorted_lessons = sorted(lessons.items(), key=lambda x: (x[0][0], x[0][1]))
+            
+            for i, (key, data) in enumerate(sorted_lessons):
+                course_id, lesson_num = key
+                types_str = ''.join(type_emojis.get(t, '❓') for t in sorted(data['types']))
+                hw_marker = " 🏠" if data['has_homework'] else ""
+                count_marker = f" ({data['count']} ч.)" if data['count'] > 1 else ""
+                
+                result += f"• {course_id} - Урок {lesson_num}{count_marker} {types_str}{hw_marker}\n"
                 
                 if i < MAX_BUTTONS:
                     keyboard.inline_keyboard.append([
                         InlineKeyboardButton(
-                            text=f"👁️ {course_id}-{lesson_num}",
+                            text=f"👁️ {course_id[:8]}-{lesson_num}",
                             callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack()
                         ),
                         InlineKeyboardButton(
                             text=f"🗑️",
-                            callback_data=DeleteLessonPartCallback(
-                                course_id=course_id, lesson_num=lesson_num, part_num=level, action="confirm"
-                            ).pack()
+                            callback_data=LessonNavCallback(course_id=course_id, lesson_num=lesson_num, action="delete_part").pack()
                         )
                     ])
             
-            if len(rows) > MAX_BUTTONS:
+            if len(sorted_lessons) > MAX_BUTTONS:
                 result += f"\n⚠️ Показаны кнопки только для первых {MAX_BUTTONS} уроков."
             
             if message_id:
