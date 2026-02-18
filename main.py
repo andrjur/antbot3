@@ -4105,11 +4105,11 @@ async def process_add_content(message: types.Message, state: FSMContext):
                     file_id = message.document.file_id
                 text_content = message.caption
             
-            # Сохраняем в БД
+            # Сохраняем в БД (message_id = 0 для direct_upload)
             await conn.execute('''
-                INSERT INTO group_messages (group_id, course_id, lesson_num, content_type, file_id, text, level, is_homework, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', ('direct_upload', course_id, lesson_num, content_type, file_id, text_content, new_level, is_homework, datetime.now().isoformat()))
+                INSERT INTO group_messages (group_id, course_id, lesson_num, content_type, file_id, text, level, is_homework, timestamp, message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', ('direct_upload', course_id, lesson_num, content_type, file_id, text_content, new_level, is_homework, datetime.now().isoformat(), 0))
             
             await conn.commit()
             
@@ -4176,11 +4176,11 @@ async def process_manage_homework(message: types.Message, state: FSMContext):
                 content_type = 'document'
                 file_id = message.document.file_id
             
-            # Добавляем новую домашку
+            # Добавляем новую домашку (message_id = 0 для direct_upload)
             await conn.execute('''
-                INSERT INTO group_messages (group_id, course_id, lesson_num, content_type, file_id, text, level, is_homework, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', ('direct_upload', course_id, lesson_num, content_type, file_id, text_content, 1, True, datetime.now().isoformat()))
+                INSERT INTO group_messages (group_id, course_id, lesson_num, content_type, file_id, text, level, is_homework, timestamp, message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', ('direct_upload', course_id, lesson_num, content_type, file_id, text_content, 1, True, datetime.now().isoformat(), 0))
             
             await conn.commit()
             
