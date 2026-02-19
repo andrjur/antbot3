@@ -3567,6 +3567,64 @@ async def cmd_list_lessons(message: types.Message):
     logger.info("✅ Обработчики загрузки контента зарегистрированы")
 
 
+@dp.message(Command("show_codes"))
+async def cmd_show_codes(message: types.Message):
+    """Показать коды активации курсов (только для админов)"""
+    logger.info(f"cmd_show_codes START: user_id={message.from_user.id}")
+    
+    if message.from_user.id not in ADMIN_IDS_CONF:
+        await message.answer("❌ Только для администраторов.")
+        return
+    
+    try:
+        settings = await load_settings()
+        if not settings or "activation_codes" not in settings:
+            await message.answer("📭 Коды активации не найдены в настройках.")
+            return
+        
+        codes = settings["activation_codes"]
+        if not codes:
+            await message.answer("📭 Нет зарегистрированных кодов активации.")
+            return
+        
+        # Группируем коды по курсам
+        courses = {}
+        for code, data in codes.items():
+            course = data.get("course", "unknown")
+            version = data.get("version", "v1")
+            price = data.get("price", 0)
+            
+            if course not in courses:
+                courses[course] = []
+            courses[course].append({
+                "code": code,
+                "version": version,
+                "price": price
+            })
+        
+        # Формируем ответ
+        result = "🔐 *Коды активации курсов:*\n\n"
+        
+        for course_name, course_codes in sorted(courses.items()):
+            result += f"📚 *Курс: {course_name}*\n"
+            for item in course_codes:
+                code = item["code"]
+                version = item["version"]
+                price = item["price"]
+                result += f"   • `{code}` — {version}"
+                if price:
+                    result += f" ({price}₽)"
+                result += "\n"
+            result += "\n"
+        
+        await message.answer(result, parse_mode="Markdown")
+        logger.info(f"cmd_show_codes: показано {len(codes)} кодов для {len(courses)} курсов")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе кодов: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+
 async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
     """Универсальная функция показа списка уроков с группировкой"""
     logger.info(f"show_lessons_list: user_id={user_id}, chat_id={chat_id}")
