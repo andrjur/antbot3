@@ -3805,6 +3805,12 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
         await callback.message.edit_text(f"❌ Ошибка: {e}")
 
 
+@dp.callback_query(lambda c: c.data == "lesson_num_info")
+async def callback_lesson_num_info(callback: CallbackQuery):
+    """Обработка клика на информационную кнопку с номером урока"""
+    await callback.answer("Текущий урок", show_alert=False)
+
+
 @dp.callback_query(LessonNavCallback.filter())
 async def callback_lesson_nav(callback: CallbackQuery, callback_data: LessonNavCallback, state: FSMContext):
     """Обработка навигации по урокам"""
