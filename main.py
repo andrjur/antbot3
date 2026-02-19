@@ -5156,6 +5156,77 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                 await conn.commit()
                 logger.info(f"New user added: {user_id}")
 
+            # Проверяем, является ли пользователь админом (сначала!)
+            if user_id in ADMIN_IDS_CONF:
+                # Получаем данные активного курса админа (если есть)
+                cursor = await conn.execute("""
+                    SELECT 
+                        uc.course_id,
+                        uc.current_lesson,
+                        uc.version_id,
+                        c.title AS course_name,
+                        cv.title AS version_name,
+                        uc.status,
+                        uc.hw_status
+                    FROM user_courses uc
+                    JOIN courses c ON uc.course_id = c.course_id
+                    JOIN course_versions cv ON uc.course_id = cv.course_id AND uc.version_id = cv.version_id
+                    WHERE uc.user_id = ? AND uc.status = 'active'
+                """, (user_id,))
+                current_course = await cursor.fetchone()
+                
+                if current_course:
+                    # Админ с активным курсом (режим тестирования)
+                    course_id, lesson_num, version_id, course_name, version_name, status, hw_status = current_course
+                    course_numeric_id = await get_course_id_int(course_id) if course_id else None
+                    
+                    logger.info(f"cmd_start: Admin {user_id} has active course {course_id}, showing admin test mode")
+                    
+                    # Создаем админскую клавиатуру с кнопкой остановки
+                    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="⏹ Остановить тестирование курса", callback_data=MainMenuAction(action="stop_course", course_id_numeric=course_numeric_id).pack())],
+                        [InlineKeyboardButton(text="📚 Список уроков", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())],
+                        [InlineKeyboardButton(text="🔙 К админскому меню", callback_data="admin_menu")]
+                    ])
+                    
+                    admin_message = (
+                        f"👑 *РЕЖИМ ТЕСТИРОВАНИЯ*\n\n"
+                        f"Вы администратор с активным курсом:\n"
+                        f"🎓 Курс: {escape_md(course_name)}\n"
+                        f"🔑 Тариф: {escape_md(version_name)}\n"
+                        f"📚 Текущий урок: {lesson_num}\n\n"
+                        f"💡 *Подсказки:*\n"
+                        f"• /list_lessons — посмотреть все уроки\n"
+                        f"• /show_codes — коды активации\n"
+                        f"• /add_course — добавить новый курс\n"
+                        f"• /upload_lesson — загрузить урок\n"
+                        f"• Нажмите «Остановить тестирование» чтобы выйти из курса"
+                    )
+                    
+                    await message.answer(admin_message, reply_markup=admin_keyboard, parse_mode="MarkdownV2")
+                else:
+                    # Админ без активного курса
+                    logger.info(f"cmd_start: Admin {user_id} has no active course, showing admin menu")
+                    
+                    admin_menu_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="➕ Добавить курс", callback_data="add_course_menu")],
+                        [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")],
+                        [InlineKeyboardButton(text="🔐 Коды активации", callback_data="show_codes_menu")]
+                    ])
+                    
+                    await message.answer(
+                        f"👑 *Вы администратор бота*\n\n"
+                        f"💡 *Команды:*\n"
+                        f"• /add_course — добавить новый курс\n"
+                        f"• /list_lessons — посмотреть все уроки\n"
+                        f"• /upload_lesson — загрузить уроки\n"
+                        f"• /show_codes — коды активации курсов\n\n"
+                        f"Если нужно протестировать курс — активируйте его кодом.",
+                        reply_markup=admin_menu_keyboard,
+                        parse_mode="MarkdownV2"
+                    )
+                return
+
             # Получаем данные активного курса пользователя из user_courses
             cursor = await conn.execute("""
                 SELECT 
@@ -5176,32 +5247,24 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
 
             # Если у пользователя нет активного курса
             if not current_course:
-                # Проверяем, является ли пользователь админом
-                if user_id in ADMIN_IDS_CONF:
-                    logger.info(f"cmd_start: Admin {user_id} has no active course, showing admin menu")
-                    await message.answer(
-                        escape_md("👑 Вы администратор бота.\n\nУ вас нет активных курсов. Если нужно активировать курс для тестирования, используйте код активации."),
-                        parse_mode="MarkdownV2"
+                logger.info(f"cmd_start: No active course found for {user_id}, asking for activation code")
+                await message.answer(escape_md("❌ Нет активных курсов. Активируйте курс через код"), parse_mode="MarkdownV2")
+
+                try:
+                    if not os.path.exists("ask_parol.jpg"):
+                        raise FileNotFoundError("Файл ask_parol.jpg не найден")
+
+                    # InputFile должен принимать путь к файлу, а не открытый файл
+                    await bot.send_photo(
+                        chat_id=user_id,
+                        photo=types.FSInputFile("ask_parol.jpg")  # Используем FSInputFile для файловой системы
                     )
-                else:
-                    logger.info(f"cmd_start: No active course found for {user_id}, asking for activation code")
-                    await message.answer(escape_md("❌ Нет активных курсов. Активируйте курс через код"), parse_mode="MarkdownV2")
-
-                    try:
-                        if not os.path.exists("ask_parol.jpg"):
-                            raise FileNotFoundError("Файл ask_parol.jpg не найден")
-
-                        # InputFile должен принимать путь к файлу, а не открытый файл
-                        await bot.send_photo(
-                            chat_id=user_id,
-                            photo=types.FSInputFile("ask_parol.jpg")  # Используем FSInputFile для файловой системы
-                        )
-                    except FileNotFoundError as fnf_error:
-                        logger.error(f"Файл не найден: {fnf_error}")
-                        await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
-                    except Exception as e2875:
-                        logger.error(f"Ошибка при отправке фото: {e2875}", exc_info=True)
-                        await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
+                except FileNotFoundError as fnf_error:
+                    logger.error(f"Файл не найден: {fnf_error}")
+                    await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
+                except Exception as e2875:
+                    logger.error(f"Ошибка при отправке фото: {e2875}", exc_info=True)
+                    await message.answer("⚠️ Произошла ошибка при отправке фотографии.", parse_mode=None)
 
                 return
 
@@ -5272,6 +5335,123 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
     except Exception as e2945:
         logger.error(f"Error in cmd_start: {e2945}", exc_info=True)
         await message.answer("Произошла ошибка при обработке команды. Пожалуйста, попробуйте позже.", parse_mode=None)
+
+
+@dp.callback_query(lambda c: c.data == "admin_menu")
+async def callback_admin_menu(callback: CallbackQuery):
+    """Возврат к админскому меню"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    admin_menu_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить курс", callback_data="add_course_menu")],
+        [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")],
+        [InlineKeyboardButton(text="🔐 Коды активации", callback_data="show_codes_menu")]
+    ])
+    
+    await callback.message.edit_text(
+        f"👑 *Админское меню*\n\n"
+        f"💡 *Команды:*\n"
+        f"• /add_course — добавить новый курс\n"
+        f"• /list_lessons — посмотреть все уроки\n"
+        f"• /upload_lesson — загрузить уроки\n"
+        f"• /show_codes — коды активации курсов",
+        reply_markup=admin_menu_keyboard,
+        parse_mode="MarkdownV2"
+    )
+
+
+@dp.callback_query(lambda c: c.data == "add_course_menu")
+async def callback_add_course_menu(callback: CallbackQuery):
+    """Переход к добавлению курса"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    await callback.message.edit_text(
+        "➕ *Добавление курса*\n\n"
+        "Используйте команду:\n"
+        "/add_course — для пошагового создания\n\n"
+        "Или быстрое создание:\n"
+        "/add_course <group_id> <course_id> <code1> <code2> <code3>",
+        parse_mode="MarkdownV2"
+    )
+
+
+@dp.callback_query(lambda c: c.data == "list_lessons_menu")
+async def callback_list_lessons_menu(callback: CallbackQuery):
+    """Переход к списку уроков"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    await show_lessons_list(callback.from_user.id, callback.message.chat.id, callback.message.message_id)
+
+
+@dp.callback_query(lambda c: c.data == "show_codes_menu")
+async def callback_show_codes_menu(callback: CallbackQuery):
+    """Показать коды активации"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        settings = await load_settings()
+        if not settings or "activation_codes" not in settings:
+            await callback.message.edit_text("📭 Коды активации не найдены.")
+            return
+        
+        codes = settings["activation_codes"]
+        if not codes:
+            await callback.message.edit_text("📭 Нет зарегистрированных кодов.")
+            return
+        
+        # Группируем коды по курсам
+        courses = {}
+        for code, data in codes.items():
+            course = data.get("course", "unknown")
+            version = data.get("version", "v1")
+            price = data.get("price", 0)
+            
+            if course not in courses:
+                courses[course] = []
+            courses[course].append({
+                "code": code,
+                "version": version,
+                "price": price
+            })
+        
+        # Формируем ответ
+        result = "🔐 *Коды активации:*\n\n"
+        
+        for course_name, course_codes in sorted(courses.items()):
+            result += f"📚 *{course_name}*\n"
+            for item in course_codes:
+                code = item["code"]
+                version = item["version"]
+                price = item["price"]
+                result += f"   • `{code}` — {version}"
+                if price:
+                    result += f" ({price}₽)"
+                result += "\n"
+            result += "\n"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_menu")]
+        ])
+        
+        await callback.message.edit_text(result, reply_markup=keyboard, parse_mode="MarkdownV2")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе кодов: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
 
 
 async def send_course_description(user_id: int, course_id_str: str):  # Принимаем строковый ID
