@@ -3724,29 +3724,27 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
         result = f"📚 **Урок {lesson_num}** курса *{course_id}*\n"
         result += f"📊 Частей: {parts_count} | {hw_status}\n\n"
         
-        # Показываем содержимое частей
+        # Показываем содержимое частей (компактно)
         for i, row in enumerate(rows, 1):
             content_type, text, file_id, level, is_hw = row[2], row[3], row[4], row[5], row[6]
             hw_marker = " 🏠" if is_hw else ""
             
             if content_type == 'text' and text:
-                result += f"📝 Часть {i}{hw_marker}: Текст\n"
-                if len(text) > 100:
-                    result += f"_{text[:100]}..._\n\n"
-                else:
-                    result += f"_{text}_\n\n"
+                char_count = len(text)
+                word_count = len(text.split())
+                # Показываем первые 100 символов с индикатором
+                preview = text[:100] if len(text) > 100 else text
+                truncated = "…" if len(text) > 100 else ""
+                result += f"📝 Часть {i}{hw_marker}: Текст ({char_count} симв., {word_count} сл.){truncated}\n"
+                result += f"_{preview}_\n\n"
             elif content_type == 'photo' and file_id:
-                result += f"📷 Часть {i}{hw_marker}: Фото\n"
-                await bot.send_photo(chat_id=callback.from_user.id, photo=file_id, caption=f"📷 Часть {i} урока {lesson_num}")
+                result += f"📷 Часть {i}{hw_marker}: [Фото]\n"
             elif content_type == 'video' and file_id:
-                result += f"🎬 Часть {i}{hw_marker}: Видео\n"
-                await bot.send_video(chat_id=callback.from_user.id, video=file_id, caption=f"🎬 Часть {i} урока {lesson_num}")
+                result += f"🎬 Часть {i}{hw_marker}: [Видео]\n"
             elif content_type == 'video_note' and file_id:
-                result += f"🎯 Часть {i}{hw_marker}: Кружок\n"
-                await bot.send_video_note(chat_id=callback.from_user.id, video_note=file_id)
+                result += f"🎯 Часть {i}{hw_marker}: [Кружок]\n"
             elif content_type == 'document' and file_id:
-                result += f"📄 Часть {i}{hw_marker}: Документ\n"
-                await bot.send_document(chat_id=callback.from_user.id, document=file_id, caption=f"📄 Часть {i} урока {lesson_num}")
+                result += f"📄 Часть {i}{hw_marker}: [Документ]\n"
         
         # Формируем клавиатуру управления
         keyboard_rows = []
@@ -4144,8 +4142,15 @@ async def process_add_content(message: types.Message, state: FSMContext):
             }
             
             hw_text = " (домашнее задание)" if is_homework else ""
+            
+            # Формируем статистику для текста
+            stats_text = ""
+            if content_type == 'text' and text_content:
+                stats_text = f" ({len(text_content)} симв., {len(text_content.split())} сл.)"
+            
             await message.answer(
-                f"✅ {content_type_names.get(content_type, content_type).capitalize()}{hw_text} добавлен в урок {lesson_num} курса {course_id} (часть {new_level})!",
+                f"✅ {content_type_names.get(content_type, content_type).capitalize()}{hw_text}{stats_text} добавлен!\n"
+                f"Урок {lesson_num}, часть {new_level}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="👁️ Просмотреть урок", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())]
                 ])
