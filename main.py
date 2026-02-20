@@ -201,7 +201,7 @@ DB_RETRY_DELAY = 0.2  # seconds
 # Initialize bot and dispatcher
 bot = Bot(
     token=BOT_TOKEN
-    #default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2)
+    #default=DefaultBotProperties(parse_mode=None)
 )
 dp = Dispatcher()
 
@@ -768,7 +768,7 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                                 hw_status = 'none', hw_type = NULL, is_completed = 0
                         """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str, level))
 
-                        user_message = (f"✅ Тариф для курса «{escape_md(course_title)}» успешно изменен\\!\n"
+                        user_message = (f"✅ Тариф для курса «{escape_md(course_title)}» успешно изменен!\n"
                                         f"Раньше был: «{escape_md(current_active_tariff_name)}».\n"
                                         f"Теперь активен: «{escape_md(new_tariff_name)}».\n"
                                         "Прогресс по курсу начнется заново.")
@@ -795,7 +795,7 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                             level = 1,
                             hw_status = 'none', hw_type = NULL, is_completed = 0
                     """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str))
-                    user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован (или возобновлен)\\! Прогресс начнется заново."
+                    user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован (или возобновлен)! Прогресс начнется заново."
                     activation_log_details = f"Активирован/возобновлен курс '{new_course_id}' с тарифом '{new_version_id}'. Прогресс сброшен."
             else:
                 # Это первая активация этого курса для пользователя
@@ -805,7 +805,7 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                     INSERT INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date, first_lesson_sent_time, last_lesson_sent_time, level)
                     VALUES (?, ?, ?, 'active', 0, ?, ?, ?, 1)
                 """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str))
-                user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован\\!"
+                user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован!"
                 activation_log_details = f"Курс '{new_course_id}' (тариф '{new_version_id}') успешно активирован."
             logger.info(f"{activation_log_details=}  {user_message=}" )
             await conn.commit()
@@ -851,7 +851,7 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                     f"Детали: {escape_md(activation_log_details)}"
                 )
                 try:
-                    await bot.send_message(ADMIN_GROUP_ID, admin_notification, parse_mode=ParseMode.MARKDOWN_V2)
+                    await bot.send_message(ADMIN_GROUP_ID, admin_notification, parse_mode=None)
                 except Exception as e_admin_notify:
                     logger.error(f"Не удалось отправить уведомление админам об активации: {e_admin_notify}")
 
@@ -980,7 +980,7 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
                                     message_id=menu_message_id,
                                     text=escape_md(status_time_message),
                                     reply_markup=keyboard,
-                                    parse_mode=ParseMode.MARKDOWN_V2
+                                    parse_mode=None
                                 )
                                 logger.info(f"Сообщение меню {menu_message_id} обновлено для user_id={user_id}")
                             except TelegramBadRequest as e_edit:
@@ -1018,14 +1018,14 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
                         exc_info=True)
                     await bot.send_message(user_id, escape_md(
                         "📛 Ошибка времени урока (неверный формат в базе)! Свяжитесь с поддержкой."),
-                                           parse_mode=ParseMode.MARKDOWN_V2)
+                                           parse_mode=None)
                     return
                 except Exception as e_time_calc:
                     logger.error(
                         f"💥 Неожиданная ошибка в расчете времени урока в check_lesson_schedule для user_id={user_id}: {e_time_calc}",
                         exc_info=True)
                     await bot.send_message(user_id, escape_md("📛 Ошибка при расчете времени урока! Мы уже чиним."),
-                                           parse_mode=ParseMode.MARKDOWN_V2)
+                                           parse_mode=None)
                     return
 
             else:  # last_sent_time_str отсутствует
@@ -1588,10 +1588,10 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
             # Формируем красивое сообщение-подсказку
             # ВАЖНО: Мы экранируем фидбек от ИИ и используем parse_mode=MarkdownV2
             suggestion_text = (
-                f"🤫 *Подсказка от ИИ \\(для ДЗ выше\\):*\n\n"
+                f"🤫 *Подсказка от ИИ (для ДЗ выше):*\n\n"
                 f"**Вердикт ИИ:** {escape_md(ai_verdict)}\n"
                 f"**Комментарий:**\n{escape_md(feedback_from_ai)}\n\n"
-                f"_(Это сообщение видите только вы\\. Студент ждет вашего финального ответа\\.)_"
+                f"_(Это сообщение видите только вы. Студент ждет вашего финального ответа.)_"
             )
 
             # Отправляем подсказку в админ-чат
@@ -1600,7 +1600,7 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
                     chat_id=ADMIN_GROUP_ID,
                     text=suggestion_text,
                     reply_to_message_id=original_admin_message_id,
-                    parse_mode=ParseMode.MARKDOWN_V2  # Используем MarkdownV2
+                    parse_mode=None  # Используем MarkdownV2
                 )
             except Exception as e_suggestion:
                 logger.error(f"Не удалось отправить подсказку от ИИ админу: {e_suggestion}")
@@ -1654,7 +1654,7 @@ async def handle_n8n_hw_error(request: web.Request) -> web.Response:
                 ADMIN_GROUP_ID,
                 text=f"⚠️ Ошибка при автоматической обработке ДЗ (ID сообщения: {original_admin_message_id}):\n`{escape_md(error_message)}`\nПожалуйста, проверьте вручную.",
                 reply_to_message_id=original_admin_message_id,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         return web.Response(text="Error noted", status=200)
     except Exception as e66:
@@ -1679,7 +1679,7 @@ async def handle_n8n_expert_answer(request: web.Request) -> web.Response:
             await bot.send_message(
                 user_id_to_answer,
                 text=prefix + escape_md(answer_text),
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         return web.Response(text="OK", status=200)
     except Exception as e3333:
@@ -1697,11 +1697,10 @@ async def handle_n8n_expert_answer(request: web.Request) -> web.Response:
 # Регистрируем новые пути для callback'ов от n8n
 
 
-# Функция для экранирования спецсимволов в тексте для использования в MarkdownV2
+# Функция для экранирования спецсимволов (отключено - используем plain text)
 def escape_md(text):
-    """Экранирует специальные символы для MarkdownV2."""
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(r'([{}])'.format(re.escape(escape_chars)), r'\\\1', text)
+    """Возвращает текст без изменений (MarkdownV2 отключен)."""
+    return str(text) if text is not None else ""
 
 
 def get_unique_course_id(course_id: str, existing_courses: set) -> str:
@@ -1837,14 +1836,14 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
             exc_info=True)
         await bot.send_message(user_id,
                                escape_md("📛 Произошла ошибка при отправке урока (Telegram API). Мы уже разбираемся!"),
-                               parse_mode=ParseMode.MARKDOWN_V2)
+                               parse_mode=None)
     except Exception as e1456:
         logger.error(
             f"💥 Общая ошибка в send_lesson_to_user для user {user_id}, курс {course_id}, урок {lesson_num}: {e1456}",
             exc_info=True)
         await bot.send_message(user_id, escape_md(
             "📛 Что-то пошло не так при подготовке урока. Робот уже вызвал ремонтную бригаду!"),
-                               parse_mode=ParseMode.MARKDOWN_V2)
+                               parse_mode=None)
 
 
 async def _get_lesson_content_from_db(conn, course_id: str, lesson_num: int) -> list:
@@ -1883,13 +1882,13 @@ async def _send_lesson_parts(user_id: int, course_id: str, lesson_num: int, user
                 if not current_piece_text.strip():
                     logger.error(f"Пустой текст в части {k} урока {lesson_num} ({course_id}). Пропуск.")
                     continue
-                await bot.send_message(user_id, safe_caption, parse_mode=ParseMode.MARKDOWN_V2)
+                await bot.send_message(user_id, safe_caption, parse_mode=None)
             elif file_id:
                 # Динамический вызов метода отправки
                 send_method_name = f"send_{content_type}"
                 if hasattr(bot, send_method_name):
                     send_method = getattr(bot, send_method_name)
-                    await send_method(user_id, file_id, caption=safe_caption, parse_mode=ParseMode.MARKDOWN_V2)
+                    await send_method(user_id, file_id, caption=safe_caption, parse_mode=None)
                 else:
                     logger.warning(
                         f"Неизвестный content_type '{content_type}' с file_id для части {k} урока {lesson_num}.")
@@ -1976,7 +1975,7 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
     course_title_safe = escape_md(await get_course_title(course_id))
     course_numeric_id=await get_course_id_int(course_id)
     message_text = (
-        f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
+        f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»! 🎉\n\n"
         f"{escape_md('Вы прошли все уроки текущего уровня. Что вы хотите сделать дальше?')}"
     )
 
@@ -2018,7 +2017,7 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
         chat_id=user_id,
         text=message_text,
         reply_markup=builder.as_markup(),
-        parse_mode=ParseMode.MARKDOWN_V2
+        parse_mode=None
     )
     # Статус 'completed' теперь будет означать, что завершен ТЕКУЩИЙ УРОВЕНЬ КУРСА.
     # Если пользователь перейдет на следующий уровень, статус снова станет 'active'.
@@ -2940,12 +2939,12 @@ async def create_course_old_format(message: types.Message, args: list):
     if course_id != original_course_id:
         await message.answer(
             f"⚠️ Курс `{original_course_id}` уже существует. Используем `{course_id}`.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
     
     for code in [code1, code2, code3]:
         if code in settings.get("activation_codes", {}):
-            await message.answer(f"❌ Код активации `{code}` уже используется!", parse_mode=ParseMode.MARKDOWN_V2)
+            await message.answer(f"❌ Код активации `{code}` уже используется!", parse_mode=None)
             return
     
     # Сохранение
@@ -2971,7 +2970,7 @@ async def create_course_old_format(message: types.Message, args: list):
         f"📍 Группа: `{escape_md(group_id_str)}`\n"
         f"🔑 Коды: `{escape_md(code1)}`, `{escape_md(code2)}`, `{escape_md(code3)}`\n\n"
         f"💾 Настройки сохранены в settings.json",
-        parse_mode=ParseMode.MARKDOWN_V2
+        parse_mode=None
     )
 
 
@@ -3134,10 +3133,10 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     
     summary += (
         f"\n🔑 Коды активации:\n"
-        f"  • v1 \\(Соло\\): `{escape_md(code1)}`\n"
-        f"  • v2 \\(Проверка\\): `{escape_md(code2)}`\n"
-        f"  • v3 \\(Премиум\\): `{escape_md(code3)}`\n\n"
-        f"💾 Будет сохранено в settings\\.json\n\n"
+        f"  • v1 (Соло): `{escape_md(code1)}`\n"
+        f"  • v2 (Проверка): `{escape_md(code2)}`\n"
+        f"  • v3 (Премиум): `{escape_md(code3)}`\n\n"
+        f"💾 Будет сохранено в settings.json\n\n"
         f"*Создать курс?*"
     )
 
@@ -3150,7 +3149,7 @@ async def process_course_code3(message: types.Message, state: FSMContext):
     ])
 
     await state.set_state(AddCourseFSM.waiting_confirmation)
-    await message.answer(summary, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
+    await message.answer(summary, reply_markup=keyboard, parse_mode=None)
 
 
 @dp.callback_query(AddCourseFSM.waiting_confirmation, ConfirmCourseCreationCallback.filter())
@@ -3181,8 +3180,8 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
     
     if course_id != original_course_id:
         await callback.message.edit_text(
-            f"⚠️ Курс `{original_course_id}` уже существует\\. Используем `{course_id}`\\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            f"⚠️ Курс `{original_course_id}` уже существует. Используем `{course_id}`.",
+            parse_mode=None
         )
 
     # Обновляем глобальные настройки
@@ -3213,9 +3212,9 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
             pass
 
         await callback.message.edit_text(
-            f"✅ Курс *{escape_md(course_id)}* успешно создан и сохранён\\!\n\n"
-            f"💾 Настройки записаны в settings\\.json",
-            parse_mode=ParseMode.MARKDOWN_V2
+            f"✅ Курс *{escape_md(course_id)}* успешно создан и сохранён!\n\n"
+            f"💾 Настройки записаны в settings.json",
+            parse_mode=None
         )
         logger.info(f"Админ создал курс {course_id} через FSM с подтверждением")
 
@@ -3242,7 +3241,7 @@ async def cmd_edit_course_description(message: types.Message, command: CommandOb
         await message.answer(
             "⚠️ Укажите ID курса и новое описание\n"
             "Пример: `/edit_course_description sprint2 Новое описание`",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
         return
     
@@ -3258,7 +3257,7 @@ async def cmd_edit_course_description(message: types.Message, command: CommandOb
     if course_id not in settings.get("groups", {}).values():
         await message.answer(
             f"❌ Курс `{escape_md(course_id)}` не найден!",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
         return
     
@@ -3275,7 +3274,7 @@ async def cmd_edit_course_description(message: types.Message, command: CommandOb
         f"✅ Описание курса `{escape_md(course_id)}` обновлено!\n\n"
         f"📝 Новое описание: {new_description[:100]}{'...' if len(new_description) > 100 else ''}\n\n"
         f"💾 Настройки сохранены в settings.json",
-        parse_mode=ParseMode.MARKDOWN_V2
+        parse_mode=None
     )
     logger.info(f"Админ обновил описание курса {course_id}")
 
@@ -3347,7 +3346,7 @@ async def cmd_upload_lesson(message: types.Message, state: FSMContext):
         f"🛠 **РЕЖИМ ЗАГРУЗКИ**\n\n"
         f"Доступные курсы:\n{courses_list_str}\n\n"
         f"👇 Введите **ID курса** или его **номер** из списка:",
-        parse_mode="Markdown"
+        parse_mode=None
     )
 
     # Переводим в состояние ожидания курса
@@ -3618,7 +3617,7 @@ async def cmd_show_codes(message: types.Message):
                 result += "\n"
             result += "\n"
         
-        await message.answer(result, parse_mode="Markdown")
+        await message.answer(result, parse_mode=None)
         logger.info(f"cmd_show_codes: показано {len(codes)} кодов для {len(courses)} курсов")
         
     except Exception as e:
@@ -3857,7 +3856,7 @@ async def callback_view_lesson(callback: CallbackQuery, callback_data: ViewLesso
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
         
-        await callback.message.edit_text(result, reply_markup=keyboard, parse_mode="Markdown")
+        await callback.message.edit_text(result, reply_markup=keyboard, parse_mode=None)
         
     except Exception as e:
         logger.error(f"Ошибка просмотра урока: {e}")
@@ -4621,18 +4620,18 @@ async def process_homework_command(
         if feedback_text_hw:
             reply_admin_text += f"\nФидбэк: {escape_md(feedback_text_hw)}"
 
-        await message.reply(escape_md(reply_admin_text), parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply(escape_md(reply_admin_text), parse_mode=None)
     else:
         # Сообщение об ошибке, если контекст так и не был определен
         cmd_name_log = "/approve" if is_approval else "/reject"
         reply_text = (
-            f"Не удалось определить ДЗ для команды `{cmd_name_log}`\\.\n"
+            f"Не удалось определить ДЗ для команды `{cmd_name_log}`.\n"
             f"Убедитесь, что есть ожидающие проверки ДЗ, или используйте команду как ответ (reply) на сообщение с ДЗ, или укажите аргументы:\n"
-            f"1\\. `{cmd_name_log} [фидбэк]` (в ответ на ДЗ)\n"
-            f"2\\. `{cmd_name_log} <ID сообщения с ДЗ в этой группе> [фидбэк]`\n"
-            f"3\\. `{cmd_name_log} <user_id студента> <course_num_id> <lesson_num> [фидбэк]`"
+            f"1. `{cmd_name_log} [фидбэк]` (в ответ на ДЗ)\n"
+            f"2. `{cmd_name_log} <ID сообщения с ДЗ в этой группе> [фидбэк]`\n"
+            f"3. `{cmd_name_log} <user_id студента> <course_num_id> <lesson_num> [фидбэк]`"
         )
-        await message.reply(reply_text, parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply(reply_text, parse_mode=None)
 
 
 @dp.message(Command("approve"), F.chat.id == ADMIN_GROUP_ID)  # Используем вашу переменную ADMIN_GROUP_ID
@@ -4660,7 +4659,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
     await query.answer("Загружаю содержание курса")
 
     if not course_id_str or course_id_str == "Неизвестный курс":
-        await query.message.edit_text(escape_md("Ошибка: курс не найден."), parse_mode=ParseMode.MARKDOWN_V2)
+        await query.message.edit_text(escape_md("Ошибка: курс не найден."), parse_mode=None)
         return
 
     current_user_level = 1
@@ -4707,7 +4706,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
         await query.message.edit_text(
             escape_md(
                 f"На уровне {current_user_level} курса «{await get_course_title(course_id_str)}» пока нет уроков."),
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
         return
 
@@ -4726,7 +4725,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
             status_emoji = "▶️"  # Текущий урок, до которого дошел пользователь
 
         lessons_text_list_for_message.append(
-            f"{status_emoji} {l_num}\\. {lesson_title_safe}")  # Добавляем в текстовый список для сообщения
+            f"{status_emoji} {l_num}. {lesson_title_safe}")  # Добавляем в текстовый список для сообщения
 
         lessons_buttons_builder.button(
             text=f"{l_num}. {lesson_title_clean[:25]}" + ("…" if len(lesson_title_clean) > 25 else ""),
@@ -4752,16 +4751,16 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
             await query.message.edit_text(
                 text=final_message_text,
                 reply_markup=lessons_buttons_builder.as_markup(),
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         else:  # Маловероятно для callback, но на всякий случай
             await bot.send_message(user_id, final_message_text, reply_markup=lessons_buttons_builder.as_markup(),
-                                   parse_mode=ParseMode.MARKDOWN_V2)
+                                   parse_mode=None)
     except TelegramBadRequest as e_edit_lessons:
         logger.error(f"Ошибка при редактировании сообщения со списком уроков: {e_edit_lessons}")
         # Если редактирование не удалось, пробуем отправить новое сообщение
         await bot.send_message(user_id, final_message_text, reply_markup=lessons_buttons_builder.as_markup(),
-                               parse_mode=ParseMode.MARKDOWN_V2)
+                               parse_mode=None)
 
 
 # Добавьте эту функцию в main.py
@@ -4786,7 +4785,7 @@ async def award_karma_points(user_id: int, points: int, reason: str):
     # Оповещаем пользователя
     await bot.send_message(user_id,
                            f"✨ Вам начислено +{points} Карма-Баллов!\nПричина: {reason}\n*Ваш текущий баланс: {new_balance} КБ*",
-                           parse_mode="Markdown")
+                           parse_mode=None)
 
 # Вспомогательная функция для получения текущего урока пользователя
 async def get_user_current_lesson(user_id: int, course_id_str: str) -> int:
@@ -4811,7 +4810,7 @@ async def cb_manual_lesson_repeat_prompt(query: types.CallbackQuery, state: FSMC
     )
     await query.message.edit_text(
         escape_md(f"Введите номер урока курса «{await get_course_title(course_id_str)}», который хотите повторить:"),
-        parse_mode=ParseMode.MARKDOWN_V2
+        parse_mode=None
         # Можно добавить кнопку "Отмена"
     )
     await query.answer()
@@ -4825,7 +4824,7 @@ async def process_lesson_number_for_repeat(message: types.Message, state: FSMCon
         lesson_num_to_repeat = int(message.text)
     except ValueError:
         await message.reply(escape_md("Пожалуйста, введите корректный номер урока (только цифры)."),
-                            parse_mode=ParseMode.MARKDOWN_V2)
+                            parse_mode=None)
         return
 
     data = await state.get_data()
@@ -4835,7 +4834,7 @@ async def process_lesson_number_for_repeat(message: types.Message, state: FSMCon
     if not course_id_str:
         logger.error(f"Не найден course_id_str в state для RepeatLessonForm, user {user_id}")
         await message.reply(escape_md("Произошла ошибка, не могу определить курс. Попробуйте снова из меню."),
-                            parse_mode=ParseMode.MARKDOWN_V2)
+                            parse_mode=None)
         await state.clear()
         return
 
@@ -4860,11 +4859,11 @@ async def process_lesson_number_for_repeat(message: types.Message, state: FSMCon
     if not lesson_exists_on_level:
         await message.reply(escape_md(
             f"Урок с номером {lesson_num_to_repeat} не найден на вашем текущем уровне ({current_user_level}) для этого курса или еще не доступен. Пожалуйста, выберите другой номер."),
-                            parse_mode=ParseMode.MARKDOWN_V2)
+                            parse_mode=None)
         return  # Оставляем пользователя в состоянии, чтобы он мог ввести другой номер
 
     # Если урок найден, отправляем его
-    await message.reply(escape_md(f"Присылаю вам урок №{lesson_num_to_repeat}..."), parse_mode=ParseMode.MARKDOWN_V2)
+    await message.reply(escape_md(f"Присылаю вам урок №{lesson_num_to_repeat}..."), parse_mode=None)
     await send_lesson_to_user(user_id, course_id_str, lesson_num_to_repeat, repeat=True, level=current_user_level)
 
     await state.clear()
@@ -4882,7 +4881,7 @@ async def process_lesson_number_for_repeat(message: types.Message, state: FSMCon
 @dp.message(RepeatLessonForm.waiting_for_lesson_number_to_repeat)  # Ловим нечисловой ввод
 async def process_invalid_lesson_number_for_repeat(message: types.Message, state: FSMContext):
     await message.reply(escape_md("Неверный формат. Пожалуйста, введите номер урока цифрами или нажмите 'Назад'."),
-                        parse_mode=ParseMode.MARKDOWN_V2)
+                        parse_mode=None)
 
 
 
@@ -4906,7 +4905,7 @@ async def cb_stop_current_course(query: types.CallbackQuery, callback_data: Main
             await query.message.edit_text(
                 escape_md(f"Курс «{await get_course_title(course_id_to_stop_str)}» был остановлен.\n"
                            "Вы можете выбрать другой курс или активировать новый."),
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
             # Перенаправляем на выбор другого курса
             await cb_select_other_course(query, state)  # Переиспользуем существующий обработчик
@@ -4976,7 +4975,7 @@ async def process_manual_timezone(callback: types.CallbackQuery):
 
         await callback.message.edit_text(  # Редактируем исходное сообщение
             f"Ваш часовой пояс установлен на: `{timezone_name}`",
-            parse_mode="MarkdownV2",
+            parse_mode=None,
             reply_markup=None  # Убираем клавиатуру
         )
         await callback.answer("Часовой пояс сохранен!")
@@ -5117,7 +5116,7 @@ async def process_support_response(message: types.Message, state: FSMContext):
         await bot.send_message(
             chat_id=user_id,
             text=f"Ответ от поддержки:\n\n{escaped_response}", # тут надо экранировать
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
 
         # Уведомляем админа об успешной отправке
@@ -5197,14 +5196,14 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         f"🔑 Тариф: {escape_md(version_name)}\n"
                         f"📚 Текущий урок: {lesson_num}\n\n"
                         f"💡 *Подсказки:*\n"
-                        f"• /list\\_lessons — посмотреть все уроки\n"
-                        f"• /show\\_codes — коды активации\n"
-                        f"• /add\\_course — добавить новый курс\n"
-                        f"• /upload\\_lesson — загрузить урок\n"
+                        f"• /list_lessons — посмотреть все уроки\n"
+                        f"• /show_codes — коды активации\n"
+                        f"• /add_course — добавить новый курс\n"
+                        f"• /upload_lesson — загрузить урок\n"
                         f"• Нажмите «Остановить тестирование» чтобы выйти из курса"
                     )
                     
-                    await message.answer(admin_message, reply_markup=admin_keyboard, parse_mode="MarkdownV2")
+                    await message.answer(admin_message, reply_markup=admin_keyboard, parse_mode=None)
                 else:
                     # Админ без активного курса
                     logger.info(f"cmd_start: Admin {user_id} has no active course, showing admin menu")
@@ -5218,13 +5217,13 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                     await message.answer(
                         f"👑 *Вы администратор бота*\n\n"
                         f"💡 *Команды:*\n"
-                        f"• /add\\_course — добавить новый курс\n"
-                        f"• /list\\_lessons — посмотреть все уроки\n"
-                        f"• /upload\\_lesson — загрузить уроки\n"
-                        f"• /show\\_codes — коды активации курсов\n\n"
-                        f"Если нужно протестировать курс — активируйте его кодом\\.",
+                        f"• /add_course — добавить новый курс\n"
+                        f"• /list_lessons — посмотреть все уроки\n"
+                        f"• /upload_lesson — загрузить уроки\n"
+                        f"• /show_codes — коды активации курсов\n\n"
+                        f"Если нужно протестировать курс — активируйте его кодом.",
                         reply_markup=admin_menu_keyboard,
-                        parse_mode="MarkdownV2"
+                        parse_mode=None
                     )
                 return
 
@@ -5249,7 +5248,7 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
             # Если у пользователя нет активного курса
             if not current_course:
                 logger.info(f"cmd_start: No active course found for {user_id}, asking for activation code")
-                await message.answer(escape_md("❌ Нет активных курсов. Активируйте курс через код"), parse_mode="MarkdownV2")
+                await message.answer(escape_md("❌ Нет активных курсов. Активируйте курс через код"), parse_mode=None)
 
                 try:
                     if not os.path.exists("ask_parol.jpg"):
@@ -5324,13 +5323,13 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
             )
 
             welcome_message = (
-                f"*С возвращением*, {escape_md(first_name)}\\!\n\n"
+                f"*С возвращением*, {escape_md(first_name)}!\n\n"
                 f"🎓 Курс: {escape_md(course_name)}\n"
                 f"🔑 Тариф: {escape_md(tariff_name)}\n"
                 f"📚 Текущий урок: {lesson_num}"
             )
             logger.info(f"{welcome_message=}")
-            await message.answer(welcome_message, reply_markup=keyboard, parse_mode="MarkdownV2")
+            await message.answer(welcome_message, reply_markup=keyboard, parse_mode=None)
 
 
     except Exception as e2945:
@@ -5356,12 +5355,12 @@ async def callback_admin_menu(callback: CallbackQuery):
     await callback.message.edit_text(
         f"👑 *Админское меню*\n\n"
         f"💡 *Команды:*\n"
-        f"• /add\\_course — добавить новый курс\n"
-        f"• /list\\_lessons — посмотреть все уроки\n"
-        f"• /upload\\_lesson — загрузить уроки\n"
-        f"• /show\\_codes — коды активации курсов",
+        f"• /add_course — добавить новый курс\n"
+        f"• /list_lessons — посмотреть все уроки\n"
+        f"• /upload_lesson — загрузить уроки\n"
+        f"• /show_codes — коды активации курсов",
         reply_markup=admin_menu_keyboard,
-        parse_mode="MarkdownV2"
+        parse_mode=None
     )
 
 
@@ -5376,10 +5375,10 @@ async def callback_add_course_menu(callback: CallbackQuery):
     await callback.message.edit_text(
         "➕ *Добавление курса*\n\n"
         "Используйте команду:\n"
-        "/add\\_course — для пошагового создания\n\n"
+        "/add_course — для пошагового создания\n\n"
         "Или быстрое создание:\n"
-        "/add\\_course <group\\_id> <course\\_id> <code1> <code2> <code3>",
-        parse_mode="MarkdownV2"
+        "/add_course <group_id> <course_id> <code1> <code2> <code3>",
+        parse_mode=None
     )
 
 
@@ -5440,7 +5439,7 @@ async def callback_show_codes_menu(callback: CallbackQuery):
                 price = item["price"]
                 result += f"   • `{escape_md(code)}` — {escape_md(version)}"
                 if price:
-                    result += f" \\({escape_md(str(price))}₽\\)"
+                    result += f" ({escape_md(str(price))}₽)"
                 result += "\n"
             result += "\n"
         
@@ -5448,7 +5447,7 @@ async def callback_show_codes_menu(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_menu")]
         ])
         
-        await callback.message.edit_text(result, reply_markup=keyboard, parse_mode="MarkdownV2")
+        await callback.message.edit_text(result, reply_markup=keyboard, parse_mode=None)
         
     except Exception as e:
         logger.error(f"Ошибка при показе кодов: {e}")
@@ -5529,7 +5528,7 @@ async def send_course_description(user_id: int, course_id_str: str):  # Прин
                     await bot.send_message(
                         user_id,
                         part,
-                        parse_mode=ParseMode.MARKDOWN_V2,
+                        parse_mode=None,
                         disable_web_page_preview=True
                     )
                 logger.info(
@@ -5538,12 +5537,12 @@ async def send_course_description(user_id: int, course_id_str: str):  # Прин
                 logger.warning(
                     f"Полное описание курса (courses.description, урок 0, урок NULL, урок 1) не найдено для course_id='{course_id_str}'.")
                 await bot.send_message(user_id, escape_md("Подробное описание для этого курса сейчас недоступно."),
-                                       parse_mode=ParseMode.MARKDOWN_V2)
+                                       parse_mode=None)
 
     except Exception as e_scd_v2:
         logger.error(f"Ошибка в send_course_description v2 для course_id='{course_id_str}': {e_scd_v2}", exc_info=True)
         await bot.send_message(user_id, escape_md("Не удалось загрузить описание курса. Попробуйте позже."),
-                               parse_mode=ParseMode.MARKDOWN_V2)
+                               parse_mode=None)
 
 
 # help
@@ -5571,7 +5570,7 @@ async def cmd_help(message: Message):
         "/referral - Реферальная программа"
     )
 
-    await message.answer(escape_md(help_text), parse_mode="MarkdownV2")
+    await message.answer(escape_md(help_text), parse_mode=None)
 
 
 # --- Вспомогательные функции ---
@@ -5663,7 +5662,7 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
                 escaped_lesson_word = escape_markdown_v2(lesson_word) # уроков после экрана маркдауна
 
                 # Форматируем строку: пункт списка, _курсив_ для названия, количество и слово "урок"
-                line = f"\\- _{escaped_title}_ \\- *{lesson_count}* {escaped_lesson_word}"
+                line = f"- _{escaped_title}_ - *{lesson_count}* {escaped_lesson_word}"
                 course_lines.append(line)
 
             courses_list_str = "\n".join(course_lines)
@@ -5681,7 +5680,7 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
         await bot.send_message(
             user_id,
             message_text,  # Используем сформированный и экранированный текст
-            parse_mode="MarkdownV2"  # Указываем режим парсинга
+            parse_mode=None  # Указываем режим парсинга
         )
 
         # Формируем текст ответа с кнопками
@@ -5776,7 +5775,7 @@ async def cb_leave_course_review_start(query: types.CallbackQuery, state: FSMCon
         prompt_text = "Пожалуйста, напишите ваш отзыв о пройденном курсе:"
         await state.update_data(course_id_for_review="неизвестный (не найден)")
 
-    await query.message.edit_text(escape_md(prompt_text), parse_mode=ParseMode.MARKDOWN_V2)
+    await query.message.edit_text(escape_md(prompt_text), parse_mode=None)
     await state.set_state(CourseReviewForm.waiting_for_review_text) # Используем новое состояние
     await query.answer()
 
@@ -5800,7 +5799,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
             )
             await conn.commit()
         await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хотите пройти!"),
-                            parse_mode=ParseMode.MARKDOWN_V2)
+                            parse_mode=None)
 
         if ADMIN_GROUP_ID:
             user_info = await bot.get_chat(user_id)
@@ -5809,17 +5808,17 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
                 user_details += f" (@{user_info.username})"
 
             admin_message = (
-                f"📝 Новый отзыв о курсе\\!\n"
+                f"📝 Новый отзыв о курсе!\n"
                 f"👤 Пользователь: {escape_md(user_details)} ID: {user_id}\n"
                 f"📚 Курс: {escape_md(str(course_id_for_review))}\n"
                 f"💬 Отзыв:\n{escape_md(review_text_raw)}"
             )
-            await bot.send_message(ADMIN_GROUP_ID, admin_message, parse_mode=ParseMode.MARKDOWN_V2)
+            await bot.send_message(ADMIN_GROUP_ID, admin_message, parse_mode=None)
 
     except Exception as e3469:
         logger.error(f"Ошибка при сохранении/отправке отзыва о курсе: {e3469}")
         await message.reply(escape_md("Произошла ошибка при обработке вашего отзыва. Пожалуйста, попробуйте позже."),
-                            parse_mode=ParseMode.MARKDOWN_V2)
+                            parse_mode=None)
     finally:
         await state.clear()
 
@@ -5879,7 +5878,7 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
 
     if not all_system_courses:
         await query.message.edit_text(escape_md("К сожалению, сейчас нет доступных курсов для выбора."),
-                                      parse_mode=ParseMode.MARKDOWN_V2, reply_markup=None)
+                                      parse_mode=None, reply_markup=None)
         return
 
     builder = InlineKeyboardBuilder()
@@ -5900,28 +5899,28 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
             current_lesson_user = user_course_info["current_lesson"]
 
             if status == 'active':
-                course_block_header = f"\n{i}\\. ▶️ *{course_title_safe}* \\(активен\\)"
+                course_block_header = f"\n{i}. ▶️ *{course_title_safe}* (активен)"
                 action_button_text = f"{i}. 🚀 Перейти"
                 action_button_callback_data = ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
                                                                            lesson_num=current_lesson_user).pack()
             elif status == 'completed':
-                course_block_header = f"\n{i}\\. ✅ *{course_title_safe}* \\(пройден\\)"
+                course_block_header = f"\n{i}. ✅ *{course_title_safe}* (пройден)"
                 action_button_text = f"{i}. 🔁 Повтор/Уровни"
                 action_button_callback_data = RestartCourseCallback(course_numeric_id=course_num_id_sys,
                                                                     action="restart_current_level").pack()
             elif status == 'inactive':
-                course_block_header = f"\n{i}\\. ⏸️ *{course_title_safe}* \\(остановлен\\)"
+                course_block_header = f"\n{i}. ⏸️ *{course_title_safe}* (остановлен)"
                 action_button_text = f"{i}. 🔄 Возобновить"
                 action_button_callback_data = ShowActiveCourseMenuCallback(course_numeric_id=course_num_id_sys,
                                                                            lesson_num=current_lesson_user).pack()
             else:
                 price_str = f"{min_price} руб." if min_price is not None and min_price > 0 else "По коду"
-                course_block_header = f"\n{i}\\. ✨ *{course_title_safe}* \\({escape_md(price_str)}\\)"
+                course_block_header = f"\n{i}. ✨ *{course_title_safe}* ({escape_md(price_str)})"
                 action_button_text = f"{i}. 💰 Купить/Инфо"
                 action_button_callback_data = BuyCourseCallback(course_numeric_id=course_num_id_sys).pack()
         else:
             price_str = f"{min_price} руб." if min_price is not None and min_price > 0 else "Инфо по активации"
-            course_block_header = f"\n{i}\\. 🆕 *{course_title_safe}* \\({escape_md(price_str)}\\)"
+            course_block_header = f"\n{i}. 🆕 *{course_title_safe}* ({escape_md(price_str)})"
             action_button_text = f"{i}. 💰 Купить/Инфо"
             action_button_callback_data = BuyCourseCallback(course_numeric_id=course_num_id_sys).pack()
 
@@ -5968,14 +5967,14 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
             await query.message.edit_text(
                 text=final_message_text,
                 reply_markup=builder.as_markup(),
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         # ... (обработка ошибок)
     except TelegramBadRequest as e_edit_courses_v2:
         logger.warning(
             f"Не удалось отредактировать сообщение v2 для списка курсов: {e_edit_courses_v2}. Отправляю новое.")
         await bot.send_message(
-            chat_id=user_id, text=final_message_text, reply_markup=builder.as_markup(), parse_mode=ParseMode.MARKDOWN_V2
+            chat_id=user_id, text=final_message_text, reply_markup=builder.as_markup(), parse_mode=None
         )
     except Exception as e_cb_select_other_v2:
         logger.error(f"Общая ошибка в cb_select_other_course_v2: {e_cb_select_other_v2}", exc_info=True)
@@ -6236,7 +6235,7 @@ async def cmd_get_new_task(message: types.Message, state: FSMContext):
     if report_format:
         full_message += f"\n\n*Для отчета, отправьте сообщение в формате:*\n`{report_format}`"
 
-    await message.answer(escape_md(full_message), parse_mode=ParseMode.MARKDOWN_V2)
+    await message.answer(escape_md(full_message), parse_mode=None)
 
     # Сохраняем в FSM, какого задания мы ждем отчет
     await state.set_state(Form.waiting_for_homework)  # Нужно будет создать это состояние
@@ -6366,7 +6365,7 @@ async def cb_buy_course_prompt(query: types.CallbackQuery, callback_data: BuyCou
         f"{escape_md(payment_instructions)}\n\n"  # Отображаем инструкцию
         f"После получения кода активации, отправьте его в этот чат",
         reply_markup=builder.as_markup(),
-        parse_mode=ParseMode.MARKDOWN_V2
+        parse_mode=None
     )
 
 
@@ -6394,7 +6393,7 @@ async def process_code_after_payment(message: types.Message, state: FSMContext):
     # Используем вашу существующую функцию activate_course
     is_activated, activation_message_text = await activate_course(user_id, activation_code, 1) # Предполагаем, что level=1
 
-    await message.reply(escape_md(activation_message_text), parse_mode=ParseMode.MARKDOWN_V2)
+    await message.reply(escape_md(activation_message_text), parse_mode=None)
 
     if is_activated:
         # Если успешно, выходим из состояния и показываем главное меню нового курса
@@ -6429,7 +6428,7 @@ async def process_code_after_payment(message: types.Message, state: FSMContext):
         await message.reply(
             escape_md("Если у вас другой код, попробуйте ввести его. Или вернитесь к списку курсов."),
             reply_markup=builder.as_markup(),
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
 
 
@@ -6600,10 +6599,10 @@ async def cb_change_tariff_prompt(query: types.CallbackQuery, callback_data: Cha
 
         price_option_str = f"{price_option} руб." if price_option > 0 else "Бесплатно"  # или "Специальная цена"
 
-        line = f"Тариф «*{tariff_title_option_safe}*» \\- {escape_md(price_option_str)}"
+        line = f"Тариф «*{tariff_title_option_safe}*» - {escape_md(price_option_str)}"
 
         if version_id_option == current_user_version_id:
-            line += " \\(*ваш текущий*\\)"
+            line += " (*ваш текущий*)"
             message_text_parts.append(line)
             found_current_in_list = True
         else:
@@ -6634,7 +6633,7 @@ async def cb_change_tariff_prompt(query: types.CallbackQuery, callback_data: Cha
                                                                        f"Тариф {current_user_version_id}")
         current_tariff_name_safe = escape_md(str(current_tariff_name_obj))
         message_text_parts.append(
-            f"Ваш текущий тариф: «*{current_tariff_name_safe}*» \\(цена {current_user_tariff_price} руб\\.\\)")
+            f"Ваш текущий тариф: «*{current_tariff_name_safe}*» (цена {current_user_tariff_price} руб.)")
 
     builder.adjust(1)  # Каждая кнопка тарифа на новой строке
 
@@ -6657,12 +6656,12 @@ async def cb_change_tariff_prompt(query: types.CallbackQuery, callback_data: Cha
     if query.message:
         try:
             await query.message.edit_text(final_text, reply_markup=builder.as_markup(),
-                                          parse_mode=ParseMode.MARKDOWN_V2)
+                                          parse_mode=None)
         except TelegramBadRequest as e_edit_tariff:
             logger.error(f"Ошибка edit_text в cb_change_tariff_prompt: {e_edit_tariff}")
             # Если не удалось отредактировать, отправим новым сообщением
             await bot.send_message(user_id, final_text, reply_markup=builder.as_markup(),
-                                   parse_mode=ParseMode.MARKDOWN_V2)
+                                   parse_mode=None)
             if query.message: await query.message.delete()  # Попытаемся удалить старое, если новое отправлено
     await query.answer()
 
@@ -6709,13 +6708,13 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
     price_difference = round(new_tariff_price - current_price, 2)  # Округляем на всякий случай
 
     text_parts = [
-        f"Вы собираетесь сменить тариф для курса «*{course_title_safe}*» на «*{new_tariff_title_safe}*»\\."
+        f"Вы собираетесь сменить тариф для курса «*{course_title_safe}*» на «*{new_tariff_title_safe}*»."
         # Экранируем точку
     ]
 
     payment_needed = False
     if price_difference > 0:
-        text_parts.append(f"Сумма к доплате: *{price_difference} руб*\\.")  # Экранируем точку
+        text_parts.append(f"Сумма к доплате: *{price_difference} руб*.")  # Экранируем точку
         payment_instructions_from_env = PAYMENT_INSTRUCTIONS_TEMPLATE
 
         payment_instructions_formatted = payment_instructions_from_env.format(
@@ -6729,20 +6728,20 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
         payment_needed = True
     elif price_difference < 0:
         text_parts.append(
-            f"Новый тариф дешевле вашего текущего\\. Переход будет без доплаты\\.")  # Экранируем точки и скобки
+            f"Новый тариф дешевле вашего текущего. Переход будет без доплаты.")  # Экранируем точки и скобки
     else:
         text_parts.append(
-            f"Цена нового тарифа такая же, как у вашего текущего\\. Переход будет без доплаты\\.")  # Экранируем точку
+            f"Цена нового тарифа такая же, как у вашего текущего. Переход будет без доплаты.")  # Экранируем точку
 
     text_parts.append(
-        f"\nПосле смены тарифа ваш прогресс по текущему уровню курса будет сброшен, и вы начнете его заново с новым тарифом\\.")  # Экранируем точку
+        f"\nПосле смены тарифа ваш прогресс по текущему уровню курса будет сброшен, и вы начнете его заново с новым тарифом.")  # Экранируем точку
 
     if payment_needed:
         text_parts.append(
-            f"После оплаты разницы и получения нового кода активации \\(или если у вас уже есть код для тарифа «*{new_tariff_title_safe}*»\\), отправьте его в этот чат\\.")  # Экранируем скобки и точку
+            f"После оплаты разницы и получения нового кода активации (или если у вас уже есть код для тарифа «*{new_tariff_title_safe}*»), отправьте его в этот чат.")  # Экранируем скобки и точку
     else:
         text_parts.append(
-            f"Если у вас есть код активации для тарифа «*{new_tariff_title_safe}*», отправьте его в этот чат для смены тарифа\\. Если код не требуется для этого перехода \\(например, бесплатный тариф или автоматическое обновление после подтверждения админом\\), обратитесь в поддержку для завершения смены тарифа\\.")  # Экранируем скобки и точки
+            f"Если у вас есть код активации для тарифа «*{new_tariff_title_safe}*», отправьте его в этот чат для смены тарифа. Если код не требуется для этого перехода (например, бесплатный тариф или автоматическое обновление после подтверждения админом), обратитесь в поддержку для завершения смены тарифа.")  # Экранируем скобки и точки
     logger.info(f"Проверка текста перед отправкой:\n{text_parts}")
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад к выбору тарифов",
@@ -6754,7 +6753,7 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
     if query.message:
         try:
             await query.message.edit_text(final_text, reply_markup=builder.as_markup(),
-                                          parse_mode=ParseMode.MARKDOWN_V2)
+                                          parse_mode=None)
             await query.answer()  # Answer после успешного edit_text
             logger.info(f"555Сообщение успешно отредактировано после выбора нового тарифа")
         except TelegramBadRequest as e_edit_confirm_tariff:  # Уникальное имя переменной
@@ -6765,7 +6764,7 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
             except Exception:
                 pass
             await bot.send_message(user_id, final_text, reply_markup=builder.as_markup(),
-                                   parse_mode=ParseMode.MARKDOWN_V2)
+                                   parse_mode=None)
             await query.answer()  # Answer после send_message
         except Exception as e_generic_confirm_tariff:  # Уникальное имя переменной
             logger.error(f"Общая ошибка в cb_confirm_new_tariff_and_pay_diff: {e_generic_confirm_tariff}",
@@ -6773,7 +6772,7 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
             await query.answer("Произошла ошибка  Попробуйте еще раз", show_alert=True)
     else:
         # Если query.message None, что маловероятно для callback_query
-        await bot.send_message(user_id, final_text, reply_markup=builder.as_markup(), parse_mode=ParseMode.MARKDOWN_V2)
+        await bot.send_message(user_id, final_text, reply_markup=builder.as_markup(), parse_mode=None)
         await query.answer()
 
 @dp.callback_query(ReplySupportCallback.filter())
@@ -7033,7 +7032,7 @@ async def process_feedback(message: types.Message, state: FSMContext):
             logger.error(f"Неполные данные в FSM для process_feedback: {user_data}")
             await message.reply(escape_md(
                 "Ошибка: не удалось получить все данные для обработки отзыва. Пожалуйста, начните проверку ДЗ заново."),
-                                parse_mode=ParseMode.MARKDOWN_V2)
+                                parse_mode=None)
             await state.clear()
             return
 
@@ -7054,12 +7053,12 @@ async def process_feedback(message: types.Message, state: FSMContext):
             # Передаем ID сообщения для обновления/ответа
         )
         # Сообщение админу, что его фидбэк принят, уже не нужно, т.к. handle_homework_result отправит статус.
-        # await message.reply(escape_md(f"Комментарий для ДЗ (user {student_user_id}) отправлен."), parse_mode=ParseMode.MARKDOWN_V2)
+        # await message.reply(escape_md(f"Комментарий для ДЗ (user {student_user_id}) отправлен."), parse_mode=None)
 
     except Exception as e:
         logger.error(f"❌ Ошибка в process_feedback: {e}", exc_info=True)
         await message.reply(escape_md("Произошла ошибка при обработке вашего комментария."),
-                            parse_mode=ParseMode.MARKDOWN_V2)
+                            parse_mode=None)
     finally:
         # ===== СНЯТИЕ БЛОКИРОВКИ =====
         if admin_message_id_to_update and admin_message_id_to_update in HOMEWORK_BEING_PROCESSED:
@@ -7137,10 +7136,10 @@ async def cb_get_daily_tasks(query: types.CallbackQuery):
     # Формируем красивое сообщение
     main_task = task_menu['main_task']
     message_text = (
-        f"✨ *Главная практика дня \\({main_task['karma_points']} КБ\\):*\n"
+        f"✨ *Главная практика дня ({main_task['karma_points']} КБ):*\n"
         f"_{escape_md(main_task['title'])}_\n"
         f"{escape_md(main_task['description'])}\n\n"
-        f"🔍 *Дополнительные возможности \\(по 1\\-2 КБ за каждое\\):*\n"
+        f"🔍 *Дополнительные возможности (по 1-2 КБ за каждое):*\n"
     )
 
     builder = InlineKeyboardBuilder()
@@ -7150,13 +7149,13 @@ async def cb_get_daily_tasks(query: types.CallbackQuery):
                    callback_data=f"do_task:{main_task['id']}")  # Отправляем ID из БД
 
     for task in task_menu['secondary_tasks']:
-        message_text += f"• {escape_md(task['title'])} \\({task['karma_points']} КБ\\)\n"
+        message_text += f"• {escape_md(task['title'])} ({task['karma_points']} КБ)\n"
         builder.button(text=f"✅ Выполнить: {task['title'][:30]}...",
                        callback_data=f"do_task:{task['id']}")
 
     builder.adjust(1)
 
-    await query.message.edit_text(message_text, reply_markup=builder.as_markup(), parse_mode="MarkdownV2")
+    await query.message.edit_text(message_text, reply_markup=builder.as_markup(), parse_mode=None)
     await query.answer()
 
 
@@ -7241,12 +7240,12 @@ async def handle_homework_result(
             if is_approved and lesson_num >= total_lessons and total_lessons > 0:
                 course_title_safe = escape_md(await get_course_title(course_id))
                 message_text_completion = (
-                    f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n" "Вы прошли все уроки\\. Что вы хотите сделать дальше?")
+                    f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»! 🎉\n\n" "Вы прошли все уроки. Что вы хотите сделать дальше?")
                 builder_completion = InlineKeyboardBuilder()
                 builder_completion.button(text="Выбрать другой курс", callback_data="select_other_course")
                 builder_completion.button(text="Оставить отзыв", callback_data="leave_feedback")
                 await bot.send_message(user_id, message_text_completion, reply_markup=builder_completion.as_markup(),
-                                       parse_mode="MarkdownV2")
+                                       parse_mode=None)
                 await conn.execute(
                     "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
                     (user_id, course_id))
@@ -7265,7 +7264,7 @@ async def handle_homework_result(
                     message_to_user_main_part = f"❌ Ваше домашнее задание по курсу *{escape_md(course_id)}*, урок *{lesson_num}* отклонено"
                     if feedback_text: message_to_user_main_part += f"\n\n*Причина:*\n{escape_md(feedback_text)}"
 
-                await bot.send_message(user_id, message_to_user_main_part, parse_mode="MarkdownV2")
+                await bot.send_message(user_id, message_to_user_main_part, parse_mode=None)
                 await send_main_menu(user_id, course_id, lesson_num, version_id, homework_pending=(not is_approved),
                                      user_course_level_for_menu=user_level)
 
@@ -7605,7 +7604,7 @@ async def handle_homework(message: types.Message):
                 f"Желаем удачи в прохождении курса"
             )
             logger.info(f"3332 {welcome_message=}")
-            await message.answer(welcome_message, reply_markup=keyboard, parse_mode="MarkdownV2")
+            await message.answer(welcome_message, reply_markup=keyboard, parse_mode=None)
 
 
         return # break here
@@ -7626,7 +7625,7 @@ async def handle_homework(message: types.Message):
             # Экранируем сообщение с помощью escape_md
             await message.answer(
                 escape_md("✅ Домашка принята для самопроверки и будет одобрена автоматически!"),
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
             logger.info(f"handle_homework: Отправлено сообщение об одобрении домашки для самопроверки")
             async with aiosqlite.connect(DB_FILE) as conn:
@@ -7649,7 +7648,7 @@ async def handle_homework(message: types.Message):
                         f"Курс {course_id} (v1) завершен для {user_id} после самоодобрения ДЗ урока {current_lesson}.")
                     course_title_safe = escape_md(await get_course_title(course_id))
                     message_text_completion = (
-                        f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»\\! 🎉\n\n"
+                        f"🎉 Поздравляем с успешным завершением курса «{course_title_safe}»! 🎉\n\n"
                         "Вы прошли все уроки. Что вы хотите сделать дальше?"
                     )
                     builder_completion = InlineKeyboardBuilder()
@@ -7661,7 +7660,7 @@ async def handle_homework(message: types.Message):
                         chat_id=user_id,
                         text=message_text_completion,
                         reply_markup=builder_completion.as_markup(),
-                        parse_mode=ParseMode.MARKDOWN_V2
+                        parse_mode=None
                     )
                     await conn.execute(
                         "UPDATE user_courses SET status = 'completed', is_completed = 1 WHERE user_id = ? AND course_id = ?",
@@ -7726,7 +7725,7 @@ async def handle_homework(message: types.Message):
                 escape_md(
                     f"Вы прислали ДЗ не того типа. Для этого урока ожидается: **{expected_hw_type.capitalize()}**. "
                     f"Пожалуйста, отправьте ДЗ корректного типа"),
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
             return  # Прерываем обработку ДЗ
 
@@ -7807,7 +7806,7 @@ async def handle_homework(message: types.Message):
                 photo=message.photo[-1].file_id,
                 caption=caption_with_description,
                 reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         elif message.video:
             sent_admin_message = await bot.send_video(
@@ -7815,7 +7814,7 @@ async def handle_homework(message: types.Message):
                 video=message.video.file_id,
                 caption=caption_with_description,
                 reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         elif message.document:
             sent_admin_message = await bot.send_document(
@@ -7823,7 +7822,7 @@ async def handle_homework(message: types.Message):
                 document=message.document.file_id,
                 caption=caption_with_description,
                 reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         elif message.audio:  # Новый тип
             sent_admin_message = await bot.send_audio(
@@ -7831,7 +7830,7 @@ async def handle_homework(message: types.Message):
                 audio=message.audio.file_id,
                 caption=caption_with_description,
                 reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         elif message.voice:  # Новый тип
             sent_admin_message = await bot.send_voice(
@@ -7840,7 +7839,7 @@ async def handle_homework(message: types.Message):
                 caption=caption_with_description,
                 # Для voice caption обычно не отображается клиентами, но API его принимает
                 reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         elif message.animation:  # Новый тип (GIF)
             sent_admin_message = await bot.send_animation(
@@ -7848,7 +7847,7 @@ async def handle_homework(message: types.Message):
                 animation=message.animation.file_id,
                 caption=caption_with_description,
                 reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         elif message.text:  # Если это текстовая домашка
             # text здесь - это message.text.strip()
@@ -7857,12 +7856,12 @@ async def handle_homework(message: types.Message):
                 ADMIN_GROUP_ID,
                 final_admin_text,
                 reply_markup=admin_keyboard,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=None
             )
         else:
             logger.warning(f"Получен неподдерживаемый тип контента для ДЗ от user {user_id}: {message.content_type}")
             await message.answer(escape_md("Неподдерживаемый тип файла для домашнего задания."),
-                                 parse_mode=ParseMode.MARKDOWN_V2)
+                                 parse_mode=None)
             return  # Выходим, если тип не поддерживается
         logger.info(f"sent_admin_message: {sent_admin_message}")
 
@@ -7957,13 +7956,13 @@ async def handle_homework(message: types.Message):
 
         await message.answer(
             escape_md(f"✅ {homework_type} на проверке!"),
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
 
     except Exception as e4826:
         logger.error(f"Ошибка отправки домашки админам: {e4826}", exc_info=True)
         await message.answer(escape_md("Произошла ошибка при отправке вашего ДЗ. Попробуйте позже."),
-                             parse_mode=ParseMode.MARKDOWN_V2)
+                             parse_mode=None)
 
 # единое главное меню для пользователя. Теперь с левелами
 async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_id: str,
@@ -7981,7 +7980,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 f"Критическая ошибка: не удалось получить числовой ID для курса '{course_id}' в send_main_menu.")
             await bot.send_message(user_id, escape_md(
                 "Произошла ошибка при загрузке меню курса (ID не найден). Обратитесь в поддержку."),
-                                   parse_mode=ParseMode.MARKDOWN_V2)
+                                   parse_mode=None)
             return
 
         # Экранируем все динамические строки, которые пойдут в сообщение
@@ -8015,13 +8014,13 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         domashka_text = escape_md("не требуется")  # Экранируем сразу
         if lesson_has_homework_defined:  # Если для этого урока в принципе есть ДЗ
             if homework_pending:  # Если текущий статус в user_courses - pending или rejected
-                domashka_text = f"ожидается \\({expected_hw_type_for_this_lesson}\\)"
+                domashka_text = f"ожидается ({expected_hw_type_for_this_lesson})"
             else:  # ДЗ для этого урока было, и сейчас оно принято (hw_status = 'approved' или 'none'/'not_required' и т.п.)
                 # Или это урок 0, для которого ДЗ не бывает pending.
                 if lesson_num == 0:  # Для урока-описания
                     domashka_text = escape_md("не предусмотрена")
                 else:
-                    domashka_text = f"принята \\(тип: {expected_hw_type_for_this_lesson}\\)"
+                    domashka_text = f"принята (тип: {expected_hw_type_for_this_lesson})"
 
         # Узнаем общее количество уроков на текущем уровне
         total_lessons_on_level = 0
@@ -8041,7 +8040,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         base_text_lines = [
             f"🎓 *Курс:* {course_title_safe}",
             f"🔑 *Тариф:* {tariff_name_safe}",
-            f"📖 *Урок \\(отправлен\\):* {lesson_num} из {total_lessons_on_level}",
+            f"📖 *Урок (отправлен):* {lesson_num} из {total_lessons_on_level}",
             f"🥇 *Уровень:* {user_course_level_for_menu}",
             f"⏳ *Интервал:* {interval_safe_str}",  # Используем экранированную строку с "ч"
             f"📝 *Домашка к уроку {lesson_num}:* {domashka_text}"
@@ -8056,9 +8055,9 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 hasNextLevel = await cursor_next_level.fetchone()
             if hasNextLevel:
                 base_text_lines.append(
-                    f"🎉 *Текущий уровень завершен\\!* Вы можете перейти на следующий уровень через меню 'Все курсы' \\(кнопка \"Повторить/Обновить\" для этого курса\\)\\.")
+                    f"🎉 *Текущий уровень завершен!* Вы можете перейти на следующий уровень через меню 'Все курсы' (кнопка \"Повторить/Обновить\" для этого курса).")
             else:
-                base_text_lines.append(f"🎉 *Поздравляем, курс полностью завершен\\!*")
+                base_text_lines.append(f"🎉 *Поздравляем, курс полностью завершен!*")
         elif lesson_num > 0 or (lesson_num == 0 and total_lessons_on_level > 0):
             base_text_lines.append(f"🕒 *Следующий урок:* {next_lesson_display_text_safe}")
 
@@ -8122,7 +8121,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
             user_id,
             final_text,
             reply_markup=builder.as_markup(),
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=None
         )
 
         async with aiosqlite.connect(DB_FILE) as conn_update_menu:
@@ -8140,7 +8139,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
             # Попытка отправить простое сообщение об ошибке, если основное меню не удалось
             await bot.send_message(user_id, escape_md(
                 "Возникла серьезная ошибка при отображении меню курса. Мы уже работаем над этим. Попробуйте команду /start или обратитесь в поддержку."),
-                                   parse_mode=ParseMode.MARKDOWN_V2)
+                                   parse_mode=None)
         except Exception as e_fallback:  # Уникальный идентификатор ошибки
             logger.error(
                 f"Не удалось отправить даже fallback сообщение об ошибке меню пользователю {user_id}: {e_fallback}")
@@ -8493,7 +8492,7 @@ async def main():
 
     bot = Bot(
         token=BOT_TOKEN_CONF,
-        #default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2)
+        #default=DefaultBotProperties(parse_mode=None)
         default=DefaultBotProperties(parse_mode=None)
     )
     # dp = Dispatcher() # <--- УБЕРИТЕ ЭТУ СТРОКУ
@@ -8525,7 +8524,7 @@ async def main():
                 for course in removed_courses:
                     admin_notification += f"  • `{escape_md(course)}`\n"
                 admin_notification += "\nСтуденты отписаны от этих курсов."
-                await bot.send_message(ADMIN_GROUP_ID, admin_notification, parse_mode=ParseMode.MARKDOWN_V2)
+                await bot.send_message(ADMIN_GROUP_ID, admin_notification, parse_mode=None)
                 logger.info("📨 Админы уведомлены об очистке осиротевших курсов")
             except Exception as e:
                 logger.error(f"❌ Ошибка при отправке уведомления админам: {e}")
