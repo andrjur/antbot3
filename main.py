@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# AntBot v4 - Telegram bot for courses
 import asyncio, logging, json, os, re, shutil, sys, locale, random
 import functools, sqlite3, aiosqlite, pytz
 from functools import lru_cache
