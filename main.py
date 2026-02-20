@@ -5356,10 +5356,10 @@ async def callback_admin_menu(callback: CallbackQuery):
     await callback.message.edit_text(
         f"👑 *Админское меню*\n\n"
         f"💡 *Команды:*\n"
-        f"• /add_course — добавить новый курс\n"
-        f"• /list_lessons — посмотреть все уроки\n"
-        f"• /upload_lesson — загрузить уроки\n"
-        f"• /show_codes — коды активации курсов",
+        f"• /add\\_course — добавить новый курс\n"
+        f"• /list\\_lessons — посмотреть все уроки\n"
+        f"• /upload\\_lesson — загрузить уроки\n"
+        f"• /show\\_codes — коды активации курсов",
         reply_markup=admin_menu_keyboard,
         parse_mode="MarkdownV2"
     )
@@ -5376,9 +5376,9 @@ async def callback_add_course_menu(callback: CallbackQuery):
     await callback.message.edit_text(
         "➕ *Добавление курса*\n\n"
         "Используйте команду:\n"
-        "/add_course — для пошагового создания\n\n"
+        "/add\\_course — для пошагового создания\n\n"
         "Или быстрое создание:\n"
-        "/add_course <group_id> <course_id> <code1> <code2> <code3>",
+        "/add\\_course <group\\_id> <course\\_id> <code1> <code2> <code3>",
         parse_mode="MarkdownV2"
     )
 
@@ -5433,14 +5433,14 @@ async def callback_show_codes_menu(callback: CallbackQuery):
         result = "🔐 *Коды активации:*\n\n"
         
         for course_name, course_codes in sorted(courses.items()):
-            result += f"📚 *{course_name}*\n"
+            result += f"📚 *{escape_md(course_name)}*\n"
             for item in course_codes:
                 code = item["code"]
                 version = item["version"]
                 price = item["price"]
-                result += f"   • `{code}` — {version}"
+                result += f"   • `{escape_md(code)}` — {escape_md(version)}"
                 if price:
-                    result += f" ({price}₽)"
+                    result += f" \\({escape_md(str(price))}₽\\)"
                 result += "\n"
             result += "\n"
         
@@ -7137,10 +7137,10 @@ async def cb_get_daily_tasks(query: types.CallbackQuery):
     # Формируем красивое сообщение
     main_task = task_menu['main_task']
     message_text = (
-        f"✨ *Главная практика дня ({main_task['karma_points']} КБ):*\n"
+        f"✨ *Главная практика дня \\({main_task['karma_points']} КБ\\):*\n"
         f"_{escape_md(main_task['title'])}_\n"
         f"{escape_md(main_task['description'])}\n\n"
-        f"🔍 *Дополнительные возможности (по 1-2 КБ за каждое):*\n"
+        f"🔍 *Дополнительные возможности \\(по 1\\-2 КБ за каждое\\):*\n"
     )
 
     builder = InlineKeyboardBuilder()
@@ -7150,7 +7150,7 @@ async def cb_get_daily_tasks(query: types.CallbackQuery):
                    callback_data=f"do_task:{main_task['id']}")  # Отправляем ID из БД
 
     for task in task_menu['secondary_tasks']:
-        message_text += f"• {escape_md(task['title'])} ({task['karma_points']} КБ)\n"
+        message_text += f"• {escape_md(task['title'])} \\({task['karma_points']} КБ\\)\n"
         builder.button(text=f"✅ Выполнить: {task['title'][:30]}...",
                        callback_data=f"do_task:{task['id']}")
 
