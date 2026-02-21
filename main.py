@@ -1483,17 +1483,6 @@ async def init_db():
             ''')
             await conn.commit()
 
-            # Создаем таблицу admins для хранения админов
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS admins (
-                    user_id INTEGER PRIMARY KEY,
-                    added_by INTEGER NOT NULL,
-                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_super INTEGER DEFAULT 0
-                )
-            ''')
-            await conn.commit()
-
             # Получаем список созданных таблиц
             cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = await cursor.fetchall()
@@ -1508,79 +1497,44 @@ async def init_db():
 # ================== ФУНКЦИИ АДМИНИСТРИРОВАНИЯ ==================
 
 async def is_super_admin(user_id: int) -> bool:
-    """Проверяет, является ли пользователь суперадмином (из .env)"""
+    """Проверяет, является ли пользователь суперадмином (из .env ADMIN_IDS)"""
     return user_id in ADMIN_IDS_CONF
 
 
 async def is_admin(user_id: int) -> bool:
-    """Проверяет, является ли пользователь админом (суперадмин, админ из БД, или участник админ-группы)"""
-    # 1. Суперадмин из .env
+    """Проверяет, является ли пользователь админом.
+    - Суперадмин из ADMIN_IDS (.env)
+    - Участник группы ADMIN_GROUP_ID
+    """
     if user_id in ADMIN_IDS_CONF:
         return True
     
-    # 2. Админ из базы данных
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
-            if await cursor.fetchone():
+    # Проверяем участие в админ-группе
+    if ADMIN_GROUP_ID:
+        try:
+            member = await bot.get_chat_member(ADMIN_GROUP_ID, user_id)
+            if member.status in ['member', 'administrator', 'creator']:
                 return True
-    except:
-        pass
+        except Exception as e:
+            logger.debug(f"Не удалось проверить членство в группе: {e}")
     
     return False
 
 
-async def add_admin_to_db(user_id: int, added_by: int, is_super: bool = False) -> bool:
-    """Добавляет админа в базу данных"""
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute('''
-                INSERT OR REPLACE INTO admins (user_id, added_by, is_super)
-                VALUES (?, ?, ?)
-            ''', (user_id, added_by, 1 if is_super else 0))
-            await conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при добавлении админа: {e}")
-        return False
-
-
-async def remove_admin_from_db(user_id: int) -> bool:
-    """Удаляет админа из базы данных"""
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
-            await conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при удалении админа: {e}")
-        return False
-
-
-async def get_all_admins() -> list:
-    """Получает список всех админов"""
-    admins = []
+async def get_admin_type(user_id: int) -> str:
+    """Возвращает тип админа: 'super', 'group', или None"""
+    if user_id in ADMIN_IDS_CONF:
+        return "super"
     
-    # Суперадмины из .env
-    for uid in ADMIN_IDS_CONF:
-        admins.append({"user_id": uid, "type": "super", "added_by": None})
+    if ADMIN_GROUP_ID:
+        try:
+            member = await bot.get_chat_member(ADMIN_GROUP_ID, user_id)
+            if member.status in ['member', 'administrator', 'creator']:
+                return "group"
+        except:
+            pass
     
-    # Админы из БД
-    try:
-        async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute("SELECT user_id, added_by, is_super FROM admins")
-            rows = await cursor.fetchall()
-            for user_id, added_by, is_super in rows:
-                if user_id not in ADMIN_IDS_CONF:  # Не дублируем суперадминов
-                    admins.append({
-                        "user_id": user_id,
-                        "type": "super" if is_super else "admin",
-                        "added_by": added_by
-                    })
-    except Exception as e:
-        logger.error(f"Ошибка при получении списка админов: {e}")
-    
-    return admins
+    return None
 
 
 # ================== КОНЕЦ ФУНКЦИЙ АДМИНИСТРИРОВАНИЯ ==================
@@ -2964,7 +2918,7 @@ async def import_db(message: types.Message):
     if not message.document:
         await message.answer(
             "📥 Импорт базы данных\n\n"
-            "Отправьте JSON-файл с данными в ответ на это сообщение.\n\n"
+            "Отправьте JSON-файл с данными.\n\n"
             "⚠️ Внимание: существующие данные будут заменены!",
             parse_mode=None
         )
@@ -3777,132 +3731,27 @@ async def cmd_list_admins(message: types.Message):
         return
     
     try:
-        admins = await get_all_admins()
-        
-        if not admins:
-            await message.answer("📭 Список админов пуст.")
-            return
-        
         result = "👥 Список администраторов:\n\n"
         
-        for admin in admins:
-            admin_type = "👑 Суперадмин" if admin["type"] == "super" else "🔧 Админ"
-            user_info = f"{admin_type}: `{admin['user_id']}`"
-            
-            if admin["added_by"]:
-                user_info += f" (добавил: {admin['added_by']})"
-            
-            result += f"{user_info}\n"
+        # Суперадмины из .env
+        result += "👑 Суперадмины (из .env):\n"
+        for uid in ADMIN_IDS_CONF:
+            result += f"   • {uid}\n"
         
-        result += f"\n📊 Всего: {len(admins)} администраторов"
-        result += f"\n\n💡 /add_admin <user_id> - добавить"
-        result += f"\n💡 /remove_admin <user_id> - удалить"
+        # Участники админ-группы
+        if ADMIN_GROUP_ID:
+            result += f"\n🔧 Админы группы ({ADMIN_GROUP_ID}):\n"
+            result += "   Добавьте людей в группу — они станут админами.\n"
+            result += "   Используйте /start чтобы проверить свой статус."
+        
+        result += f"\n💡 Админы могут: управлять курсами, уроками\n"
+        result += f"💡 Суперадмины могут: экспорт/импорт БД из лички"
         
         await message.answer(result, parse_mode=None)
         
     except Exception as e:
         logger.error(f"Ошибка при показе админов: {e}")
         await message.answer(f"❌ Ошибка: {e}")
-
-
-@dp.message(Command("add_admin"))
-async def cmd_add_admin(message: types.Message, command: CommandObject):
-    """Добавить админа"""
-    logger.info(f"cmd_add_admin START: user_id={message.from_user.id}")
-    
-    if not await is_admin(message.from_user.id):
-        await message.answer("❌ Только для администраторов.")
-        return
-    
-    args = command.args.split() if command.args else []
-    
-    if len(args) < 1:
-        await message.answer(
-            "❌ Укажите ID пользователя.\n\n"
-            "Формат: /add_admin <user_id>\n"
-            "Пример: /add_admin 123456789"
-        )
-        return
-    
-    try:
-        new_admin_id = int(args[0])
-    except ValueError:
-        await message.answer("❌ ID должен быть числом.")
-        return
-    
-    # Проверяем, не админ ли уже
-    if await is_admin(new_admin_id):
-        await message.answer(f"❌ Пользователь {new_admin_id} уже является администратором.")
-        return
-    
-    # Добавляем
-    if await add_admin_to_db(new_admin_id, message.from_user.id):
-        result = f"✅ Пользователь {new_admin_id} добавлен в администраторы."
-        await message.answer(result)
-        
-        # Логируем в админ-группу
-        if ADMIN_GROUP_ID:
-            await bot.send_message(
-                ADMIN_GROUP_ID,
-                f"👤 НОВЫЙ АДМИН\n\n"
-                f"Добавил: {message.from_user.id}\n"
-                f"Новый админ: {new_admin_id}",
-                parse_mode=None
-            )
-        
-        logger.info(f"Админ {message.from_user.id} добавил нового админа {new_admin_id}")
-    else:
-        await message.answer("❌ Ошибка при добавлении админа.")
-
-
-@dp.message(Command("remove_admin"))
-async def cmd_remove_admin(message: types.Message, command: CommandObject):
-    """Удалить админа"""
-    logger.info(f"cmd_remove_admin START: user_id={message.from_user.id}")
-    
-    if not await is_admin(message.from_user.id):
-        await message.answer("❌ Только для администраторов.")
-        return
-    
-    args = command.args.split() if command.args else []
-    
-    if len(args) < 1:
-        await message.answer(
-            "❌ Укажите ID пользователя.\n\n"
-            "Формат: /remove_admin <user_id>\n"
-            "Пример: /remove_admin 123456789"
-        )
-        return
-    
-    try:
-        admin_id = int(args[0])
-    except ValueError:
-        await message.answer("❌ ID должен быть числом.")
-        return
-    
-    # Нельзя удалить суперадмина из .env
-    if admin_id in ADMIN_IDS_CONF:
-        await message.answer("❌ Нельзя удалить суперадмина (задан в .env).")
-        return
-    
-    # Удаляем
-    if await remove_admin_from_db(admin_id):
-        result = f"✅ Пользователь {admin_id} удалён из администраторов."
-        await message.answer(result)
-        
-        # Логируем в админ-группу
-        if ADMIN_GROUP_ID:
-            await bot.send_message(
-                ADMIN_GROUP_ID,
-                f"👤 АДМИН УДАЛЁН\n\n"
-                f"Удалил: {message.from_user.id}\n"
-                f"Удалён: {admin_id}",
-                parse_mode=None
-            )
-        
-        logger.info(f"Админ {message.from_user.id} удалил админа {admin_id}")
-    else:
-        await message.answer("❌ Ошибка при удалении админа или админ не найден.")
 
 
 async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
@@ -5658,13 +5507,12 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         f"🎓 Курс: {course_name}\n"
                         f"🔑 Тариф: {version_name}\n"
                         f"📚 Текущий урок: {lesson_num}\n\n"
-                        f"💡 Команды управления:\n"
+                        f"💡 Команды:\n"
                         f"• /show_codes — курсы и коды\n"
                         f"• /add_course — создать курс\n"
                         f"• /upload_lesson — загрузить уроки\n"
                         f"• /list_lessons — список уроков\n"
                         f"• /list_admins — список админов\n"
-                        f"• /add_admin <id> — добавить админа\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
                         f"• /remind <id> <msg> — напоминание\n"
@@ -5690,7 +5538,6 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         f"• /upload_lesson — загрузить уроки\n"
                         f"• /list_lessons — список уроков\n"
                         f"• /list_admins — список админов\n"
-                        f"• /add_admin <id> — добавить админа\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
                         f"• /remind <id> <msg> — напоминание\n\n"
@@ -5833,7 +5680,6 @@ async def callback_admin_menu(callback: CallbackQuery):
         f"• /upload_lesson — загрузить уроки\n"
         f"• /list_lessons — список уроков\n"
         f"• /list_admins — список админов\n"
-        f"• /add_admin <id> — добавить админа\n"
         f"• /export_db — экспорт базы\n"
         f"• /import_db — импорт базы\n"
         f"• /remind <id> <msg> — напоминание",
