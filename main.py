@@ -1145,9 +1145,9 @@ def save_settings(settings_s):
         logger.error(f"Ошибка при сохранении настроек: {e849}")
 
 @db_exception_handler
-async def process_add_course_to_db(course_id, group_id, code1, code2, code3):
+async def process_add_course_to_db(course_id, group_id, code1, code2, code3, description=""):
     """Добавляет информацию о курсе и кодах активации в базу данных."""
-    logger.info(f"3338883333 process_add_course_to_db ")
+    logger.info(f"3338883333 process_add_course_to_db: course_id={course_id}, description={description[:50] if description else 'None'}")
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             # Получаем максимальный id из таблицы, если таблица пуста — ставим 1000
@@ -1155,11 +1155,14 @@ async def process_add_course_to_db(course_id, group_id, code1, code2, code3):
             row = await cursor.fetchone()
             max_id = row[0] if row[0] is not None else 999  # если таблица пуста, начнем с 1000
             new_id = max_id + 1
+            
+            course_title = f"{course_id} basic"
+            course_description = description if description else f"Описание для {course_id}"
 
             await conn.execute("""
                 INSERT OR REPLACE INTO courses (id, course_id, group_id, title, description)
                 VALUES (?, ?, ?, ?, ?)
-            """, (new_id, course_id, group_id, f"{course_id} basic", f"Описание для {course_id}"))
+            """, (new_id, course_id, group_id, course_title, course_description))
             logger.info(
                 f"Добавлена запись в process_add_course_to_db: {new_id=}, {course_id=}, {group_id=}")
 
@@ -3198,7 +3201,7 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
 
     # Сохраняем в БД
     try:
-        await process_add_course_to_db(course_id, group_id, code1, code2, code3)
+        await process_add_course_to_db(course_id, group_id, code1, code2, code3, description)
 
         # Явно сохраняем settings.json
         await update_settings_file()
