@@ -3574,7 +3574,7 @@ async def cmd_list_lessons(message: types.Message):
 
 @dp.message(Command("show_codes"))
 async def cmd_show_codes(message: types.Message):
-    """Показать коды активации курсов (только для админов)"""
+    """Показать курсы и коды активации (только для админов)"""
     logger.info(f"cmd_show_codes START: user_id={message.from_user.id}")
     
     if message.from_user.id not in ADMIN_IDS_CONF:
@@ -3583,47 +3583,71 @@ async def cmd_show_codes(message: types.Message):
     
     try:
         settings = await load_settings()
-        if not settings or "activation_codes" not in settings:
-            await message.answer("📭 Коды активации не найдены в настройках.")
-            return
         
-        codes = settings["activation_codes"]
-        if not codes:
-            await message.answer("📭 Нет зарегистрированных кодов активации.")
-            return
+        # Часть 1: Список курсов из базы данных
+        result = "📚 *Список курсов в базе:*\n\n"
         
-        # Группируем коды по курсам
-        courses = {}
-        for code, data in codes.items():
-            course = data.get("course", "unknown")
-            version = data.get("version", "v1")
-            price = data.get("price", 0)
-            
-            if course not in courses:
-                courses[course] = []
-            courses[course].append({
-                "code": code,
-                "version": version,
-                "price": price
-            })
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute('''
+                SELECT DISTINCT c.course_id, c.title, c.description, c.group_id,
+                       (SELECT COUNT(*) FROM group_messages gm WHERE gm.course_id = c.course_id) as lessons_count
+                FROM courses c
+                ORDER BY c.course_id
+            ''')
+            courses_db = await cursor.fetchall()
         
-        # Формируем ответ
-        result = "🔐 *Коды активации курсов:*\n\n"
-        
-        for course_name, course_codes in sorted(courses.items()):
-            result += f"📚 *Курс: {course_name}*\n"
-            for item in course_codes:
-                code = item["code"]
-                version = item["version"]
-                price = item["price"]
-                result += f"   • `{code}` — {version}"
-                if price:
-                    result += f" ({price}₽)"
+        if courses_db:
+            for course_id, title, description, group_id, lessons_count in courses_db:
+                result += f"📌 *{course_id}*\n"
+                result += f"   Название: {title or 'не указано'}\n"
+                result += f"   Группа: {group_id or 'не указана'}\n"
+                result += f"   Уроков: {lessons_count or 0}\n"
+                if description:
+                    desc_short = description[:100] + "..." if len(description) > 100 else description
+                    result += f"   Описание: {desc_short}\n"
                 result += "\n"
-            result += "\n"
+        else:
+            result += "📭 Курсы не найдены в базе данных.\n\n"
+        
+        # Часть 2: Коды активации
+        result += "🔐 *Коды активации:*\n\n"
+        
+        if not settings or "activation_codes" not in settings:
+            result += "📭 Коды активации не найдены.\n"
+        else:
+            codes = settings["activation_codes"]
+            if not codes:
+                result += "📭 Нет зарегистрированных кодов.\n"
+            else:
+                # Группируем коды по курсам
+                courses = {}
+                for code, data in codes.items():
+                    course = data.get("course", "unknown")
+                    version = data.get("version", "v1")
+                    price = data.get("price", 0)
+                    
+                    if course not in courses:
+                        courses[course] = []
+                    courses[course].append({
+                        "code": code,
+                        "version": version,
+                        "price": price
+                    })
+                
+                for course_name, course_codes in sorted(courses.items()):
+                    result += f"📚 {course_name}:\n"
+                    for item in course_codes:
+                        code = item["code"]
+                        version = item["version"]
+                        price = item["price"]
+                        result += f"   • {code} — {version}"
+                        if price:
+                            result += f" ({price}₽)"
+                        result += "\n"
+                    result += "\n"
         
         await message.answer(result, parse_mode=None)
-        logger.info(f"cmd_show_codes: показано {len(codes)} кодов для {len(courses)} курсов")
+        logger.info(f"cmd_show_codes: показано курсов и кодов")
         
     except Exception as e:
         logger.error(f"Ошибка при показе кодов: {e}")
@@ -5383,12 +5407,15 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         f"🎓 Курс: {escape_md(course_name)}\n"
                         f"🔑 Тариф: {escape_md(version_name)}\n"
                         f"📚 Текущий урок: {lesson_num}\n\n"
-                        f"💡 *Подсказки:*\n"
-                        f"• /list_lessons — посмотреть все уроки\n"
-                        f"• /show_codes — коды активации\n"
-                        f"• /add_course — добавить новый курс\n"
-                        f"• /upload_lesson — загрузить урок\n"
-                        f"• Нажмите «Остановить тестирование» чтобы выйти из курса"
+                        f"💡 *Команды управления:*\n"
+                        f"• /show_codes — курсы и коды\n"
+                        f"• /add_course — создать курс\n"
+                        f"• /upload_lesson — загрузить уроки\n"
+                        f"• /list_lessons — список уроков\n"
+                        f"• /export_db — экспорт базы\n"
+                        f"• /import_db — импорт базы\n"
+                        f"• /remind <user_id> <msg> — напоминание\n"
+                        f"• Нажмите «Остановить тестирование» чтобы выйти"
                     )
                     
                     await message.answer(admin_message, reply_markup=admin_keyboard, parse_mode=None)
@@ -5397,19 +5424,22 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                     logger.info(f"cmd_start: Admin {user_id} has no active course, showing admin menu")
                     
                     admin_menu_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📚 Курсы и коды", callback_data="show_codes_menu")],
                         [InlineKeyboardButton(text="➕ Добавить курс", callback_data="add_course_menu")],
-                        [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")],
-                        [InlineKeyboardButton(text="🔐 Коды активации", callback_data="show_codes_menu")]
+                        [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")]
                     ])
                     
                     await message.answer(
                         f"👑 *Вы администратор бота*\n\n"
                         f"💡 *Команды:*\n"
-                        f"• /add_course — добавить новый курс\n"
-                        f"• /list_lessons — посмотреть все уроки\n"
+                        f"• /show_codes — курсы и коды\n"
+                        f"• /add_course — создать курс\n"
                         f"• /upload_lesson — загрузить уроки\n"
-                        f"• /show_codes — коды активации курсов\n\n"
-                        f"Если нужно протестировать курс — активируйте его кодом.",
+                        f"• /list_lessons — список уроков\n"
+                        f"• /export_db — экспорт базы\n"
+                        f"• /import_db — импорт базы\n"
+                        f"• /remind <user_id> <msg> — напоминание\n\n"
+                        f"Для теста активируйте курс кодом.",
                         reply_markup=admin_menu_keyboard,
                         parse_mode=None
                     )
@@ -5535,18 +5565,21 @@ async def callback_admin_menu(callback: CallbackQuery):
     await callback.answer()
     
     admin_menu_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📚 Курсы и коды", callback_data="show_codes_menu")],
         [InlineKeyboardButton(text="➕ Добавить курс", callback_data="add_course_menu")],
-        [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")],
-        [InlineKeyboardButton(text="🔐 Коды активации", callback_data="show_codes_menu")]
+        [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")]
     ])
     
     await callback.message.edit_text(
         f"👑 *Админское меню*\n\n"
         f"💡 *Команды:*\n"
-        f"• /add_course — добавить новый курс\n"
-        f"• /list_lessons — посмотреть все уроки\n"
+        f"• /show_codes — курсы и коды\n"
+        f"• /add_course — создать курс\n"
         f"• /upload_lesson — загрузить уроки\n"
-        f"• /show_codes — коды активации курсов",
+        f"• /list_lessons — список уроков\n"
+        f"• /export_db — экспорт базы\n"
+        f"• /import_db — импорт базы\n"
+        f"• /remind <user_id> <msg> — напоминание",
         reply_markup=admin_menu_keyboard,
         parse_mode=None
     )
