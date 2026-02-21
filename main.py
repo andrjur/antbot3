@@ -3193,11 +3193,13 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
     settings["activation_codes"][code2] = {"course": course_id, "version": "v2", "price": 0}
     settings["activation_codes"][code3] = {"course": course_id, "version": "v3", "price": 0}
 
-    # Сохраняем описание курса если есть
-    if description:
-        if "course_descriptions" not in settings:
-            settings["course_descriptions"] = {}
-        settings["course_descriptions"][course_id] = description
+    # Сохраняем информацию о курсе (включая описание)
+    if "courses" not in settings:
+        settings["courses"] = {}
+    settings["courses"][course_id] = {
+        "title": f"{course_id} basic",
+        "description": description or ""
+    }
 
     # Сохраняем в БД
     try:
@@ -3709,6 +3711,13 @@ async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
             if len(sorted_lessons) > MAX_BUTTONS:
                 result += f"\n⚠️ Показаны кнопки только для первых {MAX_BUTTONS} уроков."
             
+            # Добавляем кнопки управления
+            keyboard.inline_keyboard.append([])  # Пустая строка
+            keyboard.inline_keyboard.append([
+                InlineKeyboardButton(text="🗑️ Удалить курс", callback_data="delete_course_menu"),
+                InlineKeyboardButton(text="🗑️ Очистить всё", callback_data="delete_all_lessons_confirm")
+            ])
+            
             if message_id:
                 await bot.edit_message_text(result, chat_id=chat_id, message_id=message_id, reply_markup=keyboard)
             else:
@@ -3729,6 +3738,166 @@ async def callback_back_to_list(callback: CallbackQuery):
     await callback.answer()
     logger.info(f"callback_back_to_list SUCCESS: возвращаем к списку уроков")
     await show_lessons_list(callback.from_user.id, callback.message.chat.id, callback.message.message_id)
+
+
+@dp.callback_query(lambda c: c.data == "delete_all_lessons_confirm")
+async def callback_delete_all_confirm(callback: CallbackQuery):
+    """Подтверждение удаления всех уроков"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить ВСЁ", callback_data="delete_all_lessons_execute"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="list_lessons_menu")
+        ]
+    ])
+    
+    await callback.message.edit_text(
+        "⚠️ ВНИМАНИЕ!\n\n"
+        "Вы уверены, что хотите удалить ВСЕ уроки из базы данных?\n\n"
+        "Это действие НЕОБРАТИМО!",
+        reply_markup=keyboard
+    )
+
+
+@dp.callback_query(lambda c: c.data == "delete_all_lessons_execute")
+async def callback_delete_all_execute(callback: CallbackQuery):
+    """Выполнение удаления всех уроков"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM group_messages")
+            count_before = (await cursor.fetchone())[0]
+            
+            await conn.execute("DELETE FROM group_messages")
+            await conn.commit()
+            
+            logger.info(f"callback_delete_all_execute: удалено {count_before} уроков")
+        
+        await callback.message.edit_text(f"✅ Удалено {count_before} записей уроков из базы данных.")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при удалении всех уроков: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.callback_query(lambda c: c.data == "delete_course_menu")
+async def callback_delete_course_menu(callback: CallbackQuery):
+    """Меню выбора курса для удаления"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute("SELECT DISTINCT course_id FROM group_messages ORDER BY course_id")
+            courses = await cursor.fetchall()
+        
+        if not courses:
+            await callback.message.edit_text("📭 Нет курсов с уроками.")
+            return
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+        for (course_id,) in courses:
+            keyboard.inline_keyboard.append([
+                InlineKeyboardButton(
+                    text=f"🗑️ {course_id}",
+                    callback_data=f"delete_course_confirm:{course_id}"
+                )
+            ])
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(text="🔙 Назад", callback_data="list_lessons_menu")
+        ])
+        
+        await callback.message.edit_text(
+            "🗑️ Выберите курс для удаления всех его уроков:",
+            reply_markup=keyboard
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе меню удаления курса: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.callback_query(lambda c: c.data.startswith("delete_course_confirm:"))
+async def callback_delete_course_confirm(callback: CallbackQuery):
+    """Подтверждение удаления курса"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    course_id = callback.data.split(":")[1]
+    await callback.answer()
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM group_messages WHERE course_id = ?",
+                (course_id,)
+            )
+            count = (await cursor.fetchone())[0]
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, удалить",
+                    callback_data=f"delete_course_execute:{course_id}"
+                ),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="delete_course_menu")
+            ]
+        ])
+        
+        await callback.message.edit_text(
+            f"⚠️ Удалить все уроки курса '{course_id}'?\n\n"
+            f"Количество записей: {count}\n\n"
+            f"Это действие НЕОБРАТИМО!",
+            reply_markup=keyboard
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении удаления курса: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
+
+
+@dp.callback_query(lambda c: c.data.startswith("delete_course_execute:"))
+async def callback_delete_course_execute(callback: CallbackQuery):
+    """Выполнение удаления курса"""
+    if callback.from_user.id not in ADMIN_IDS_CONF:
+        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        return
+    
+    course_id = callback.data.split(":")[1]
+    await callback.answer()
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM group_messages WHERE course_id = ?",
+                (course_id,)
+            )
+            count = (await cursor.fetchone())[0]
+            
+            await conn.execute("DELETE FROM group_messages WHERE course_id = ?", (course_id,))
+            await conn.commit()
+            
+            logger.info(f"callback_delete_course_execute: удалено {count} уроков курса {course_id}")
+        
+        await callback.message.edit_text(f"✅ Удалено {count} записей курса '{course_id}'.")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при удалении курса: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {e}")
 
 
 @dp.callback_query(ViewLessonCallback.filter())
@@ -4331,7 +4500,7 @@ async def cmd_remind(message: types.Message, command: CommandObject):
 
 
 async def update_settings_file():
-    """Обновляет файл settings.json с информацией о курсах."""
+    """Обновляет файл settings.json - ТОЛЬКО добавляет новые данные, НЕ затирает существующие."""
     try:
         # Проверяем что settings.json не является директорией
         if os.path.isdir("settings.json"):
@@ -4342,44 +4511,60 @@ async def update_settings_file():
             except Exception as e_cleanup:
                 logger.error(f"❌ Ошибка при удалении директории settings.json: {e_cleanup}")
 
+        # Загружаем текущие настройки
+        current_settings = {}
+        try:
+            if os.path.isfile("settings.json"):
+                with open("settings.json", "r", encoding="utf-8") as f:
+                    current_settings = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+        # Создаём структуру, сохраняя существующие данные
+        settings = {
+            "message_interval": current_settings.get("message_interval", 12),
+            "tariff_names": current_settings.get("tariff_names", {
+                "v1": "Соло",
+                "v2": "с проверкой",
+                "v3": "Премиум"
+            }),
+            "groups": current_settings.get("groups", {}),
+            "activation_codes": current_settings.get("activation_codes", {}),
+            "courses": current_settings.get("courses", {})
+        }
+
+        # Добавляем новые курсы из БД (только если их ещё нет)
         async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute("SELECT course_id, group_id FROM courses")
-            courses = await cursor.fetchall()
+            cursor = await conn.execute("SELECT course_id, group_id, title, description FROM courses")
+            courses_db = await cursor.fetchall()
+            
+            for course_id, group_id, title, description in courses_db:
+                # Добавляем в groups если нет
+                if group_id not in settings["groups"]:
+                    settings["groups"][group_id] = course_id
+                
+                # Добавляем в courses если нет
+                if course_id not in settings["courses"]:
+                    settings["courses"][course_id] = {
+                        "title": title or f"{course_id} basic",
+                        "description": description or ""
+                    }
 
-            # Загружаем текущие настройки чтобы сохранить message_interval и другие поля
-            current_settings = {}
-            try:
-                if os.path.isfile("settings.json"):
-                    with open("settings.json", "r", encoding="utf-8") as f:
-                        current_settings = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-
-            settings = {
-                "message_interval": current_settings.get("message_interval", 12),
-                "tariff_names": current_settings.get("tariff_names", {
-                    "v1": "Соло",
-                    "v2": "с проверкой",
-                    "v3": "Премиум"
-                }),
-                "groups": {group_id: course_id for course_id, group_id in courses},
-                "activation_codes": {},
-                "course_descriptions": current_settings.get("course_descriptions", {})
-            }
-
+            # Добавляем коды активации из БД (только если их ещё нет)
             cursor = await conn.execute("SELECT code_word, course_id, version_id, price_rub FROM course_activation_codes")
             activation_codes = await cursor.fetchall()
             for code_word, course_id, version_id, price_rub in activation_codes:
-                settings["activation_codes"][code_word] = {
-                    "course": course_id,
-                    "version": version_id,
-                    "price": price_rub if price_rub else 0
-                }
+                if code_word not in settings["activation_codes"]:
+                    settings["activation_codes"][code_word] = {
+                        "course": course_id,
+                        "version": version_id,
+                        "price": price_rub if price_rub else 0
+                    }
 
-            with open("settings.json", "w", encoding="utf-8") as f:
-                json.dump(settings, f, ensure_ascii=False, indent=4)
+        with open("settings.json", "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=4)
 
-            logger.info("Файл settings.json обновлен.")
+        logger.info("Файл settings.json обновлен (существующие данные сохранены).")
 
     except Exception as e2291:
         logger.error(f"Ошибка при обновлении файла settings.json: {e2291}")
