@@ -3776,7 +3776,6 @@ async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: Up
                 if row:
                     await conn.execute("DELETE FROM group_messages WHERE id = ?", (row[0],))
                     await conn.commit()
-                    await callback.answer("🗑️ Последняя часть удалена!", show_alert=True)
                     
                     # Проверяем, остались ли ещё части
                     cursor = await conn.execute('''
@@ -3785,18 +3784,50 @@ async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: Up
                     ''', (course_id, lesson_num))
                     count = (await cursor.fetchone())[0]
                     
+                    # Формируем то же меню что было после загрузки
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="📎 Добавить ещё",
+                                callback_data=UploadLessonAction(action="more", course_id=course_id, lesson_num=lesson_num).pack()
+                            ),
+                            InlineKeyboardButton(
+                                text="📚 Следующий урок",
+                                callback_data=UploadLessonAction(action="next", course_id=course_id, lesson_num=lesson_num).pack()
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="🗑️ Удалить последний",
+                                callback_data=UploadLessonAction(action="delete_last", course_id=course_id, lesson_num=lesson_num).pack()
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Завершить",
+                                callback_data=UploadLessonAction(action="done", course_id=course_id, lesson_num=lesson_num).pack()
+                            )
+                        ]
+                    ])
+                    
                     if count > 0:
                         await callback.message.edit_text(
-                            f"🗑️ Часть удалена. Осталось частей: {count}\n\n"
-                            f"📎 Можно добавить ещё контент к уроку {lesson_num}"
+                            f"🗑️ Часть удалена! Осталось частей: {count}\n\n"
+                            f"📚 Курс: {course_id}\n"
+                            f"🔢 Урок: {lesson_num}\n\n"
+                            f"Выберите действие:",
+                            reply_markup=keyboard
                         )
-                        await state.set_state(UploadLesson.waiting_content)
                     else:
                         await callback.message.edit_text(
-                            f"🗑️ Весь урок {lesson_num} удалён.\n\n"
-                            f"📝 Отправьте контент для урока {lesson_num}:"
+                            f"🗑️ Весь урок {lesson_num} удалён!\n\n"
+                            f"📚 Курс: {course_id}\n"
+                            f"🔢 Урок: {lesson_num}\n\n"
+                            f"Выберите действие:",
+                            reply_markup=keyboard
                         )
-                        await state.set_state(UploadLesson.waiting_content)
+                    
+                    await state.set_state(UploadLesson.waiting_content)
                 else:
                     await callback.answer("❌ Нечего удалять", show_alert=True)
         except Exception as e:
