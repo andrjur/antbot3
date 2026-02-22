@@ -600,6 +600,9 @@ user_support_state = {}
 lesson_check_tasks = {}
 last_stats_sent = None # 14-04 todo нафига
 
+# Set для отслеживания ДЗ, отправленных на n8n (для приоритета админа)
+homework_sent_to_n8n = set()
+
 # Создаем кэш для хранения информации о курсе и тарифе
 course_info_cache = {}
 
@@ -1133,6 +1136,77 @@ async def stop_lesson_schedule_task(user_id: int):
         task.cancel()
         del lesson_check_tasks[user_id]
         logger.info(f"Остановлена задача проверки расписания уроков для пользователя {user_id}.")
+
+
+async def check_pending_homework_timeout():
+    """
+    Периодически проверяет ДЗ, которые ожидают проверки более 7 минут,
+    и отправляет их на n8n webhook если админ не ответил.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)  # Проверяем каждую минуту
+            
+            if not N8N_HOMEWORK_CHECK_WEBHOOK_URL:
+                continue
+            
+            async with aiosqlite.connect(DB_FILE) as conn:
+                # Находим ДЗ, которые ожидают более 7 минут
+                cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=7)
+                
+                cursor = await conn.execute('''
+                    SELECT admin_message_id, admin_chat_id, student_user_id, 
+                           course_numeric_id, lesson_num, student_message_id, timestamp
+                    FROM pending_admin_homework
+                    WHERE timestamp < ?
+                ''', (cutoff_time.isoformat(),))
+                
+                pending_rows = await cursor.fetchall()
+                
+                for row in pending_rows:
+                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, timestamp = row
+                    
+                    logger.info(f"ДЗ #{admin_msg_id} ожидает более 7 минут, отправляем на n8n")
+                    
+                    # Получаем информацию о студенте и курсе
+                    cursor_student = await conn.execute(
+                        "SELECT username, first_name FROM users WHERE user_id = ?",
+                        (student_user_id,)
+                    )
+                    student_info = await cursor_student.fetchone()
+                    student_name = f"{student_info[1]} (@{student_info[0]})" if student_info else f"User {student_user_id}"
+                    
+                    course_id_str = await get_course_id_str(course_numeric_id)
+                    course_title = await get_course_title(course_id_str)
+                    
+                    # Отправляем на n8n
+                    payload = {
+                        "action": "check_homework_timeout",
+                        "student_user_id": student_user_id,
+                        "student_name": student_name,
+                        "course_id": course_id_str,
+                        "course_title": course_title,
+                        "lesson_num": lesson_num,
+                        "admin_message_id": admin_msg_id,
+                        "student_message_id": student_msg_id,
+                        "timestamp": timestamp,
+                        "timeout_minutes": 7
+                    }
+                    
+                    success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
+                    
+                    if success:
+                        logger.info(f"ДЗ #{admin_msg_id} успешно отправлено на n8n")
+                        # Добавляем в set чтобы знать что ушло на n8n (админ может перезаписать)
+                        homework_sent_to_n8n.add(admin_msg_id)
+                    else:
+                        logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
+                
+                if pending_rows:
+                    await conn.commit()
+                    
+        except Exception as e:
+            logger.error(f"Ошибка в check_pending_homework_timeout: {e}", exc_info=True)
 
 
 def save_settings(settings_s):
@@ -7535,6 +7609,11 @@ async def handle_homework_result(
             await callback_query.answer("Ошибка при проверке статуса ДЗ", show_alert=True)
         return
     # ===== КОНЕЦ БЛОКА ЗАЩИТЫ =====
+    
+    # Проверяем, было ли ДЗ отправлено на n8n (админ имеет приоритет)
+    if message_id_to_process in homework_sent_to_n8n:
+        logger.info(f"{log_prefix} ДЗ уже было отправлено на n8n, но админ имеет приоритет")
+        homework_sent_to_n8n.discard(message_id_to_process)
 
     # Основная логика
     try:
@@ -8693,6 +8772,9 @@ async def on_startup():
                 asyncio.create_task(start_lesson_schedule_task(user_id))
             else:
                 logger.info(f"Task for user {user_id} already running or scheduled.")
+    
+    # Запускаем задачу проверки timeout для ДЗ
+    asyncio.create_task(check_pending_homework_timeout())
     logger.info("Фоновые задачи запущены.")
 
     await send_startup_message(bot, ADMIN_GROUP_ID)  # <--- ВОТ ВЫЗОВ
