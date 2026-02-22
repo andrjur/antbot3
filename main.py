@@ -3488,10 +3488,15 @@ async def cmd_upload_lesson(message: types.Message, state: FSMContext):
     if settings.get("groups"):
         courses_list_str = "\n".join([f"{i+1}. {c_id}" for i, c_id in enumerate(settings["groups"].values())])
 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Админ-меню", callback_data="admin_menu")]
+    ])
+
     await message.answer(
-        f"🛠 **РЕЖИМ ЗАГРУЗКИ**\n\n"
+        f"🛠 РЕЖИМ ЗАГРУЗКИ\n\n"
         f"Доступные курсы:\n{courses_list_str}\n\n"
-        f"👇 Введите **ID курса** или его **номер** из списка:",
+        f"👇 Введите ID курса или его номер из списка:",
+        reply_markup=keyboard,
         parse_mode=None
     )
 
@@ -3523,7 +3528,40 @@ async def process_course(message: types.Message, state: FSMContext):
             return
     
     await state.update_data(course_id=course_id)
-    await message.answer("🔢 Введите номер урока (например: 1, 2, 3...):")
+    
+    # Показываем существующие уроки этого курса
+    existing_lessons_info = ""
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute('''
+                SELECT lesson_num, COUNT(*) as parts_count
+                FROM group_messages 
+                WHERE course_id = ? AND lesson_num > 0
+                GROUP BY lesson_num
+                ORDER BY lesson_num
+            ''', (course_id,))
+            lessons = await cursor.fetchall()
+            
+            if lessons:
+                existing_lessons_info = "\n📚 Существующие уроки:\n"
+                for lesson_num, parts_count in lessons:
+                    existing_lessons_info += f"   • Урок {lesson_num} ({parts_count} частей)\n"
+            else:
+                existing_lessons_info = "\n📭 У этого курса пока нет уроков.\n"
+    except Exception as e:
+        logger.error(f"Ошибка получения списка уроков: {e}")
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_menu")]
+    ])
+    
+    await message.answer(
+        f"📚 Выбран курс: {course_id}\n"
+        f"{existing_lessons_info}\n"
+        f"🔢 Введите номер урока (например: 1, 2, 3...):",
+        reply_markup=keyboard,
+        parse_mode=None
+    )
     await state.set_state(UploadLesson.waiting_lesson_num)
 
 @dp.message(UploadLesson.waiting_lesson_num)
@@ -3539,6 +3577,11 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
         return
     
     await state.update_data(lesson_num=lesson_num)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_menu")]
+    ])
+    
     await message.answer(
         "📝 Отправьте контент урока:\n\n"
         "Можно отправить:\n"
@@ -3549,7 +3592,9 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
         "Для домашнего задания добавьте #hw или *hw в подписи к файлу.\n\n"
         "💡 Теги для настройки (работают # и *):\n"
         "• #LEVEL 2 / *LEVEL 2 - уровень сложности\n"
-        "• #HW_TYPE photo / *HW_TYPE photo - тип ответа на ДЗ"
+        "• #HW_TYPE photo / *HW_TYPE photo - тип ответа на ДЗ",
+        reply_markup=keyboard,
+        parse_mode=None
     )
     await state.set_state(UploadLesson.waiting_content)
 
@@ -3640,7 +3685,13 @@ async def process_content(message: types.Message, state: FSMContext):
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ Завершить",
+                    text="🗑️ Удалить последний",
+                    callback_data=UploadLessonAction(action="delete_last", course_id=course_id, lesson_num=lesson_num).pack()
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✅ Завершить",
                     callback_data=UploadLessonAction(action="done", course_id=course_id, lesson_num=lesson_num).pack()
                 )
             ]
@@ -3698,10 +3749,59 @@ async def handle_upload_lesson_action(callback: CallbackQuery, callback_data: Up
     elif action == "done":
         # Завершаем загрузку
         await state.clear()
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")],
+            [InlineKeyboardButton(text="🔙 Админ-меню", callback_data="admin_menu")]
+        ])
+        
         await callback.message.edit_text(
             "✅ Загрузка уроков завершена!\n\n"
-            "Для загрузки новых уроков используйте /upload_lesson"
+            "Для загрузки новых уроков используйте /upload_lesson",
+            reply_markup=keyboard
         )
+    
+    elif action == "delete_last":
+        # Удаляем последнюю загруженную часть урока
+        try:
+            async with aiosqlite.connect(DB_FILE) as conn:
+                # Находим последнюю часть
+                cursor = await conn.execute('''
+                    SELECT id FROM group_messages 
+                    WHERE course_id = ? AND lesson_num = ?
+                    ORDER BY id DESC LIMIT 1
+                ''', (course_id, lesson_num))
+                row = await cursor.fetchone()
+                
+                if row:
+                    await conn.execute("DELETE FROM group_messages WHERE id = ?", (row[0],))
+                    await conn.commit()
+                    await callback.answer("🗑️ Последняя часть удалена!", show_alert=True)
+                    
+                    # Проверяем, остались ли ещё части
+                    cursor = await conn.execute('''
+                        SELECT COUNT(*) FROM group_messages 
+                        WHERE course_id = ? AND lesson_num = ?
+                    ''', (course_id, lesson_num))
+                    count = (await cursor.fetchone())[0]
+                    
+                    if count > 0:
+                        await callback.message.edit_text(
+                            f"🗑️ Часть удалена. Осталось частей: {count}\n\n"
+                            f"📎 Можно добавить ещё контент к уроку {lesson_num}"
+                        )
+                        await state.set_state(UploadLesson.waiting_content)
+                    else:
+                        await callback.message.edit_text(
+                            f"🗑️ Весь урок {lesson_num} удалён.\n\n"
+                            f"📝 Отправьте контент для урока {lesson_num}:"
+                        )
+                        await state.set_state(UploadLesson.waiting_content)
+                else:
+                    await callback.answer("❌ Нечего удалять", show_alert=True)
+        except Exception as e:
+            logger.error(f"Ошибка при удалении: {e}")
+            await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
     
     await callback.answer()
 
@@ -3797,7 +3897,7 @@ async def cmd_show_codes(message: types.Message):
 
 @dp.message(Command("list_admins"))
 async def cmd_list_admins(message: types.Message):
-    """Показать список всех админов"""
+    """Показать список всех админов с именами"""
     logger.info(f"cmd_list_admins START: user_id={message.from_user.id}")
     
     if not await is_admin(message.from_user.id):
@@ -3810,13 +3910,35 @@ async def cmd_list_admins(message: types.Message):
         # Суперадмины из .env
         result += "👑 Суперадмины (из .env):\n"
         for uid in ADMIN_IDS_CONF:
-            result += f"   • {uid}\n"
+            try:
+                user = await bot.get_chat(uid)
+                name = user.first_name or ""
+                if user.last_name:
+                    name += f" {user.last_name}"
+                username = f"@{user.username}" if user.username else ""
+                result += f"   • {name} {username} (ID: {uid})\n"
+            except:
+                result += f"   • ID: {uid}\n"
         
         # Участники админ-группы
         if ADMIN_GROUP_ID:
             result += f"\n🔧 Админы группы ({ADMIN_GROUP_ID}):\n"
-            result += "   Добавьте людей в группу — они станут админами.\n"
-            result += "   Используйте /start чтобы проверить свой статус."
+            try:
+                # Получаем список участников группы
+                admins_info = []
+                async for member in bot.get_chat_administrators(ADMIN_GROUP_ID):
+                    name = member.user.first_name or ""
+                    if member.user.last_name:
+                        name += f" {member.user.last_name}"
+                    username = f"@{member.user.username}" if member.user.username else ""
+                    admins_info.append(f"   • {name} {username} (ID: {member.user.id})")
+                
+                if admins_info:
+                    result += "\n".join(admins_info) + "\n"
+                else:
+                    result += "   Не удалось получить список.\n"
+            except Exception as e:
+                result += f"   Ошибка: {e}\n"
         
         result += f"\n💡 Админы могут: управлять курсами, уроками\n"
         result += f"💡 Суперадмины могут: экспорт/импорт БД из лички"
