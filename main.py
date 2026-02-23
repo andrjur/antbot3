@@ -21,6 +21,7 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
 # ---- НОВЫЕ ИМПОРТЫ ДЛЯ ВЕБХУКОВ ----
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 import aiohttp
+from aiohttp import web
 
 # ---- ИМПОРТЫ ДЛЯ МОНИТОРИНГА ----
 from services.metrics import (
@@ -1619,26 +1620,29 @@ async def send_data_to_n8n(n8n_webhook_url: str, payload: dict):
     async with aiohttp.ClientSession() as session:
         headers = {'Content-Type': 'application/json'}
         if N8N_WEBHOOK_SECRET:
-            headers['X-N8N-Signature'] = N8N_WEBHOOK_SECRET # Или другой заголовок для простой аутентификации
+            headers['X-N8N-Signature'] = N8N_WEBHOOK_SECRET
 
-        logger.info(f"Отправка данных в n8n: URL={n8n_webhook_url}, Payload={json.dumps(payload, ensure_ascii=False, indent=2)}")
+        logger.info(f"Отправка данных в n8n: URL={n8n_webhook_url}, action={payload.get('action', 'unknown')}")
         try:
             async with session.post(n8n_webhook_url, json=payload, headers=headers, timeout=30) as response:
                 response_text = await response.text()
-                if response.status == 200 or response.status == 202: # 202 Accepted тоже хорошо
-                    logger.info(f"Данные успешно отправлены в n8n. Статус: {response.status}. Ответ: {response_text[:200]}")
+                if response.status == 200 or response.status == 202:
+                    logger.info(f"n8n OK. Статус: {response.status}")
                     return True, response_text
                 else:
-                    logger.error(f"Ошибка отправки данных в n8n. Статус: {response.status}. Ответ: {response_text}")
-                    return False, response_text
+                    if '<html' in response_text.lower():
+                        logger.error(f"n8n вернул HTML (возможно Cloudflare). Статус: {response.status}")
+                    else:
+                        logger.error(f"Ошибка n8n. Статус: {response.status}. Ответ: {response_text[:200]}")
+                    return False, f"HTTP {response.status}"
         except aiohttp.ClientConnectorError as e_conn:
-            logger.error(f"Ошибка соединения при отправке в n8n: {e_conn}")
+            logger.error(f"Ошибка соединения с n8n: {e_conn}")
             return False, str(e_conn)
         except asyncio.TimeoutError:
-            logger.error(f"Тайм-аут при отправке данных в n8n на URL: {n8n_webhook_url}")
+            logger.error(f"Тайм-аут при отправке в n8n на URL: {n8n_webhook_url}")
             return False, "Timeout error"
         except Exception as e_general:
-            logger.error(f"Непредвиденная ошибка при отправке в n8n: {e_general}", exc_info=True)
+            logger.error(f"Непредвиденная ошибка при отправке в n8n: {e_general}")
             return False, str(e_general)
 
 
@@ -5887,6 +5891,8 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         f"• /upload_lesson — загрузить уроки\n"
                         f"• /list_lessons — список уроков\n"
                         f"• /list_admins — список админов\n"
+                        f"• /add_admin <ID> — добавить админа\n"
+                        f"• /remove_admin <ID> — удалить админа\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
                         f"• /remind <id> <msg> — напоминание\n"
@@ -5912,6 +5918,8 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         f"• /upload_lesson — загрузить уроки\n"
                         f"• /list_lessons — список уроков\n"
                         f"• /list_admins — список админов\n"
+                        f"• /add_admin <ID> — добавить админа\n"
+                        f"• /remove_admin <ID> — удалить админа\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
                         f"• /remind <id> <msg> — напоминание\n\n"
@@ -9304,14 +9312,31 @@ async def main():
         except asyncio.CancelledError:
             logger.info("Webhook server stopped")
     else:
-        # Polling режим
+        # Polling режим - запускаем минимальный HTTP сервер для health checks
+        app = web.Application()
+        app.router.add_get('/health/live', liveness_probe)
+        app.router.add_get('/health', liveness_probe)
+        
+        runner = web.AppRunner(app, access_log=None)
+        await runner.setup()
+        site = web.TCPSite(runner, host="0.0.0.0", port=WEBAPP_PORT_CONF)
+        await site.start()
+        
         logger.info("=" * 60)
         logger.info("✅ БОТ УСПЕШНО ЗАПУЩЕН В РЕЖИМЕ POLLING")
+        logger.info(f"🌐 Health endpoint: http://0.0.0.0:{WEBAPP_PORT_CONF}/health/live")
         logger.info("=" * 60)
-        await dp.start_polling(
-            bot,
-            handle_signals=False
-        )
+        
+        # Запускаем polling в фоне
+        polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+        
+        # Ждем пока polling работает
+        try:
+            await polling_task
+        except asyncio.CancelledError:
+            logger.info("Polling stopped")
+        finally:
+            await runner.cleanup()
 
 # ==========================================
 if __name__ == "__main__":
