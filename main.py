@@ -1133,31 +1133,56 @@ async def check_pending_homework_timeout():
                     course_id_str = await get_course_id_str(course_numeric_id)
                     course_title = await get_course_title(course_id_str)
                     
+                    # Получаем текст задания и ДЗ
+                    async with aiosqlite.connect(DB_FILE) as conn2:
+                        cursor_lesson = await conn2.execute(
+                            """SELECT text FROM group_messages 
+                               WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text'
+                               ORDER BY id ASC""",
+                            (course_id_str, lesson_num)
+                        )
+                        lesson_parts = await cursor_lesson.fetchall()
+                        lesson_description = "\n".join([row[0] for row in lesson_parts if row[0]])
+                        
+                        cursor_hw_type = await conn2.execute(
+                            """SELECT hw_type FROM group_messages 
+                               WHERE course_id = ? AND lesson_num = ? AND is_homework = 1 LIMIT 1""",
+                            (course_id_str, lesson_num)
+                        )
+                        hw_type_row = await cursor_hw_type.fetchone()
+                        expected_hw_type = hw_type_row[0] if hw_type_row else "any"
+                    
+                    callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
+                    
                     payload = {
                         "action": "check_homework_timeout",
                         "student_user_id": student_user_id,
                         "student_name": student_name,
+                        "course_numeric_id": course_numeric_id,
                         "course_id": course_id_str,
                         "course_title": course_title,
                         "lesson_num": lesson_num,
+                        "lesson_assignment_description": lesson_description,
+                        "expected_homework_type": expected_hw_type,
                         "admin_message_id": admin_msg_id,
+                        "admin_group_id": ADMIN_GROUP_ID,
                         "student_message_id": student_msg_id,
-                        "created_at": created_at,
+                        "callback_webhook_url_result": f"{callback_base}/n8n_hw_result",
+                        "telegram_bot_token": BOT_TOKEN,
                         "timeout_minutes": HW_TIMEOUT_MINUTES
                     }
                     
                     success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
                     
-                    homework_sent_to_n8n.add(admin_msg_id)  # Добавляем в любом случае чтобы не спамить
+                    homework_sent_to_n8n.add(admin_msg_id)
                     
                     if success:
                         logger.info(f"ДЗ #{admin_msg_id} отправлено на n8n")
-                        # Редактируем сообщение админа
                         try:
                             await bot.edit_message_caption(
                                 chat_id=admin_chat_id,
                                 message_id=admin_msg_id,
-                                caption=f"🤖 ДЗ отправлено на AI-проверку...\n\n{payload.get('student_name', '')}",
+                                caption=f"🤖 ДЗ отправлено на AI-проверку...\n\n{student_name}",
                                 reply_markup=None
                             )
                         except:
@@ -5873,7 +5898,8 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         [InlineKeyboardButton(text="🔙 К админскому меню", callback_data="admin_menu")]
                     ])
                     
-                    admin_message = (
+                    await bot.send_message(
+                        user_id,
                         f"👑 РЕЖИМ ТЕСТИРОВАНИЯ\n\n"
                         f"Вы администратор с активным курсом:\n"
                         f"🎓 Курс: {course_name}\n"
@@ -5887,38 +5913,12 @@ async def cmd_start(message: types.Message, state: FSMContext): # <--- Доба�
                         f"• /list_admins — список админов\n"
                         f"• /add_admin <ID> — добавить админа\n"
                         f"• /remove_admin <ID> — удалить админа\n"
-                        f"• /export_db — экспорт базы\n"
-                        f"• /import_db — импорт базы\n"
-                        f"• /remind <id> <msg> — напоминание\n"
-                        f"• Нажмите «Остановить тестирование» чтобы выйти"
-                    )
-                    
-                    await message.answer(admin_message, reply_markup=admin_keyboard, parse_mode=None)
-                else:
-                    # Админ без активного курса
-                    logger.info(f"cmd_start: Admin {user_id} has no active course, showing admin menu")
-                    
-                    admin_menu_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="📚 Курсы и коды", callback_data="show_codes_menu")],
-                        [InlineKeyboardButton(text="➕ Добавить курс", callback_data="add_course_menu")],
-                        [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")]
-                    ])
-                    
-                    await message.answer(
-                        f"👑 Вы администратор бота\n\n"
-                        f"💡 Команды:\n"
-                        f"• /show_codes — курсы и коды\n"
-                        f"• /add_course — создать курс\n"
-                        f"• /upload_lesson — загрузить уроки\n"
-                        f"• /list_lessons — список уроков\n"
-                        f"• /list_admins — список админов\n"
-                        f"• /add_admin <ID> — добавить админа\n"
-                        f"• /remove_admin <ID> — удалить админа\n"
+                        f"• /set_hw_timeout <мин> — таймаут AI-проверки\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
                         f"• /remind <id> <msg> — напоминание\n\n"
                         f"Для теста активируйте курс кодом.",
-                        reply_markup=admin_menu_keyboard,
+                        reply_markup=admin_keyboard,
                         parse_mode=None
                     )
                 return
@@ -6056,6 +6056,7 @@ async def callback_admin_menu(callback: CallbackQuery):
         f"• /upload_lesson — загрузить уроки\n"
         f"• /list_lessons — список уроков\n"
         f"• /list_admins — список админов\n"
+        f"• /set_hw_timeout <мин> — таймаут AI-проверки\n"
         f"• /export_db — экспорт базы\n"
         f"• /import_db — импорт базы\n"
         f"• /remind <id> <msg> — напоминание",

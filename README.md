@@ -553,7 +553,33 @@ Workflow для AI-проверки ДЗ находится в папке `n8n_w
 1. Откройте n8n: `https://n8n.indikov.ru`
 2. Меню → Import from File
 3. Выберите файл `n8n_workflows/AI_Agent.json`
-4. Настройте credentials (OpenRouter, Telegram)
+4. Настройте credentials (см. `n8n_workflows/README.md`)
+5. **Включите workflow** (переключатель справа вверху — должен быть зелёным)
+
+### Настройка n8n credentials
+
+В n8n нужно создать 4 credentials:
+
+| Credential | Header/Value |
+|------------|---------------|
+| **Telegram account** | Bot Token из `.env` |
+| **OpenRouter account** | API Key из `.env` |
+| **Python to n8n Auth** | Header: `X-N8N-Signature`, Value: из `.env` |
+| **n8n to Python Callback Auth** | Header: `X-CALLBACK-SIGNATURE`, Value: из `.env` |
+
+### Команда /set_hw_timeout
+
+Админы могут менять время ожидания перед AI-проверкой:
+
+```
+/set_hw_timeout 3    # 3 минуты
+/set_hw_timeout 5    # 5 минут
+```
+
+По умолчанию: 2 минуты. Можно задать в `.env`:
+```
+HW_TIMEOUT_MINUTES=2
+```
 
 ---
 
