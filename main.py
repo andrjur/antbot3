@@ -177,7 +177,7 @@ N8N_ASK_EXPERT_WEBHOOK_URL = os.getenv("N8N_ASK_EXPERT_URL")
 N8N_WEBHOOK_SECRET = os.getenv("N8N_WEBHOOK_SECRET")
 N8N_DOMAIN = os.getenv("N8N_DOMAIN")
 
-HW_TIMEOUT_MINUTES = int(os.getenv("HW_TIMEOUT_MINUTES", "2"))
+HW_TIMEOUT_SECONDS = int(os.getenv("HW_TIMEOUT_SECONDS", "120"))
 
 # Базовый URL вашего бота для callback'ов от n8n
 # Это WEBHOOK_HOST_CONF из вашего конфига + некий путь
@@ -1014,7 +1014,7 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
         # Consider not spamming user for generic background errors unless critical for them
         # await bot.send_message(user_id, "📛 Общая ошибка расписания. Мы уже чиним робота!", parse_mode=None)
     finally:
-        logger.info(f"🏁🏁 Функция check_lesson_schedule для user_id={user_id} полностью завершена.")
+        logger.debug(f"🏁 Функция check_lesson_schedule для user_id={user_id} полностью завершена.")
 
 
 
@@ -1093,10 +1093,10 @@ async def stop_lesson_schedule_task(user_id: int):
 
 async def check_pending_homework_timeout():
     """
-    Периодически проверяет ДЗ, которые ожидают проверки более HW_TIMEOUT_MINUTES минут,
+    Периодически проверяет ДЗ, которые ожидают проверки более HW_TIMEOUT_SECONDS секунд,
     и отправляет их на n8n webhook если админ не ответил.
     """
-    global HW_TIMEOUT_MINUTES
+    global HW_TIMEOUT_SECONDS
     while True:
         try:
             await asyncio.sleep(60)
@@ -1105,7 +1105,7 @@ async def check_pending_homework_timeout():
                 continue
             
             async with aiosqlite.connect(DB_FILE) as conn:
-                cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=HW_TIMEOUT_MINUTES)
+                cutoff_time = datetime.now(pytz.utc) - timedelta(seconds=HW_TIMEOUT_SECONDS)
                 cutoff_time_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
                 
                 cursor = await conn.execute('''
@@ -1169,7 +1169,7 @@ async def check_pending_homework_timeout():
                         "student_message_id": student_msg_id,
                         "callback_webhook_url_result": f"{callback_base}/n8n_hw_result",
                         "telegram_bot_token": BOT_TOKEN,
-                        "timeout_minutes": HW_TIMEOUT_MINUTES
+                        "timeout_seconds": HW_TIMEOUT_SECONDS
                     }
                     
                     success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
@@ -2208,8 +2208,8 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
         current_lesson_for_display: Номер урока, который СЕЙЧАС отображается в меню
                                      (то есть, последний отправленный пользователю).
     """
-    logger.info(
-        f"🚀 get_next_lesson_time: user_id={user_id}, course_id={course_id}, current_lesson_for_display={current_lesson_for_display}")
+    logger.debug(
+        f"get_next_lesson_time: user_id={user_id}, course_id={course_id}, current_lesson_for_display={current_lesson_for_display}")
     try:
         # Получаем группу пользователя
         async with aiosqlite.connect(DB_FILE) as conn:
@@ -2324,7 +2324,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
             formatted_time = next_lesson_time_local.strftime(
                 f"%H:%M  ({day_name_local}, %d {month_genitive} %Y)")  # Добавил год для ясности
 
-            logger.info(
+            logger.debug(
                 f"Для user_id={user_id} следующий урок ({next_lesson_to_send_number}) в {user_timezone_str}: {formatted_time}")
             return formatted_time
 
@@ -4119,7 +4119,7 @@ async def cmd_remove_admin(message: types.Message):
 @dp.message(Command("set_hw_timeout"))
 async def cmd_set_hw_timeout(message: types.Message):
     """Установить таймаут AI-проверки ДЗ (только админы)"""
-    global HW_TIMEOUT_MINUTES
+    global HW_TIMEOUT_SECONDS
     
     if not await is_admin(message.from_user.id):
         await message.answer("❌ Только для администраторов.")
@@ -4129,26 +4129,26 @@ async def cmd_set_hw_timeout(message: types.Message):
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
             await message.answer(
-                f"Текущий таймаут: {HW_TIMEOUT_MINUTES} мин\n\n"
-                f"Использование: /set_hw_timeout <минуты>\n"
-                f"Пример: /set_hw_timeout 3"
+                f"Текущий таймаут: {HW_TIMEOUT_SECONDS} сек\n\n"
+                f"Использование: /set_hw_timeout <секунды>\n"
+                f"Пример: /set_hw_timeout 60"
             )
             return
         
         try:
             new_timeout = int(args[1])
-            if new_timeout < 1 or new_timeout > 60:
-                await message.answer("❌ Таймаут должен быть от 1 до 60 минут")
+            if new_timeout < 10 or new_timeout > 600:
+                await message.answer("❌ Таймаут должен быть от 10 до 600 секунд")
                 return
             
-            old_timeout = HW_TIMEOUT_MINUTES
-            HW_TIMEOUT_MINUTES = new_timeout
+            old_timeout = HW_TIMEOUT_SECONDS
+            HW_TIMEOUT_SECONDS = new_timeout
             
-            await message.answer(f"✅ Таймаут AI-проверки изменён: {old_timeout} → {new_timeout} мин")
-            logger.info(f"HW_TIMEOUT изменён: {old_timeout} -> {new_timeout} мин (by {message.from_user.id})")
+            await message.answer(f"✅ Таймаут AI-проверки изменён: {old_timeout} → {new_timeout} сек")
+            logger.info(f"HW_TIMEOUT изменён: {old_timeout} -> {new_timeout} сек (by {message.from_user.id})")
             
         except ValueError:
-            await message.answer("❌ Укажите число минут")
+            await message.answer("❌ Укажите число секунд")
             
     except Exception as e:
         logger.error(f"Ошибка при установке таймаута: {e}")
@@ -8481,7 +8481,7 @@ async def handle_homework(message: types.Message):
         f"📚 Курс: {escape_md(display_course_title)}\n"
         f"⚡ Тариф: {escape_md(version_id)}\n"
         f"📖 Урок: {current_lesson}\n"
-        f"🤖 Через {HW_TIMEOUT_MINUTES} мин уйдет на AI-проверку\n"
+        f"🤖 Через {HW_TIMEOUT_SECONDS} сек уйдет на AI-проверку\n"
     )
 
     try:
