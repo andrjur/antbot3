@@ -1156,15 +1156,15 @@ async def check_pending_homework_timeout():
                 
                 cursor = await conn.execute('''
                     SELECT admin_message_id, admin_chat_id, student_user_id, 
-                           course_numeric_id, lesson_num, student_message_id, timestamp
+                           course_numeric_id, lesson_num, student_message_id, created_at
                     FROM pending_admin_homework
-                    WHERE timestamp < ?
+                    WHERE created_at < ?
                 ''', (cutoff_time.isoformat(),))
                 
                 pending_rows = await cursor.fetchall()
                 
                 for row in pending_rows:
-                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, timestamp = row
+                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at = row
                     
                     logger.info(f"ДЗ #{admin_msg_id} ожидает более 7 минут, отправляем на n8n")
                     
@@ -1189,7 +1189,7 @@ async def check_pending_homework_timeout():
                         "lesson_num": lesson_num,
                         "admin_message_id": admin_msg_id,
                         "student_message_id": student_msg_id,
-                        "timestamp": timestamp,
+                        "created_at": created_at,
                         "timeout_minutes": 7
                     }
                     
@@ -1536,7 +1536,7 @@ async def init_db():
                     course_numeric_id INTEGER NOT NULL,
                     lesson_num INTEGER NOT NULL,
                     student_message_id INTEGER,           -- ID исходного сообщения студента с ДЗ (опционально, но полезно)
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (student_user_id) REFERENCES users(user_id),
                     FOREIGN KEY (course_numeric_id) REFERENCES courses(id) -- или courses(course_id) если id числовой
                 )
@@ -8594,12 +8594,12 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         is_level_completed_no_hw_pending = is_last_lesson_on_level_sent and not homework_pending
 
         base_text_lines = [
-            f"🎓 *Курс:* {course_title_safe}",
-            f"🔑 *Тариф:* {tariff_name_safe}",
-            f"📖 *Урок (отправлен):* {lesson_num} из {total_lessons_on_level}",
-            f"🥇 *Уровень:* {user_course_level_for_menu}",
-            f"⏳ *Интервал:* {interval_safe_str}",  # Используем экранированную строку с "ч"
-            f"📝 *Домашка к уроку {lesson_num}:* {domashka_text}"
+            f"🎓 Курс: {course_title_safe}",
+            f"🔑 Тариф: {tariff_name_safe}",
+            f"📖 Урок (отправлен): {lesson_num} из {total_lessons_on_level}",
+            f"🥇 Уровень: {user_course_level_for_menu}",
+            f"⏳ Интервал: {interval_safe_str}",
+            f"📝 Домашка к уроку {lesson_num}: {domashka_text}"
         ]
 
         if is_level_completed_no_hw_pending:
@@ -8611,11 +8611,11 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 hasNextLevel = await cursor_next_level.fetchone()
             if hasNextLevel:
                 base_text_lines.append(
-                    f"🎉 *Текущий уровень завершен!* Вы можете перейти на следующий уровень через меню 'Все курсы' (кнопка \"Повторить/Обновить\" для этого курса).")
+                    f"🎉 Текущий уровень завершен! Вы можете перейти на следующий уровень через меню 'Все курсы' (кнопка \"Повторить/Обновить\" для этого курса).")
             else:
-                base_text_lines.append(f"🎉 *Поздравляем, курс полностью завершен!*")
+                base_text_lines.append(f"🎉 Поздравляем, курс полностью завершен!")
         elif lesson_num > 0 or (lesson_num == 0 and total_lessons_on_level > 0):
-            base_text_lines.append(f"🕒 *Следующий урок:* {next_lesson_display_text_safe}")
+            base_text_lines.append(f"🕒 Следующий урок: {next_lesson_display_text_safe}")
 
         final_text = "\n".join(base_text_lines)
         # Список уроков lessons_overview_lines БОЛЬШЕ НЕ ДОБАВЛЯЕТСЯ сюда
