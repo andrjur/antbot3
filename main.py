@@ -177,6 +177,8 @@ N8N_ASK_EXPERT_WEBHOOK_URL = os.getenv("N8N_ASK_EXPERT_URL")
 N8N_WEBHOOK_SECRET = os.getenv("N8N_WEBHOOK_SECRET")
 N8N_DOMAIN = os.getenv("N8N_DOMAIN")
 
+HW_TIMEOUT_MINUTES = int(os.getenv("HW_TIMEOUT_MINUTES", "2"))
+
 # Базовый URL вашего бота для callback'ов от n8n
 # Это WEBHOOK_HOST_CONF из вашего конфига + некий путь
 BOT_CALLBACK_BASE_URL = f"{os.getenv('N8N_DOMAIN', 'https://n8n.indikov.ru/')}{os.getenv('WEBHOOK_PATH', '/bot/')}"
@@ -1091,9 +1093,10 @@ async def stop_lesson_schedule_task(user_id: int):
 
 async def check_pending_homework_timeout():
     """
-    Периодически проверяет ДЗ, которые ожидают проверки более 2 минут,
+    Периодически проверяет ДЗ, которые ожидают проверки более HW_TIMEOUT_MINUTES минут,
     и отправляет их на n8n webhook если админ не ответил.
     """
+    global HW_TIMEOUT_MINUTES
     while True:
         try:
             await asyncio.sleep(60)
@@ -1102,7 +1105,7 @@ async def check_pending_homework_timeout():
                 continue
             
             async with aiosqlite.connect(DB_FILE) as conn:
-                cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=2)
+                cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=HW_TIMEOUT_MINUTES)
                 cutoff_time_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
                 
                 cursor = await conn.execute('''
@@ -1117,7 +1120,6 @@ async def check_pending_homework_timeout():
                 for row in pending_rows:
                     admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at = row
                     
-                    # Пропускаем если уже отправили на n8n
                     if admin_msg_id in homework_sent_to_n8n:
                         continue
                     
@@ -1141,14 +1143,25 @@ async def check_pending_homework_timeout():
                         "admin_message_id": admin_msg_id,
                         "student_message_id": student_msg_id,
                         "created_at": created_at,
-                        "timeout_minutes": 2
+                        "timeout_minutes": HW_TIMEOUT_MINUTES
                     }
                     
                     success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
                     
+                    homework_sent_to_n8n.add(admin_msg_id)  # Добавляем в любом случае чтобы не спамить
+                    
                     if success:
                         logger.info(f"ДЗ #{admin_msg_id} отправлено на n8n")
-                        homework_sent_to_n8n.add(admin_msg_id)
+                        # Редактируем сообщение админа
+                        try:
+                            await bot.edit_message_caption(
+                                chat_id=admin_chat_id,
+                                message_id=admin_msg_id,
+                                caption=f"🤖 ДЗ отправлено на AI-проверку...\n\n{payload.get('student_name', '')}",
+                                reply_markup=None
+                            )
+                        except:
+                            pass
                     else:
                         logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
                 
@@ -4078,6 +4091,45 @@ async def cmd_remove_admin(message: types.Message):
         await message.answer(f"❌ Ошибка: {e}")
 
 
+@dp.message(Command("set_hw_timeout"))
+async def cmd_set_hw_timeout(message: types.Message):
+    """Установить таймаут AI-проверки ДЗ (только админы)"""
+    global HW_TIMEOUT_MINUTES
+    
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Только для администраторов.")
+        return
+    
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer(
+                f"Текущий таймаут: {HW_TIMEOUT_MINUTES} мин\n\n"
+                f"Использование: /set_hw_timeout <минуты>\n"
+                f"Пример: /set_hw_timeout 3"
+            )
+            return
+        
+        try:
+            new_timeout = int(args[1])
+            if new_timeout < 1 or new_timeout > 60:
+                await message.answer("❌ Таймаут должен быть от 1 до 60 минут")
+                return
+            
+            old_timeout = HW_TIMEOUT_MINUTES
+            HW_TIMEOUT_MINUTES = new_timeout
+            
+            await message.answer(f"✅ Таймаут AI-проверки изменён: {old_timeout} → {new_timeout} мин")
+            logger.info(f"HW_TIMEOUT изменён: {old_timeout} -> {new_timeout} мин (by {message.from_user.id})")
+            
+        except ValueError:
+            await message.answer("❌ Укажите число минут")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при установке таймаута: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+
 async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
     """Универсальная функция показа списка уроков с группировкой"""
     logger.info(f"show_lessons_list: user_id={user_id}, chat_id={chat_id}")
@@ -5402,26 +5454,22 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
 # Добавьте эту функцию в main.py
 async def award_karma_points(user_id: int, points: int, reason: str):
     async with aiosqlite.connect(DB_FILE) as conn:
-        # Обновляем или создаем баланс
         await conn.execute("""
             INSERT INTO user_karma (user_id, balance) VALUES (?, ?)
             ON CONFLICT(user_id) DO UPDATE SET balance = balance + excluded.balance
         """, (user_id, points))
-
-        # Записываем в лог
         await conn.execute("INSERT INTO user_karma_log (user_id, points_changed, reason) VALUES (?, ?, ?)",
                            (user_id, points, reason))
         await conn.commit()
+        
+        cursor = await conn.execute("SELECT balance FROM user_karma WHERE user_id = ?", (user_id,))
+        new_balance = (await cursor.fetchone())[0]
 
-    # Получаем новый баланс
-    cursor = await conn.execute("SELECT balance FROM user_karma WHERE user_id = ?", (user_id,))
-    new_balance = (await cursor.fetchone())[0]
-
-    logger.info(f"Начислено {points} КБ пользователю {user_id} за '{reason}'. Новый баланс: {new_balance} КБ.")
-    # Оповещаем пользователя
-    await bot.send_message(user_id,
-                           f"✨ Вам начислено +{points} Карма-Баллов!\nПричина: {reason}\n*Ваш текущий баланс: {new_balance} КБ*",
-                           parse_mode=None)
+    logger.info(f"Начислено {points} КБ пользователю {user_id}")
+    try:
+        await bot.send_message(user_id, f"✨ +{points} Карма-Баллов! Баланс: {new_balance} КБ", parse_mode=None)
+    except:
+        pass
 
 # Вспомогательная функция для получения текущего урока пользователя
 async def get_user_current_lesson(user_id: int, course_id_str: str) -> int:
@@ -8425,13 +8473,14 @@ async def handle_homework(message: types.Message):
         await message.answer("Неподдерживаемый тип контента.")
         return
     logger.info(f"admin_message_content: {admin_message_content} {file_id=}")
-    # Добавляем ID пользователя в сообщение админам
+    
     admin_message_text = (
         f"📝 Новое ДЗ {homework_type}\n"
-        f"👤 Пользователь: {escape_md(user_display_name)} ID: {user_id}\n"  # Добавили user_id
-        f"📚 Курс: {escape_md(display_course_title)}\n"  # Используем display_course_title
+        f"👤 Пользователь: {escape_md(user_display_name)} ID: {user_id}\n"
+        f"📚 Курс: {escape_md(display_course_title)}\n"
         f"⚡ Тариф: {escape_md(version_id)}\n"
         f"📖 Урок: {current_lesson}\n"
+        f"🤖 Через {HW_TIMEOUT_MINUTES} мин уйдет на AI-проверку\n"
     )
 
     try:
