@@ -1153,13 +1153,14 @@ async def check_pending_homework_timeout():
             async with aiosqlite.connect(DB_FILE) as conn:
                 # Находим ДЗ, которые ожидают более 7 минут
                 cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=7)
+                cutoff_time_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
                 
                 cursor = await conn.execute('''
                     SELECT admin_message_id, admin_chat_id, student_user_id, 
                            course_numeric_id, lesson_num, student_message_id, created_at
                     FROM pending_admin_homework
                     WHERE created_at < ?
-                ''', (cutoff_time.isoformat(),))
+                ''', (cutoff_time_str,))
                 
                 pending_rows = await cursor.fetchall()
                 
@@ -3978,6 +3979,152 @@ async def cmd_list_admins(message: types.Message):
         
     except Exception as e:
         logger.error(f"Ошибка при показе админов: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("add_admin"))
+async def cmd_add_admin(message: types.Message):
+    """Добавить пользователя в админ-группу (любой админ может)"""
+    logger.info(f"cmd_add_admin START: user_id={message.from_user.id}")
+    
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Только для администраторов.")
+        return
+    
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer(
+                "Использование: /add_admin <user_id или @username>\n"
+                "Пример: /add_admin 123456789 или /add_admin @username"
+            )
+            return
+        
+        user_identifier = args[1].strip()
+        if user_identifier.startswith('@'):
+            username = user_identifier[1:]
+        else:
+            username = None
+            try:
+                target_user_id = int(user_identifier)
+            except ValueError:
+                await message.answer("❌ Неверный формат. Укажите ID (число) или @username")
+                return
+        
+        if username:
+            try:
+                chat = await bot.get_chat(f"@{username}")
+                target_user_id = chat.id
+            except Exception as e:
+                await message.answer(f"❌ Не найден пользователь @{username}")
+                return
+        
+        if not target_user_id:
+            await message.answer("❌ Не удалось определить пользователя")
+            return
+        
+        if await is_admin(target_user_id):
+            await message.answer("✅ Этот пользователь уже является администратором.")
+            return
+        
+        try:
+            chat_member = await bot.get_chat_member(ADMIN_GROUP_ID, target_user_id)
+            await message.answer(
+                f"✅ Пользователь {target_user_id} уже участвует в админ-группе."
+            )
+            return
+        except:
+            pass
+        
+        invite_link = await bot.export_chat_invite_link(ADMIN_GROUP_ID)
+        
+        try:
+            await bot.send_message(
+                target_user_id,
+                f"👤 Вас пригласили в админ-группу бота AntBot.\n"
+                f"Ссылка для вступления: {invite_link}"
+            )
+            
+            actor_name = message.from_user.full_name
+            await bot.send_message(
+                ADMIN_GROUP_ID,
+                f"👤 {actor_name} добавил нового админа: ID {target_user_id}"
+            )
+            
+            await message.answer(
+                f"✅ Приглашение отправлено пользователю {target_user_id}\n"
+                f"После вступления в группу он станет администратором."
+            )
+            
+        except Exception as e:
+            await message.answer(f"❌ Не удалось отправить приглашение: {e}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении админа: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("remove_admin"))
+async def cmd_remove_admin(message: types.Message):
+    """Удалить пользователя из админ-группы (любой админ может)"""
+    logger.info(f"cmd_remove_admin START: user_id={message.from_user.id}")
+    
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Только для администраторов.")
+        return
+    
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer(
+                "Использование: /remove_admin <user_id>\n"
+                "Пример: /remove_admin 123456789"
+            )
+            return
+        
+        user_identifier = args[1].strip()
+        
+        try:
+            target_user_id = int(user_identifier)
+        except ValueError:
+            await message.answer("❌ Укажите числовой ID пользователя")
+            return
+        
+        if target_user_id in ADMIN_IDS_CONF:
+            await message.answer(
+                "❌ Нельзя удалить суперадмина (из .env ADMIN_IDS)"
+            )
+            return
+        
+        if not await is_admin(target_user_id):
+            await message.answer("❌ Этот пользователь не является администратором.")
+            return
+        
+        try:
+            await bot.ban_chat_member(ADMIN_GROUP_ID, target_user_id)
+            await bot.unban_chat_member(ADMIN_GROUP_ID, target_user_id)
+            
+            actor_name = message.from_user.full_name
+            await bot.send_message(
+                ADMIN_GROUP_ID,
+                f"👤 {actor_name} удалил админа: ID {target_user_id}"
+            )
+            
+            await message.answer(f"✅ Пользователь {target_user_id} удалён из админ-группы.")
+            
+            try:
+                await bot.send_message(
+                    target_user_id,
+                    "👤 Вас удалили из админ-группы бота AntBot."
+                )
+            except:
+                pass
+                
+        except Exception as e:
+            await message.answer(f"❌ Не удалось удалить из группы: {e}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при удалении админа: {e}")
         await message.answer(f"❌ Ошибка: {e}")
 
 
