@@ -8154,7 +8154,7 @@ async def handle_support_message(message: types.Message, state: FSMContext):
 
 # =========================== теперь всё остальное
 
-@dp.message(F.text, ~F.text.startswith('/'))  # Игнорируем команды (они обрабатываются отдельно)
+@dp.message(F.text, F.chat.type == "private", ~F.text.startswith('/'))
 @db_exception_handler
 async def handle_text(message: types.Message, state: FSMContext):
     """
