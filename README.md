@@ -256,19 +256,16 @@ n8n:
     - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
 ```
 
-### Бот: Ошибка "no such column: timestamp"
+### Бот: Ошибка "no such column"
 
-Если в `pending_admin_homework` нет колонки `timestamp`:
+Если в логах видите ошибки про отсутствующие колонки в таблицах:
 
 ```bash
-# Добавить колонку вручную
-sqlite3 bot.db "ALTER TABLE pending_admin_homework ADD COLUMN timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"
-
-# Проверить
-sqlite3 bot.db ".schema pending_admin_homework"
-
-# Перезапустить бота
+# Перезапустить бота - миграции применятся автоматически
 docker-compose restart bot
+
+# Если не помогло - пересоздать контейнер
+docker-compose up -d --build
 ```
 
 ### Очистка места на диске
