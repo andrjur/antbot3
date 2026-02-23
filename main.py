@@ -641,16 +641,14 @@ async def get_course_id_int(course_id: str) -> int:
             cursor = await conn.execute("SELECT id FROM courses WHERE course_id = ?", (course_id,))
             result = await cursor.fetchone()
             if result:
-                logger.info(f"get_course_id_int {result=} берём return result[0]")
                 return result[0]
             else:
-                logger.error(f"Курс с ID {course_id=} не найден в базе данных.")
+                logger.warning(f"Курс {course_id} не найден в базе")
                 return 0
     except Exception as e349:
         logger.error(f"Ошибка при получении course_id курса: {e349}")
         return 0
 
-# course_id = get_course_id_str(course_numeric_id)
 async def get_course_id_str(course_numeric_id: int) -> str:
     """Получает название курса по ID."""
     try:
@@ -658,14 +656,14 @@ async def get_course_id_str(course_numeric_id: int) -> str:
             cursor = await conn.execute("SELECT course_id FROM courses WHERE id = ?", (course_numeric_id,))
             result = await cursor.fetchone()
             if result:
-                logger.info(f"{result=} берём return result[0]")
                 return result[0]
             else:
-                logger.error(f"Курс с ID {course_numeric_id} не найден в базе данных.")
+                logger.warning(f"Курс с ID {course_numeric_id} не найден в базе")
                 return "Неизвестный курс"
     except Exception as e366:
         logger.error(f"Ошибка при получении course_id курса: {e366}")
         return "Неизвестный курс"
+
 
 # 14-04
 async def get_course_title(course_id: str) -> str:
@@ -890,13 +888,10 @@ async def deactivate_course(user_id: int, course_id: str):
 @db_exception_handler
 async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
     """Проверяет расписание уроков и отправляет урок, если пришло время."""
-    logger.info(f"🔄 Проверка расписания для user_id={user_id}, принудительно (h/m): {hours}/{minutes}")
+    logger.debug(f"Проверка расписания для user_id={user_id}")
 
     try:
-        async with aiosqlite.connect(DB_FILE) as conn:  # Единое соединение для всех операций
-            logger.info(f"Подключились к БД для проверки расписания user_id={user_id}")
-
-            # 1. Получаем данные пользователя и его активного курса
+        async with aiosqlite.connect(DB_FILE) as conn:
             cursor_user_data = await conn.execute("""
                 SELECT course_id, current_lesson, version_id, 
                        first_lesson_sent_time, last_lesson_sent_time, 
@@ -907,13 +902,11 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
             user_data = await cursor_user_data.fetchone()
 
             if not user_data:
-                logger.warning(f"У пользователя {user_id} нет активных курсов. Проверка расписания завершена.")
-                # Попытка остановить задачу, если больше нет активных курсов
+                logger.debug(f"У пользователя {user_id} нет активных курсов")
                 cursor_active_count = await conn.execute(
                     "SELECT COUNT(*) FROM user_courses WHERE user_id = ? AND status = 'active'", (user_id,))
                 active_count_data = await cursor_active_count.fetchone()
                 if active_count_data and active_count_data[0] == 0:
-                    logger.info(f"У пользователя {user_id} больше нет активных курсов, остановка задачи шедулера.")
                     await stop_lesson_schedule_task(user_id)
                 return
 
@@ -921,31 +914,15 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
              first_sent_time_str, last_sent_time_str,
              hw_status, menu_message_id, course_status_db, user_course_level) = user_data
 
-            logger.info(
-                f"Данные для {user_id}: {course_id=}, current_lesson_db={current_lesson_db}, {version_id=}, "
-                f"first_sent_time_str='{first_sent_time_str}', last_sent_time_str='{last_sent_time_str}', "
-                f"{hw_status=}, {menu_message_id=}, course_status_db='{course_status_db}', {user_course_level=}"
-            )
-
-            # 2. Проверка статуса ДЗ
             if hw_status not in ('approved', 'not_required', 'none'):
-                logger.info(
-                    f"Для {user_id} (курс {course_id}) ожидаем ДЗ ({hw_status=}). Следующий урок не отправляем.")
                 return
 
-            # 3. Получение интервала отправки сообщений
             message_interval_hours = float(settings.get("message_interval", 24.0))
-            logger.info(f"Для {user_id} (курс {course_id}): message_interval_hours={message_interval_hours}")
 
-            # 4. Логика отправки урока
-            if last_sent_time_str:  # Если уроки уже отправлялись
-                logger.info(f"Для {user_id} (курс {course_id}): last_sent_time_str='{last_sent_time_str}'")
+            if last_sent_time_str:
 
                 if not first_sent_time_str:
-                    logger.error(
-                        f"Критическая ошибка: отсутствует first_lesson_sent_time для user_id={user_id}, "
-                        f"course_id={course_id}, хотя last_sent_time есть. Невозможно рассчитать время."
-                    )
+                    logger.error(f"Отсутствует first_lesson_sent_time для user_id={user_id}")
                     return
 
                 try:
@@ -957,16 +934,9 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
                     current_time_aware_utc = datetime.now(pytz.utc)
                     time_left = next_lesson_event_time_utc - current_time_aware_utc
 
-                    logger.info(
-                        f"Для {user_id} (курс {course_id}): first_sent_aware_utc={first_sent_aware_utc}, "
-                        f"next_lesson_event_time_utc={next_lesson_event_time_utc}, "
-                        f"current_time_aware_utc={current_time_aware_utc}, time_left_seconds={time_left.total_seconds()}"
-                    )
-
                     if time_left.total_seconds() > 10 and not (hours == 0 and minutes == 0):
                         display_next_lesson_time = await get_next_lesson_time(user_id, course_id, current_lesson_db)
                         status_time_message = f"⏳ Следующий урок: {display_next_lesson_time}\n"
-                        logger.info(f"Для {user_id} (курс {course_id}): {status_time_message.strip()}")
 
                         if menu_message_id:
                             try:
@@ -986,60 +956,40 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
                                     reply_markup=keyboard,
                                     parse_mode=None
                                 )
-                                logger.info(f"Сообщение меню {menu_message_id} обновлено для user_id={user_id}")
+                                logger.debug(f"Меню обновлено для user_id={user_id}")
                             except TelegramBadRequest as e_edit:
-                                logger.warning(
-                                    f"Не удалось обновить сообщение меню {menu_message_id} для user_id={user_id}: {e_edit}")
                                 if "message to edit not found" in str(e_edit).lower() or \
                                         "message is not modified" in str(e_edit).lower():
-                                    logger.info(
-                                        f"Сбрасываем last_menu_message_id для user_id={user_id} из-за ошибки редактирования.")
                                     await conn.execute(
                                         "UPDATE user_courses SET last_menu_message_id = NULL WHERE user_id = ? AND course_id = ?",
                                         (user_id, course_id)
                                     )
                                     await conn.commit()
                             except Exception as e_update_menu:
-                                logger.error(
-                                    f"Неожиданная ошибка при обновлении меню для user {user_id}: {e_update_menu}",
-                                    exc_info=True)
+                                logger.error(f"Ошибка при обновлении меню для user {user_id}: {e_update_menu}")
                         else:
-                            logger.info(
-                                f"Для {user_id} (курс {course_id}) нет menu_message_id для обновления, время до урока еще не вышло.")
+                            logger.debug(f"Нет menu_message_id для user_id={user_id}")
 
                     else:  # Время пришло отправлять следующий урок
                         next_lesson_to_send = current_lesson_db + 1
-                        logger.info(
-                            f"Время пришло! Отправляем урок {next_lesson_to_send} курса {course_id} для user_id={user_id}")
+                        logger.info(f"Отправка урока {next_lesson_to_send} для user_id={user_id}")
                         await send_lesson_to_user(user_id, course_id, next_lesson_to_send)
-                        logger.info(
-                            f"✅ Урок {next_lesson_to_send} (попытка отправки) для {user_id} завершена из check_lesson_schedule.")
 
                 except ValueError as e_parse:
-                    logger.error(
-                        f"⚠️ Ошибка преобразования времени в check_lesson_schedule: {e_parse} для "
-                        f"first_sent_time_str='{first_sent_time_str}' или last_sent_time_str='{last_sent_time_str}'",
-                        exc_info=True)
-                    await bot.send_message(user_id, escape_md(
-                        "📛 Ошибка времени урока (неверный формат в базе)! Свяжитесь с поддержкой."),
-                                           parse_mode=None)
+                    logger.error(f"Ошибка преобразования времени: {e_parse}")
+                    await bot.send_message(user_id, "📛 Ошибка времени урока! Свяжитесь с поддержкой.", parse_mode=None)
                     return
                 except Exception as e_time_calc:
-                    logger.error(
-                        f"💥 Неожиданная ошибка в расчете времени урока в check_lesson_schedule для user_id={user_id}: {e_time_calc}",
-                        exc_info=True)
-                    await bot.send_message(user_id, escape_md("📛 Ошибка при расчете времени урока! Мы уже чиним."),
-                                           parse_mode=None)
+                    logger.error(f"Ошибка в расчете времени для user_id={user_id}: {e_time_calc}")
+                    await bot.send_message(user_id, "📛 Ошибка при расчете времени урока!", parse_mode=None)
                     return
 
             else:  # last_sent_time_str отсутствует
                 if current_lesson_db == 0 and first_sent_time_str:
-                    logger.info(
-                        f"Отправка первого урока (урок 1), так как current_lesson_db=0 и last_sent_time_str отсутствует. user_id={user_id}, course_id={course_id}")
+                    logger.info(f"Отправка первого урока для user_id={user_id}")
                     await send_lesson_to_user(user_id, course_id, 1)
-                elif current_lesson_db == 0 and not first_sent_time_str:  # Этого не должно быть, если активация прошла корректно
-                    logger.error(
-                        f"Критично: current_lesson_db=0, и отсутствует first_sent_time_str для user_id={user_id}, course_id={course_id}. Невозможно начать курс.")
+                elif current_lesson_db == 0 and not first_sent_time_str:
+                    logger.error(f"Нет first_sent_time_str для user_id={user_id}")
                 else:  # current_lesson_db > 0, но last_sent_time_str почему-то пуст
                     logger.warning(
                         f"Нелогичное состояние: last_sent_time_str отсутствует, но current_lesson_db={current_lesson_db} для user_id={user_id}, course_id={course_id}. "
@@ -1146,13 +1096,12 @@ async def check_pending_homework_timeout():
     """
     while True:
         try:
-            await asyncio.sleep(60)  # Проверяем каждую минуту
+            await asyncio.sleep(60)
             
             if not N8N_HOMEWORK_CHECK_WEBHOOK_URL:
                 continue
             
             async with aiosqlite.connect(DB_FILE) as conn:
-                # Находим ДЗ, которые ожидают более 2 минут
                 cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=2)
                 cutoff_time_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
                 
@@ -1168,9 +1117,10 @@ async def check_pending_homework_timeout():
                 for row in pending_rows:
                     admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at = row
                     
-                    logger.info(f"ДЗ #{admin_msg_id} ожидает более 2 минут, отправляем на n8n")
+                    # Пропускаем если уже отправили на n8n
+                    if admin_msg_id in homework_sent_to_n8n:
+                        continue
                     
-                    # Получаем информацию о студенте и курсе
                     cursor_student = await conn.execute(
                         "SELECT username, first_name FROM users WHERE user_id = ?",
                         (student_user_id,)
@@ -1181,7 +1131,6 @@ async def check_pending_homework_timeout():
                     course_id_str = await get_course_id_str(course_numeric_id)
                     course_title = await get_course_title(course_id_str)
                     
-                    # Отправляем на n8n
                     payload = {
                         "action": "check_homework_timeout",
                         "student_user_id": student_user_id,
@@ -1198,14 +1147,11 @@ async def check_pending_homework_timeout():
                     success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
                     
                     if success:
-                        logger.info(f"ДЗ #{admin_msg_id} успешно отправлено на n8n")
+                        logger.info(f"ДЗ #{admin_msg_id} отправлено на n8n")
                         homework_sent_to_n8n.add(admin_msg_id)
                     else:
-                        logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response[:100]}")
+                        logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
                 
-                if pending_rows:
-                    await conn.commit()
-                    
         except Exception as e:
             logger.error(f"Ошибка в check_pending_homework_timeout: {e}")
 
@@ -2276,8 +2222,8 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
                 return "ошибка расчета времени (формат даты)"
 
             first_lesson_aware_utc = pytz.utc.localize(first_lesson_naive_utc)
-            logger.info(
-                f"Для user_id={user_id}, course_id={course_id}: first_lesson_aware_utc={first_lesson_aware_utc}, db_current_lesson={db_current_lesson}")
+            logger.debug(f"get_next_lesson_time: user_id={user_id}, db_current_lesson={db_current_lesson}")
+
 
             # 4. Получаем интервал отправки уроков
             lesson_interval_hours = float(settings.get("message_interval", 24.0))  # Убедимся, что это float
@@ -2304,7 +2250,8 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
                 time_of_lesson_event_utc = first_lesson_aware_utc + timedelta(
                     hours=lesson_interval_hours) * db_current_lesson
 
-            logger.info(f"Расчетное время для урока {next_lesson_to_send_number} (UTC): {time_of_lesson_event_utc}")
+            logger.debug(f"Урок {next_lesson_to_send_number}: {time_of_lesson_event_utc}")
+
 
             # 6. Получаем часовой пояс пользователя
             user_timezone_str = DEFAULT_TIMEZONE
@@ -8573,7 +8520,7 @@ async def handle_homework(message: types.Message):
             await message.answer(escape_md("Неподдерживаемый тип файла для домашнего задания."),
                                  parse_mode=None)
             return  # Выходим, если тип не поддерживается
-        logger.info(f"sent_admin_message: {sent_admin_message}")
+        logger.info(f"ДЗ отправлено админам: msg_id={sent_admin_message.message_id}")
 
         if sent_admin_message and ADMIN_GROUP_ID:  # Убедимся, что сообщение отправлено
             if N8N_HOMEWORK_CHECK_WEBHOOK_URL:
