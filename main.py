@@ -1187,6 +1187,16 @@ async def check_pending_homework_timeout():
                             )
                         except:
                             pass
+                        try:
+                            async with aiosqlite.connect(DB_FILE) as conn_del:
+                                await conn_del.execute(
+                                    "DELETE FROM pending_admin_homework WHERE admin_message_id = ?",
+                                    (admin_msg_id,)
+                                )
+                                await conn_del.commit()
+                                logger.debug(f"ДЗ #{admin_msg_id} удалено из pending_admin_homework")
+                        except Exception as e_del:
+                            logger.error(f"Ошибка удаления ДЗ #{admin_msg_id} из базы: {e_del}")
                     else:
                         logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
                 
@@ -8572,61 +8582,7 @@ async def handle_homework(message: types.Message):
             return  # Выходим, если тип не поддерживается
         logger.info(f"ДЗ отправлено админам: msg_id={sent_admin_message.message_id}")
 
-        if sent_admin_message and ADMIN_GROUP_ID:  # Убедимся, что сообщение отправлено
-            if N8N_HOMEWORK_CHECK_WEBHOOK_URL:
-
-                # Внутри функции handle_homework, после того как определили course_id и current_lesson
-                # --- НАЧАЛО НОВОГО БЛОКА ---
-                async with aiosqlite.connect(DB_FILE) as conn:
-                    # Получаем текст урока, где было само задание (части до is_homework=True)
-                    cursor_lesson_parts = await conn.execute(
-                        """SELECT text FROM group_messages 
-                           WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text'
-                           ORDER BY id ASC""",
-                        (course_id, current_lesson)
-                    )
-                    lesson_parts_rows = await cursor_lesson_parts.fetchall()
-                    # Собираем все текстовые части урока в одну строку
-                    full_assignment_description = "\n".join([row[0] for row in lesson_parts_rows if row[0]])
-                # --- КОНЕЦ НОВОГО БЛОКА ---
-
-
-                # Формируем базовый URL для коллбэков на лету
-                # WEBHOOK_HOST_CONF и WEBHOOK_PATH_CONF должны быть доступны (например, как глобальные переменные)
-                current_bot_callback_base_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
-
-                # Вычисляем фазу спринта по номеру урока
-                if current_lesson <= 7:
-                    sprint_phase = "ОРИЕНТАЦИЯ"
-                elif current_lesson <= 21:
-                    sprint_phase = "СТРАТЕГИЯ"
-                else:
-                    sprint_phase = "ИНТЕГРАЦИЯ"
-
-                payload_for_n8n_hw = {
-                    "action": "check_homework",
-                    "student_user_id": user_id,
-                    "user_fullname": user_display_name,  # <--- ДОБАВЛЯЕМ ИМЯ
-                    "course_numeric_id": course_numeric_id,
-                    "course_title": await get_course_title(course_id),  # course_id уже строковый
-                    "lesson_num": current_lesson,
-                    "expected_homework_type": expected_hw_type,  # <--- ДОБАВЛЯЕМ ОЖИДАЕМЫЙ ТИП ДЗ
-                    "homework_content_type": message.content_type.lower(),
-                    "lesson_assignment_description": full_assignment_description,  # <--- ВОТ ОНО
-                    "homework_text": message.text if message.text else message.caption,
-                    "homework_file_id": file_id,  # file_id фото/документа и т.д., уже определен в вашем коде
-                    "admin_group_id": ADMIN_GROUP_ID,  # Должен быть доступен (глобально или через os.getenv)
-                    "original_admin_message_id": sent_admin_message.message_id,
-                    "callback_webhook_url_result": f"{current_bot_callback_base_url}/n8n_hw_result",
-                    "callback_webhook_url_error": f"{current_bot_callback_base_url}/n8n_hw_processing_error",
-                    "telegram_bot_token": BOT_TOKEN,  # BOT_TOKEN должен быть доступен (глобально или через os.getenv)
-                    "session_id": f"hw-{user_id}-{course_numeric_id}-{current_lesson}",
-                    "sprint_phase": sprint_phase,
-                    "day_number": current_lesson
-                }
-                asyncio.create_task(send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload_for_n8n_hw))
-            # >>> КОНЕЦ НОВОГО БЛОКА ДЛЯ N8N <<<
-
+        if sent_admin_message:
             try:
                 async with aiosqlite.connect(DB_FILE) as conn:
                     await conn.execute("""
@@ -8636,10 +8592,10 @@ async def handle_homework(message: types.Message):
                     """, (
                         sent_admin_message.message_id,
                         ADMIN_GROUP_ID,
-                        user_id,  # ID студента
-                        course_numeric_id,  # Числовой ID курса
-                        current_lesson,  # Номер урока
-                        message.message_id  # ID сообщения самого студента с ДЗ
+                        user_id,
+                        course_numeric_id,
+                        current_lesson,
+                        message.message_id
                     ))
                     await conn.commit()
                     logger.info(
@@ -9066,18 +9022,25 @@ async def on_startup():
 
 
     logger.info("Запуск фоновых задач для пользователей (таймеры)...")
-    async with aiosqlite.connect(DB_FILE) as conn: # DB_FILE должен быть определен
+    
+    async with aiosqlite.connect(DB_FILE) as conn:
         cursor = await conn.execute("SELECT user_id FROM users")
         users_rows = await cursor.fetchall()
         for user_row in users_rows:
             user_id = user_row[0]
-            # lesson_check_tasks должен быть определен глобально
             if user_id not in lesson_check_tasks or lesson_check_tasks[user_id].done():
                 asyncio.create_task(start_lesson_schedule_task(user_id))
             else:
                 logger.info(f"Task for user {user_id} already running or scheduled.")
     
-    # Запускаем задачу проверки timeout для ДЗ
+    async with aiosqlite.connect(DB_FILE) as conn:
+        cursor = await conn.execute("SELECT COUNT(*) FROM pending_admin_homework")
+        count = (await cursor.fetchone())[0]
+        if count > 0:
+            await conn.execute("DELETE FROM pending_admin_homework")
+            await conn.commit()
+            logger.info(f"Очищено {count} старых ДЗ из pending_admin_homework при старте")
+    
     asyncio.create_task(check_pending_homework_timeout())
     logger.info("Фоновые задачи запущены.")
 
