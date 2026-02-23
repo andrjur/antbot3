@@ -227,6 +227,66 @@ docker-compose restart bot
 
 ---
 
+## 🔧 Исправление проблем
+
+### n8n: Ошибка прав доступа (Permission denied)
+
+Если n8n падает с ошибкой `EACCES: permission denied, open '/home/node/.n8n/crash.journal'`:
+
+```bash
+# 1. Остановить n8n
+docker-compose stop n8n
+
+# 2. Исправить права на папку n8n_data
+sudo chown -R 1000:1000 ~/antbot4/n8n_data
+sudo chmod -R 755 ~/antbot4/n8n_data
+
+# 3. Запустить n8n
+docker-compose start n8n
+
+# 4. Проверить логи
+docker-compose logs n8n --tail=20
+```
+
+**Альтернативное решение** - добавить в `docker-compose.yml`:
+
+```yaml
+n8n:
+  environment:
+    - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
+```
+
+### Бот: Ошибка "no such column: timestamp"
+
+Если в `pending_admin_homework` нет колонки `timestamp`:
+
+```bash
+# Добавить колонку вручную
+sqlite3 bot.db "ALTER TABLE pending_admin_homework ADD COLUMN timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"
+
+# Проверить
+sqlite3 bot.db ".schema pending_admin_homework"
+
+# Перезапустить бота
+docker-compose restart bot
+```
+
+### Очистка места на диске
+
+```bash
+# Очистить Docker кэш
+docker system prune -af
+docker volume prune -f
+
+# Удалить старые бэкапы settings
+rm -f settings_*.json
+
+# Проверить место
+df -h
+```
+
+---
+
 ## 📜 Лицензия
 
 MIT
