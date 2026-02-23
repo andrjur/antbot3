@@ -2174,7 +2174,7 @@ async def _handle_missing_lesson_content(user_id: int, course_id: str, lesson_nu
     )
 
 async def scheduled_lesson_check(user_id: int):
-    """Запускает проверку расписания уроков для пользователя каждые 7 минут."""
+    """Запускает проверку расписания уроков для пользователя каждую минуту."""
     while True:
         await check_lesson_schedule(user_id)
         await asyncio.sleep(1 * 60)  # Каждую 1 минуту
