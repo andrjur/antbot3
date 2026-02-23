@@ -1141,7 +1141,7 @@ async def stop_lesson_schedule_task(user_id: int):
 
 async def check_pending_homework_timeout():
     """
-    Периодически проверяет ДЗ, которые ожидают проверки более 7 минут,
+    Периодически проверяет ДЗ, которые ожидают проверки более 2 минут,
     и отправляет их на n8n webhook если админ не ответил.
     """
     while True:
@@ -1152,8 +1152,8 @@ async def check_pending_homework_timeout():
                 continue
             
             async with aiosqlite.connect(DB_FILE) as conn:
-                # Находим ДЗ, которые ожидают более 7 минут
-                cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=7)
+                # Находим ДЗ, которые ожидают более 2 минут
+                cutoff_time = datetime.now(pytz.utc) - timedelta(minutes=2)
                 cutoff_time_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
                 
                 cursor = await conn.execute('''
@@ -1168,7 +1168,7 @@ async def check_pending_homework_timeout():
                 for row in pending_rows:
                     admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at = row
                     
-                    logger.info(f"ДЗ #{admin_msg_id} ожидает более 7 минут, отправляем на n8n")
+                    logger.info(f"ДЗ #{admin_msg_id} ожидает более 2 минут, отправляем на n8n")
                     
                     # Получаем информацию о студенте и курсе
                     cursor_student = await conn.execute(
@@ -1192,23 +1192,22 @@ async def check_pending_homework_timeout():
                         "admin_message_id": admin_msg_id,
                         "student_message_id": student_msg_id,
                         "created_at": created_at,
-                        "timeout_minutes": 7
+                        "timeout_minutes": 2
                     }
                     
                     success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
                     
                     if success:
                         logger.info(f"ДЗ #{admin_msg_id} успешно отправлено на n8n")
-                        # Добавляем в set чтобы знать что ушло на n8n (админ может перезаписать)
                         homework_sent_to_n8n.add(admin_msg_id)
                     else:
-                        logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
+                        logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response[:100]}")
                 
                 if pending_rows:
                     await conn.commit()
                     
         except Exception as e:
-            logger.error(f"Ошибка в check_pending_homework_timeout: {e}", exc_info=True)
+            logger.error(f"Ошибка в check_pending_homework_timeout: {e}")
 
 
 def save_settings(settings_s):
