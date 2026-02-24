@@ -3605,37 +3605,59 @@ async def process_course(message: types.Message, state: FSMContext):
             return
     
     await state.update_data(course_id=course_id)
-    
+
     # Показываем существующие уроки этого курса
     existing_lessons_info = ""
+    has_description = False
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
+            # Проверяем есть ли описание (урок 0)
+            cursor_desc = await conn.execute('''
+                SELECT COUNT(*) FROM group_messages
+                WHERE course_id = ? AND lesson_num = 0
+            ''', (course_id,))
+            desc_count = (await cursor_desc.fetchone())[0]
+            has_description = desc_count > 0
+            
+            # Получаем уроки (lesson_num > 0)
             cursor = await conn.execute('''
                 SELECT lesson_num, COUNT(*) as parts_count
-                FROM group_messages 
+                FROM group_messages
                 WHERE course_id = ? AND lesson_num > 0
                 GROUP BY lesson_num
                 ORDER BY lesson_num
             ''', (course_id,))
             lessons = await cursor.fetchall()
-            
-            if lessons:
+
+            if has_description:
+                existing_lessons_info = "\n📚 Существующие уроки:\n"
+                existing_lessons_info += "   • 📘 Урок 0 (описание курса) ✅\n"
+                if lessons:
+                    for lesson_num, parts_count in lessons:
+                        existing_lessons_info += f"   • Урок {lesson_num} ({parts_count} частей)\n"
+            elif lessons:
                 existing_lessons_info = "\n📚 Существующие уроки:\n"
                 for lesson_num, parts_count in lessons:
                     existing_lessons_info += f"   • Урок {lesson_num} ({parts_count} частей)\n"
+                existing_lessons_info += "\n⚠️ Нет описания курса (урок 0)!\n"
+                existing_lessons_info += "💡 Рекомендуется добавить: введите 0\n"
             else:
                 existing_lessons_info = "\n📭 У этого курса пока нет уроков.\n"
+                existing_lessons_info += "💡 Начните с описания (урок 0) или добавьте урок 1\n"
     except Exception as e:
         logger.error(f"Ошибка получения списка уроков: {e}")
-    
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_menu")]
     ])
-    
+
     await message.answer(
         f"📚 Выбран курс: {course_id}\n"
         f"{existing_lessons_info}\n"
-        f"🔢 Введите номер урока (например: 1, 2, 3...):",
+        f"🔢 Введите номер урока:\n\n"
+        f"• 0 = описание курса (только один!)\n"
+        f"• 1, 2, 3... = уроки\n"
+        f"{'⚠️ Описание уже есть!' if has_description else '💡 Рекомендуется начать с урока 0'}",
         reply_markup=keyboard,
         parse_mode=None
     )
@@ -3656,14 +3678,21 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
     # Подсказка для урока 0
     if lesson_num == 0:
         await state.update_data(lesson_num=lesson_num)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_menu")]
+        ])
+        
         await message.answer(
             "📝 Урок 0 - это описание курса.\n\n"
+            "⚠️ Описание может быть ТОЛЬКО ОДНО!\n\n"
             "Отправьте ТЕКСТОВОЕ сообщение с описанием курса.\n"
             "Это сообщение будет показано студентам при активации курса.\n\n"
             "💡 Формат:\n"
             "*Курс Название*\n"
             "Описание курса...\n\n"
             "Или просто отправьте текст - бот автоматически сохранит как описание.",
+            reply_markup=keyboard,
             parse_mode=None
         )
         await state.set_state(UploadLesson.waiting_content)
@@ -7119,9 +7148,9 @@ async def cmd_send_to_user_handler(message: types.Message, command: CommandObjec
         logger.info(f"Админ {message.from_user.id} отправил сообщение пользователю {target_user_id}: {text_to_send[:50]}...")
     except TelegramBadRequest as e:
         if "chat not found" in str(e).lower() or "bot was blocked by the user" in str(e).lower():
-            await message.reply(f"Не удалось отправить сообщение: пользователь {target_user_id} не найден или заблокировал бота.")
+            await message.reply(f"Не удалось отправить сообщение: пользователь {target_user_id} не найден или за��локировал бота.")
             logger.warning(f"Ошибка отправки сообщения пользователю {target_user_id} от админа {message.from_user.id}: {e}")
-            # Здесь можно добавить логику деактивации пользователя в вашей БД, если он заблокировал бота.
+            # Здесь можно добавить логику деактивации пользова��еля в вашей БД, если он заблокировал бота.
         else:
             await message.reply(f"Произошла ошибка Telegram при отправке сообщения пользователю {target_user_id}: {e}")
             logger.error(f"Ошибка Telegram при отправке сообщения пользователю {target_user_id} от админа {message.from_user.id}: {e}")
@@ -9307,7 +9336,7 @@ async def main():
         use_webhook = True
         logger.info(f"📡 Режим работы: WEBHOOK")
         logger.info(f"   Host: {WEBHOOK_HOST_CONF}")
-        logger.info(f"   Порт сервера: {webapp_port_str}")
+        logger.info(f"   По��т сервера: {webapp_port_str}")
         logger.info(f"   Хост приложения: {WEBAPP_HOST_CONF}")
     else:
         # По умолчанию webhook, но без настроенного WEBHOOK_HOST - ошибка
