@@ -2165,14 +2165,22 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
 
 async def _handle_missing_lesson_content(user_id: int, course_id: str, lesson_num: int, total_lessons: int):
     """Обрабатывает ситуацию, когда контент урока не найден."""
+    # Если уроков в курсе вообще нет (total_lessons=0) - не спамим, это известная проблема
+    if total_lessons == 0:
+        logger.warning(
+            f"⚠️ Курс '{course_id}' пустой (0 уроков). Пропускаю предупреждение для user_id={user_id}. "
+            f"Нужно загрузить уроки через репост в админ-группу."
+        )
+        return
+
     warning_key = f"{user_id}:{course_id}:{lesson_num}"
-    
+
     if warning_key in missing_lesson_warnings_sent:
         logger.debug(f"Skipping duplicate missing lesson warning for {warning_key}")
         return
-    
+
     missing_lesson_warnings_sent.add(warning_key)
-    
+
     logger.warning(
         f"⚠️ Контент для урока {lesson_num} не найден в курсе {course_id}, "
         f"хотя такой номер урока допустим (всего {total_lessons} уроков)."
@@ -8200,7 +8208,7 @@ async def handle_support_message(message: types.Message, state: FSMContext):
 
     except Exception as e4445:
         logger.error(f"Ошибка при обработке сообщения от пользователя: {e4445}")
-        await message.answer("❌ Произошла ошибка при обработке запроса. Попробуйте позже.", parse_mode=None)
+        await message.answer("❌ Произошла ошибка при обработ��е запроса. Попробуйте позже.", parse_mode=None)
 
     finally:
         # Сбрасываем состояние
