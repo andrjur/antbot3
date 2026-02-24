@@ -2595,32 +2595,56 @@ async def save_message_to_db(group_id: int, message: Message):
             # Extract course information from the first message
             course_snippet = None
             course_title = None
-            if lesson_stack.get(group_id_str) is None and cleaned_text.startswith("*Курс"):
-                # This is the first message
-                course_snippet = extract_course_snippet(cleaned_text)
-                course_title = extract_course_title(cleaned_text)
-                lesson_num = 0  # First message has lesson_num = 0
-
-                # Check if a description already exists
-                cursor = await conn.execute("SELECT 1 FROM group_messages WHERE course_id = ? AND lesson_num = 0",
-                                            (course_id,))
-                existing_record = await cursor.fetchone()
-
-                # If record exists, turn other lesson_num = 0 to negative before inserting the first description
-                if existing_record:
-                    await conn.execute("UPDATE group_messages SET lesson_num = -message_id WHERE course_id = ? AND lesson_num = 0",
-                                        (course_id,))
-                    logger.info(f"Old records from {group_id=} was update to negative lesson_num")
+            
+            # Проверяем, есть ли уже сообщения для этого курса
+            cursor_existing = await conn.execute(
+                "SELECT COUNT(*) FROM group_messages WHERE course_id = ?",
+                (course_id,)
+            )
+            existing_messages_count = (await cursor_existing.fetchone())[0]
+            
+            if existing_messages_count == 0:
+                # Это ПЕРВОЕ сообщение для курса - считаем его описанием (урок 0)
+                if message.content_type == "text":
+                    course_snippet = extract_course_snippet(cleaned_text)
+                    course_title = extract_course_title(cleaned_text)
+                    lesson_num = 0  # Первое сообщение = урок 0 (описание курса)
+                    
+                    # Обновляем название и описание курса
+                    await conn.execute("""
+                        UPDATE courses
+                        SET title = ?, description = ?
+                        WHERE course_id = ?
+                    """, (course_title, course_snippet, course_id))
+                    logger.info(f"✅ Первое сообщение курса {course_id} сохранено как описание (урок 0)")
                     await conn.commit()
-
-                # Update course title and snippet
-                await conn.execute("""
-                    UPDATE courses
-                    SET title = ?, description = ?
-                    WHERE course_id = ?
-                """, (course_title, course_snippet, course_id))
-                logger.info(f"6000 записали сниппет в базу {group_id} type {message.content_type}")
-                await conn.commit()
+                else:
+                    # Первое сообщение не текстовое - всё равно урок 0, но без описания
+                    lesson_num = 0
+                    logger.warning(f"⚠️ Первое сообщение курса {course_id} не текстовое ({message.content_type}), но сохранено как урок 0")
+            elif group_id_str in lesson_stack and lesson_stack[group_id_str]:
+                # Есть активный урок из стека
+                lesson_num = lesson_stack[group_id_str][-1]
+            else:
+                # Берем последний известный номер урока и увеличиваем на 1
+                last_info = last_message_info.get(group_id_str, {})
+                last_lesson = last_info.get("lesson_num", 0)
+                
+                # Если это новое сообщение (не часть текущего урока), увеличиваем номер
+                if not hw_start_match and not start_lesson_match:
+                    # Проверяем, не дублируется ли сообщение
+                    cursor_check = await conn.execute(
+                        "SELECT lesson_num FROM group_messages WHERE message_id = ? AND group_id = ?",
+                        (mes_id, group_id_str)
+                    )
+                    if await cursor_check.fetchone():
+                        logger.info(f"Сообщение {mes_id} уже сохранено, пропускаем")
+                        return
+                    
+                    lesson_num = last_lesson + 1
+                    logger.info(f"Новое сообщение: увеличиваем номер урока с {last_lesson} до {lesson_num}")
+                else:
+                    lesson_num = last_lesson
 
             logger.info(f"{course_snippet=} {course_title=} {lesson_num=} {is_homework=} {hw_type=}")
 
