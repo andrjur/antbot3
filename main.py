@@ -6892,12 +6892,11 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
             ).pack()
         ))
 
-    # Кнопка /start для админов
-    if user_id in ADMIN_IDS_CONF:
-        builder.row(InlineKeyboardButton(
-            text="🔙 /start - В админ-меню",
-            callback_data="admin_menu"
-        ))
+    # Кнопка возврата в главное меню (для всех)
+    builder.row(InlineKeyboardButton(
+        text="🔙 /start - В главное меню",
+        callback_data="admin_menu" if user_id in ADMIN_IDS_CONF else "menu_cur"
+    ))
 
     final_message_text = "\n".join(message_text_parts)
 
