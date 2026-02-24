@@ -5886,22 +5886,28 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
             # Проверяем, является ли пользователь админом (сначала!)
             if user_id in ADMIN_IDS_CONF:
+                logger.info(f"cmd_start: User {user_id} is admin, checking for active course...")
                 # Получаем данные активного курса админа (если есть)
-                cursor = await conn.execute("""
-                    SELECT 
-                        uc.course_id,
-                        uc.current_lesson,
-                        uc.version_id,
-                        c.title AS course_name,
-                        cv.title AS version_name,
-                        uc.status,
-                        uc.hw_status
-                    FROM user_courses uc
-                    JOIN courses c ON uc.course_id = c.course_id
-                    JOIN course_versions cv ON uc.course_id = cv.course_id AND uc.version_id = cv.version_id
-                    WHERE uc.user_id = ? AND uc.status = 'active'
-                """, (user_id,))
-                current_course = await cursor.fetchone()
+                try:
+                    cursor = await conn.execute("""
+                        SELECT 
+                            uc.course_id,
+                            uc.current_lesson,
+                            uc.version_id,
+                            c.title AS course_name,
+                            cv.title AS version_name,
+                            uc.status,
+                            uc.hw_status
+                        FROM user_courses uc
+                        JOIN courses c ON uc.course_id = c.course_id
+                        JOIN course_versions cv ON uc.course_id = cv.course_id AND uc.version_id = cv.version_id
+                        WHERE uc.user_id = ? AND uc.status = 'active'
+                    """, (user_id,))
+                    current_course = await cursor.fetchone()
+                    logger.info(f"cmd_start: admin current_course query result = {current_course}")
+                except Exception as e_admin_query:
+                    logger.error(f"cmd_start: Error querying admin course: {e_admin_query}")
+                    current_course = None
                 
                 if current_course:
                     # Админ с активным курсом (режим тестирования)
