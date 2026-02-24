@@ -179,6 +179,8 @@ N8N_DOMAIN = os.getenv("N8N_DOMAIN")
 
 HW_TIMEOUT_SECONDS = int(os.getenv("HW_TIMEOUT_SECONDS", "120"))
 
+missing_lesson_warnings_sent = set()
+
 # Базовый URL вашего бота для callback'ов от n8n
 # Это WEBHOOK_HOST_CONF из вашего конфига + некий путь
 BOT_CALLBACK_BASE_URL = f"{os.getenv('N8N_DOMAIN', 'https://n8n.indikov.ru/')}{os.getenv('WEBHOOK_PATH', '/bot/')}"
@@ -2163,11 +2165,18 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
 
 async def _handle_missing_lesson_content(user_id: int, course_id: str, lesson_num: int, total_lessons: int):
     """Обрабатывает ситуацию, когда контент урока не найден."""
+    warning_key = f"{user_id}:{course_id}:{lesson_num}"
+    
+    if warning_key in missing_lesson_warnings_sent:
+        logger.debug(f"Skipping duplicate missing lesson warning for {warning_key}")
+        return
+    
+    missing_lesson_warnings_sent.add(warning_key)
+    
     logger.warning(
         f"⚠️ Контент для урока {lesson_num} не найден в курсе {course_id}, "
         f"хотя такой номер урока допустим (всего {total_lessons} уроков)."
     )
-    # ИСПРАВЛЕНИЕ: Убрали MarkdownV2, чтобы избежать ошибки с точками
     course_title_safe = await get_course_title(course_id)
     await bot.send_message(
         user_id,
