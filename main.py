@@ -2306,7 +2306,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
             if not base_time_str_for_calc:
                 logger.error(
                     f"Отсутствует и first_lesson_sent_time, и activation_date для user_id={user_id}, course_id={course_id}")
-                return "о������������ибка расчета времени (н������т базовой даты)"
+                return "о������������������ибка расчета времени (н������т базовой даты)"
 
             try:
                 # Пытаемся сначала как ISO, потом как ваш формат. Это делает код гибче.
@@ -4083,14 +4083,15 @@ async def cmd_list_admins(message: types.Message):
             result += f"\n🔧 Админы группы ({ADMIN_GROUP_ID}):\n"
             try:
                 # Получаем список участников группы
+                admins = await bot.get_chat_administrators(ADMIN_GROUP_ID)
                 admins_info = []
-                async for member in bot.get_chat_administrators(ADMIN_GROUP_ID):
+                for member in admins:
                     name = member.user.first_name or ""
                     if member.user.last_name:
                         name += f" {member.user.last_name}"
                     username = f"@{member.user.username}" if member.user.username else ""
                     admins_info.append(f"   • {name} {username} (ID: {member.user.id})")
-                
+
                 if admins_info:
                     result += "\n".join(admins_info) + "\n"
                 else:
@@ -6875,6 +6876,13 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
             ).pack()
         ))
 
+    # Кнопка /start для админов
+    if user_id in ADMIN_IDS_CONF:
+        builder.row(InlineKeyboardButton(
+            text="🔙 /start - В админ-меню",
+            callback_data="admin_menu"
+        ))
+
     final_message_text = "\n".join(message_text_parts)
 
     # Пагинация (пока не реализована, но можно добавить логику здесь, если all_system_courses большой)
@@ -7159,7 +7167,7 @@ async def cmd_get_new_task(message: types.Message, state: FSMContext):
     await message.answer(escape_md(full_message), parse_mode=None)
 
     # Сохраняем в FSM, какого задания мы ждем отчет
-    await state.set_state(Form.waiting_for_homework)  # Нужно будет создать это состояние
+    await state.set_state(Form.waiting_for_homework)  # Нужно будет создать это ��остояние
     await state.update_data(current_task_id=new_task_id)
 
 
@@ -8526,7 +8534,8 @@ async def handle_homework(message: types.Message):
                 f"*Добро пожаловать*, {escape_md(first_name)}\n\n"
                 f"Вы успешно активировали *{escape_md(course_title)}*\n"
                 f"Ваш тариф: *{escape_md(tariff_name)}*\n"
-                f"Интервал между уроками: *{escape_md(str(message_interval))}* ч\n\n" #todo: interval
+                f"⚡ Интервал между уроками: *{TEST_MODE_INTERVAL_MINUTES} мин* (тест-режим)\n"
+                f"💡 Выключить: /test_mode\n\n"
                 f"Желаем удачи в прохождении курса"
             )
             logger.info(f"3332 {welcome_message=}")
