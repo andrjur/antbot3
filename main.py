@@ -6408,40 +6408,60 @@ async def send_course_description(user_id: int, course_id_str: str):  # Прин
         group_messages с lesson_num = 0.
         group_messages с lesson_num IS NULL.
         Если ничего из вышеперечисленного, берется текст первой текстовой части урока №1 (если есть)."""
-    logger.info(f"send_course_description START: user_id={user_id}, course_id_str='{course_id_str}'")
+    logger.info("=" * 80)
+    logger.info(f"send_course_description START")
+    logger.info(f"ЛОГ #1: user_id={user_id}")
+    logger.info(f"ЛОГ #2: course_id_str='{course_id_str}'")
+    logger.info(f"ЛОГ #3: Вызов get_course_id_int для '{course_id_str}'")
+    course_numeric_id_for_log = await get_course_id_int(course_id_str)
+    logger.info(f"ЛОГ #4: course_numeric_id={course_numeric_id_for_log}")
+    logger.info(f"ЛОГ #5: Вызов get_course_title для '{course_id_str}'")
+    course_title_for_log = await get_course_title(course_id_str)
+    logger.info(f"ЛОГ #6: course_title='{course_title_for_log}'")
+    logger.info(f"ЛОГ #7: Начинаем поиск описания в БД")
     description_to_send = None
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             # 1. Попытка получить описание из courses.description
+            logger.info(f"ЛОГ #8: Попытка #1 - courses.description")
             cursor_courses_desc = await conn.execute(
                 "SELECT description FROM courses WHERE course_id = ?",
                 (course_id_str,)
             )
             row_courses_desc = await cursor_courses_desc.fetchone()
+            logger.info(f"ЛОГ #9: row_courses_desc={row_courses_desc}")
             if row_courses_desc and row_courses_desc[0] and row_courses_desc[0].strip():
                 description_to_send = row_courses_desc[0].strip()
-                logger.info(f"Найдено описание для курса '{course_id_str}' в таблице 'courses'.")
+                logger.info(f"ЛОГ #10: Найдено описание для курса '{course_id_str}' в таблице 'courses'.")
+                logger.info(f"ЛОГ #11: description_to_send (первые 100 симв)='{description_to_send[:100]}...'")
             else:
+                logger.info(f"ЛОГ #10: В courses.description пусто, пробуем урок 0")
                 # 2. Если в courses.description пусто, ищем урок 0 в group_messages
+                logger.info(f"ЛОГ #11: Попытка #2 - lesson_num = 0 в group_messages")
                 cursor_gm_lesson0 = await conn.execute(
                     "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num = 0 ORDER BY id ASC LIMIT 1",
                     (course_id_str,)
                 )
                 row_gm_lesson0 = await cursor_gm_lesson0.fetchone()
+                logger.info(f"ЛОГ #12: row_gm_lesson0={row_gm_lesson0}")
                 if row_gm_lesson0 and row_gm_lesson0[0] and row_gm_lesson0[0].strip():
                     description_to_send = row_gm_lesson0[0].strip()
-                    logger.info(f"Найдено описание для курса '{course_id_str}' как урок 0 в 'group_messages'.")
+                    logger.info(f"ЛОГ #13: Найдено описание для курса '{course_id_str}' как урок 0 в 'group_messages'.")
+                    logger.info(f"ЛОГ #14: description_to_send (первые 100 симв)='{description_to_send[:100]}...'")
                 else:
+                    logger.info(f"ЛОГ #13: Урок 0 не найден, пробуем lesson_num IS NULL")
                     # 3. Если и урока 0 нет, ищем урок с lesson_num IS NULL (если такая логика предполагалась)
+                    logger.info(f"ЛОГ #14: Попытка #3 - lesson_num IS NULL")
                     cursor_gm_lesson_null = await conn.execute(
                         "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num IS NULL ORDER BY id ASC LIMIT 1",
                         (course_id_str,)
                     )
                     row_gm_lesson_null = await cursor_gm_lesson_null.fetchone()
+                    logger.info(f"ЛОГ #15: row_gm_lesson_null={row_gm_lesson_null}")
                     if row_gm_lesson_null and row_gm_lesson_null[0] and row_gm_lesson_null[0].strip():
                         description_to_send = row_gm_lesson_null[0].strip()
-                        logger.info(f"Найдено описание для курса '{course_id_str}' как урок NULL в 'group_messages'.")
+                        logger.info(f"ЛОГ #16: Найдено описание для курса '{course_id_str}' как урок NULL в 'group_messages'.")
 
             # 4. Если ничего не найдено, ищем первую текстовую часть первого реального урока (lesson_num=1)
             if not description_to_send:
@@ -6461,6 +6481,7 @@ async def send_course_description(user_id: int, course_id_str: str):  # Прин
                     logger.info(f"В качестве описания для '{course_id_str}' взят текст урока 1.")
 
             if description_to_send:
+                logger.info(f"ЛОГ #17: description_to_send найден, длина={len(description_to_send)}")
                 # Удаляем HTML-теги, если они есть (простая очистка)
                 # cleaned_description = re.sub(r'<[^>]+>', '', description_to_send)
                 # Для MarkdownV2 специфичные HTML теги не работают, так что re.sub может быть не нужен,
@@ -6470,6 +6491,7 @@ async def send_course_description(user_id: int, course_id_str: str):  # Прин
                 # Разбиваем на части, если описание слишком длинное
                 max_len = 4000  # Максимальная длина сообщения Telegram (с запасом)
                 escaped_desc = escape_md(description_to_send)  # Экранируем один раз весь текст
+                logger.info(f"ЛОГ #18: escaped_desc длина={len(escaped_desc)}")
 
                 for i in range(0, len(escaped_desc), max_len):
                     part = escaped_desc[i:i + max_len]
@@ -6479,6 +6501,9 @@ async def send_course_description(user_id: int, course_id_str: str):  # Прин
                         parse_mode=None,
                         disable_web_page_preview=True
                     )
+                logger.info(f"ЛОГ #19: Описание отправлено пользователю {user_id}")
+                logger.info(f"ЛОГ #20: send_course_description END")
+                logger.info("=" * 80)
                 logger.info(
                     f"Описание для '{course_id_str}' (длина {len(escaped_desc)}) успешно отправлено пользователю {user_id}.")
             else:
@@ -8168,7 +8193,7 @@ async def handle_homework_result(
     
     # Проверяем, было ли ДЗ отправлено на n8n (админ имеет приоритет)
     if message_id_to_process in homework_sent_to_n8n:
-        logger.info(f"{log_prefix} ДЗ уже было отправлено на n8n, но админ имеет приоритет")
+        logger.info(f"{log_prefix} ДЗ уже было отправлено на n8n, но админ имее�� приоритет")
         homework_sent_to_n8n.discard(message_id_to_process)
 
     # Основная логика
@@ -8176,7 +8201,7 @@ async def handle_homework_result(
         # 1. Обновляем статус в БД
         hw_status = "approved" if is_approved else "rejected"
         await update_homework_status(user_id, course_id, lesson_num, hw_status)  # Обновляем статус ДЗ
-        logger.info(f"{log_prefix} Статус ДЗ в БД обновлен на '{hw_status}'.")
+        logger.info(f"{log_prefix} Статус ДЗ в БД обн��влен на '{hw_status}'.")
 
         async with aiosqlite.connect(DB_FILE) as conn:
             # 2. Готовим данные для сообщений
@@ -8636,16 +8661,41 @@ async def handle_homework(message: types.Message):
     # =======================================
 
     # ===== ПРОВЕРКА: ЕСЛИ ДЗ УЖЕ ОДОБРЕНО ДЛЯ ЭТОГО УРОКА =====
+    logger.info("=" * 80)
+    logger.info(f"ЛОГ #1: ПРОВЕРКА hw_status НАЧАЛО")
+    logger.info(f"ЛОГ #2: user_id={user_id}")
+    logger.info(f"ЛОГ #3: course_id={course_id}")
+    logger.info(f"ЛОГ #4: course_numeric_id={course_numeric_id}")
+    logger.info(f"ЛОГ #5: current_lesson={current_lesson}")
+    logger.info(f"ЛОГ #6: version_id={version_id}")
+    
     async with aiosqlite.connect(DB_FILE) as conn_check:
+        logger.info(f"ЛОГ #7: Подключение к БД для проверки hw_status")
         cursor_hw_status = await conn_check.execute(
             "SELECT hw_status FROM user_courses WHERE user_id = ? AND course_id = ?",
             (user_id, course_id)
         )
+        logger.info(f"ЛОГ #8: SQL запрос выполнен")
         hw_status_row = await cursor_hw_status.fetchone()
+        logger.info(f"ЛОГ #9: hw_status_row={hw_status_row}")
         
-        logger.info(f"ПРОВЕРКА hw_status: user_id={user_id}, course_id={course_id}, lesson={current_lesson}, hw_status={hw_status_row[0] if hw_status_row else 'NULL'}")
+        if hw_status_row:
+            logger.info(f"ЛОГ #10: hw_status_row[0]={hw_status_row[0]}")
+            logger.info(f"ЛОГ #11: hw_status_row[0] == 'approved' → {hw_status_row[0] == 'approved'}")
+        else:
+            logger.info(f"ЛОГ #12: hw_status_row is None")
+        
+        logger.info(f"ЛОГ #13: Проверка условия hw_status_row and hw_status_row[0] == 'approved'")
         
         if hw_status_row and hw_status_row[0] == 'approved':
+            logger.info(f"ЛОГ #14: УСЛОВИЕ ВЫПОЛНЕНО - hw_status='approved'")
+            logger.info(f"ЛОГ #15: ДЗ для урока {current_lesson} уже одобрено — игнорируем повторную отправку")
+            logger.info(f"ЛОГ #16: user_id={user_id}")
+            logger.info(f"ЛОГ #17: course_id={course_id}")
+            logger.info(f"ЛОГ #18: current_lesson={current_lesson}")
+            logger.info(f"ЛОГ #19: ВОЗВРАТ ИЗ ФУНКЦИИ")
+            logger.info("=" * 80)
+            
             # ДЗ уже одобрено — игнорируем, просто говорим когда следующий урок
             logger.info(f"ДЗ для урока {current_lesson} уже одобрено — игнорируем повторную отправку")
             
@@ -8658,7 +8708,11 @@ async def handle_homework(message: types.Message):
                 parse_mode=None
             )
             return  # НЕ отправляем админу и не создаём pending запись
-        # =======================================
+        else:
+            logger.info(f"ЛОГ #14: УСЛОВИЕ НЕ ВЫПОЛНЕНО - hw_status != 'approved'")
+            logger.info(f"ЛОГ #15: Продолжаем обработку ДЗ")
+    
+    logger.info("=" * 80)
 
     # Если тариф v1 → самопроверка
     if version_id == 'v1':
