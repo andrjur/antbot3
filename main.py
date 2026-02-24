@@ -8609,7 +8609,9 @@ async def handle_homework(message: types.Message):
             (user_id, course_id)
         )
         hw_status_row = await cursor_hw_status.fetchone()
-
+        
+        logger.info(f"ПРОВЕРКА hw_status: user_id={user_id}, course_id={course_id}, lesson={current_lesson}, hw_status={hw_status_row[0] if hw_status_row else 'NULL'}")
+        
         if hw_status_row and hw_status_row[0] == 'approved':
             # ДЗ уже одобрено — игнорируем, просто говорим когда следующий урок
             logger.info(f"ДЗ для урока {current_lesson} уже одобрено — игнорируем повторную отправку")
