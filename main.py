@@ -3570,6 +3570,16 @@ async def cmd_upload_lesson(message: types.Message, state: FSMContext):
     # Переводим в состояние ожидания курса
     await state.set_state(UploadLesson.waiting_course)
 
+# Обработчик кнопки отмены для всех состояний UploadLesson
+@dp.callback_query(F.data == "admin_menu", StateFilter("UploadLesson:*"))
+async def cancel_upload_lesson(callback: CallbackQuery, state: FSMContext):
+    """Отмена загрузки урока"""
+    await state.clear()
+    await callback.message.edit_text("❌ Загрузка урока отменена.\n\n👑 АДМИН-МЕНЮ", reply_markup=None)
+    # Показываем админ меню через небольшую задержку
+    await asyncio.sleep(0.5)
+    await cmd_start(callback.message, state)
+
 @dp.message(UploadLesson.waiting_course)
 async def process_course(message: types.Message, state: FSMContext):
     """Обработка выбора курса"""
