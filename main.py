@@ -2306,7 +2306,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
             if not base_time_str_for_calc:
                 logger.error(
                     f"Отсутствует и first_lesson_sent_time, и activation_date для user_id={user_id}, course_id={course_id}")
-                return "о������ибка расчета времени (н������т базовой даты)"
+                return "о��������ибка расчета времени (н������т базовой даты)"
 
             try:
                 # Пытаемся сначала как ISO, потом как ваш формат. Это делает код гибче.
@@ -3555,7 +3555,7 @@ async def cmd_upload_lesson(message: types.Message, state: FSMContext):
         # Игнорируем не-админов молча или шлем лесом
         return
 
-    # Получаем список курсов
+    # Получаем списо�� курсов
     courses_list_str = "Нет доступных ку��с��в."
     if settings.get("groups"):
         courses_list_str = "\n".join([f"{i+1}. {c_id}" for i, c_id in enumerate(settings["groups"].values())])
@@ -4259,7 +4259,7 @@ async def cmd_remove_admin(message: types.Message):
 ADMIN_TEST_MODE = {}
 TEST_MODE_INTERVAL_MINUTES = 5  # Интервал в тест-режиме (минут)
 
-@dp.message(Command("test_mode"), F.from_user.id.in_(ADMIN_IDS_CONF))
+@dp.message(Command("test_mode"))
 async def cmd_test_mode(message: types.Message):
     """
     Переключает тест-режим для админа: 5 минут между уроками вместо 12 часов.
