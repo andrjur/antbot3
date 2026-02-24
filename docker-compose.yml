@@ -100,16 +100,13 @@ services:
     ports:
       - "9093:9093"
     volumes:
-      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/alertmanager-entrypoint.sh:/entrypoint.sh:ro
       - alertmanager-data:/alertmanager
-    command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-      - '--storage.path=/alertmanager'
-      - '--web.external-url=http://localhost:9093'
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
     networks:
       - antbot-network
     environment:
-      - BOT_TOKEN=${BOT_TOKEN}
+      - ALERT_BOT_TOKEN=${ALERT_BOT_TOKEN}
       - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
 
 volumes:
