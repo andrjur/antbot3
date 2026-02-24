@@ -842,8 +842,8 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                 logger.info(
                     f"Первая активация курса '{new_course_id}' с тарифом '{new_version_id}' для user_id={user_id}.")
                 await conn.execute("""
-                    INSERT INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date, first_lesson_sent_time, last_lesson_sent_time, level)
-                    VALUES (?, ?, ?, 'active', 0, ?, ?, ?, 1)
+                    INSERT INTO user_courses (user_id, course_id, version_id, status, current_lesson, activation_date, first_lesson_sent_time, last_lesson_sent_time, level, hw_status, hw_type)
+                    VALUES (?, ?, ?, 'active', 0, ?, ?, ?, 1, 'none', NULL)
                 """, (user_id, new_course_id, new_version_id, now_utc_str, now_utc_str, now_utc_str))
                 user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» успешно активирован!"
                 activation_log_details = f"Курс '{new_course_id}' (тариф '{new_version_id}') успешно активирован."
@@ -8563,6 +8563,8 @@ async def handle_homework(message: types.Message):
         return # break here
 
     course_numeric_id, current_lesson, version_id = user_course_data
+    logger.info(f"handle_homework: course_numeric_id={course_numeric_id}, current_lesson={current_lesson}, version_id={version_id}")
+    
     # ===== НОВАЯ ЗАЩИТА =====
     if current_lesson == 0:
         await message.answer(
@@ -8571,6 +8573,9 @@ async def handle_homework(message: types.Message):
         return
     # =======================
     course_id = await get_course_id_str(course_numeric_id)
+    
+    # ===== ЛОГИРОВАНИЕ ПЕРЕД ПРОВЕРКОЙ hw_status =====
+    logger.info(f"ПЕРЕД ПРОВЕРКОЙ: user_id={user_id}, course_id={course_id}, lesson={current_lesson}, version_id={version_id}")
 
     # ===== ПРОВЕРКА НА ПРОПУСК ДЗ =====
     skip_keywords = ["*пропускаю*", "пропускаю", "пропуск", "/skip"]
