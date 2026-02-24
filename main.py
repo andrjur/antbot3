@@ -5158,7 +5158,12 @@ async def cmd_remind(message: types.Message, command: CommandObject):
 
 
 async def update_settings_file():
-    """Обновляет файл settings.json - ТОЛЬКО добавляет новые данные, НЕ затирает существующие."""
+    """
+    Обновляет файл settings.json - ТОЛЬКО добавляет новые данные из БД.
+    НЕ затирает существующие поля!
+    
+    ВАЖНО: Эта функция теперь только добавляет, никогда не удаляет.
+    """
     try:
         # Проверяем что settings.json не является директорией
         if os.path.isdir("settings.json"):
@@ -5168,6 +5173,7 @@ async def update_settings_file():
                 logger.info("✅ Директория settings.json удалена")
             except Exception as e_cleanup:
                 logger.error(f"❌ Ошибка при удалении директории settings.json: {e_cleanup}")
+                return  # Прерываем, не создаем новый файл
 
         # Загружаем текущие настройки
         current_settings = {}
@@ -5175,11 +5181,13 @@ async def update_settings_file():
             if os.path.isfile("settings.json"):
                 with open("settings.json", "r", encoding="utf-8") as f:
                     current_settings = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+                    logger.info(f"✅ settings.json загружен: {len(current_settings)} полей")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.warning(f"⚠️ settings.json не найден или повреждён: {e}")
+            # НЕ создаем новый файл автоматически! Пусть админ сам создаст.
+            return
 
-        # Создаём структуру, сохраняя существующие данные
-        # ВАЖНО: НЕ добавляем поле "courses" - оно не нужно, дублирует groups
+        # Сохраняем ВСЕ существующие поля как есть
         settings = {
             "message_interval": current_settings.get("message_interval", 12),
             "tariff_names": current_settings.get("tariff_names", {
@@ -5188,37 +5196,32 @@ async def update_settings_file():
                 "v3": "Премиум"
             }),
             "groups": current_settings.get("groups", {}),
-            "activation_codes": current_settings.get("activation_codes", {})
+            "activation_codes": current_settings.get("activation_codes", {}),
+            "course_descriptions": current_settings.get("course_descriptions", {})
         }
 
-        # Добавляем новые курсы из БД (только если их ещё нет)
+        # Добавляем ТОЛЬКО новые курсы из БД (если их нет в settings)
         async with aiosqlite.connect(DB_FILE) as conn:
-            cursor = await conn.execute("SELECT course_id, group_id, title, description FROM courses")
+            cursor = await conn.execute("SELECT course_id, group_id FROM courses")
             courses_db = await cursor.fetchall()
 
-            for course_id, group_id, title, description in courses_db:
-                # Добавляем в groups если нет
+            added_any = False
+            for course_id, group_id in courses_db:
+                # Добавляем в groups только если нет
                 if group_id not in settings["groups"]:
                     settings["groups"][group_id] = course_id
+                    added_any = True
+                    logger.info(f"➕ Добавлен курс в settings: {group_id} → {course_id}")
 
-            # Добавляем коды активации из БД (только если их ещё нет)
-            cursor = await conn.execute("SELECT code_word, course_id, version_id, price_rub FROM course_activation_codes")
-            activation_codes = await cursor.fetchall()
-            for code_word, course_id, version_id, price_rub in activation_codes:
-                if code_word not in settings["activation_codes"]:
-                    settings["activation_codes"][code_word] = {
-                        "course": course_id,
-                        "version": version_id,
-                        "price": price_rub if price_rub else 0
-                    }
-
-        with open("settings.json", "w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=4)
-
-        logger.info("Файл settings.json обновлен (существующие данные сохранены).")
+            if added_any:
+                with open("settings.json", "w", encoding="utf-8") as f:
+                    json.dump(settings, f, ensure_ascii=False, indent=4)
+                logger.info("✅ settings.json обновлён (добавлены новые курсы)")
+            else:
+                logger.info("ℹ️ settings.json не изменён (все курсы уже есть)")
 
     except Exception as e2291:
-        logger.error(f"Ошибка при обновлении файла settings.json: {e2291}")
+        logger.error(f"❌ Ошибка при обновлении settings.json: {e2291}", exc_info=True)
 
 
 
