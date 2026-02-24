@@ -8515,9 +8515,6 @@ async def handle_homework(message: types.Message):
             # Load course data to get course_id and version_id
             async with aiosqlite.connect(DB_FILE) as conn:
                 try:
-                    # cursor = await conn.execute("""
-                    #     SELECT course_id, version_id FROM user_courses WHERE user_id = ?
-                    # """, (user_id,))
                     cursor = await safe_db_execute(
                         conn,
                         "SELECT course_id, version_id FROM user_courses WHERE user_id = ?",
@@ -8526,28 +8523,33 @@ async def handle_homework(message: types.Message):
 
                     new_course_data = await cursor.fetchone()
                     course_id, version_id = new_course_data
+                    
+                    logger.info(f"ACTIVATION: course_id={course_id}, version_id={version_id} ИЗ БД")
 
-                    # Fetch additional info
-                    course_title = await get_course_title(course_id)
-                    course_numeric_id = await get_course_id_int(course_id)
-                    tariff_name = get_tariff_name(version_id)
-                    if course_numeric_id == 0:
-                        logger.error(f"Не найден курс {course_id=}")
-                    lesson_num = 0  # After activation the first lesson is shown
-
-                    # Get the lesson interval information based on user_id and version
-                    message_interval = settings.get("message_interval", 24) #message_interval = 0.05
-                    logger.info(f" message_interval = {message_interval} ")
+                    await conn.commit()  # СРАЗУ коммит!
+                    logger.info(f"COMMIT после активации: course_id={course_id}, version_id={version_id}")
 
                 except Exception as e4585:
                     logger.error(f" 😱 Ой-ой! Какая-то ошибка с базой после активации: {e4585}")
                     await message.answer(" 😥 Кажется, база данных уснула. Попробуйте чуть позже", parse_mode=None)
                     return
 
-            await conn.commit()  # ВАЖНО: коммит перед send_course_description!
-            logger.info(f"COMMIT после активации: course_id={course_id}, version_id={version_id}")
+            # ТЕПЕРЬ получаем доп информацию ПОСЛЕ коммита
+            course_title = await get_course_title(course_id)
+            course_numeric_id = await get_course_id_int(course_id)
+            tariff_name = get_tariff_name(version_id)
+            
+            logger.info(f"ПОСЛЕ КОММИТА: course_id={course_id}, course_numeric_id={course_numeric_id}, course_title={course_title}")
+            
+            if course_numeric_id == 0:
+                logger.error(f"Не найден курс {course_id=}")
+            lesson_num = 0  # After activation the first lesson is shown
 
-            await send_course_description(user_id, course_id) # show course description and new keyboards
+            # Get the lesson interval information based on user_id and version
+            message_interval = settings.get("message_interval", 24)
+            logger.info(f" message_interval = {message_interval} ")
+
+            await send_course_description(user_id, course_id)
 
             logger.info(f"3 перед созданием клавиатуры course_id={course_id}, course_numeric_id={course_numeric_id}")
             keyboard = get_main_menu_inline_keyboard(  # await убрали
