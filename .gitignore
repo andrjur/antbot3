@@ -64,3 +64,6 @@ n8n_data/
 grafana-data/
 prometheus-data/
 alertmanager-data/
+
+# Goals and notes (external memory)
+GOALS.md

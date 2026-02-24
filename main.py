@@ -1173,6 +1173,7 @@ async def check_pending_homework_timeout():
                     }
                     
                     success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
+                    logger.info(f"n8n response: success={success}, response={response[:200] if response else 'None'}")
                     
                     homework_sent_to_n8n.add(admin_msg_id)
                     
@@ -1182,21 +1183,11 @@ async def check_pending_homework_timeout():
                             await bot.edit_message_caption(
                                 chat_id=admin_chat_id,
                                 message_id=admin_msg_id,
-                                caption=f"🤖 ДЗ отправлено на AI-проверку...\n\n{student_name}",
+                                caption=f"🤖 ИИ-ассистент проверяет ДЗ...\n\n{student_name}\n\n⏳ Ожидайте результат",
                                 reply_markup=None
                             )
-                        except:
-                            pass
-                        try:
-                            async with aiosqlite.connect(DB_FILE) as conn_del:
-                                await conn_del.execute(
-                                    "DELETE FROM pending_admin_homework WHERE admin_message_id = ?",
-                                    (admin_msg_id,)
-                                )
-                                await conn_del.commit()
-                                logger.debug(f"ДЗ #{admin_msg_id} удалено из pending_admin_homework")
-                        except Exception as e_del:
-                            logger.error(f"Ошибка удаления ДЗ #{admin_msg_id} из базы: {e_del}")
+                        except Exception as e_edit:
+                            logger.debug(f"Не удалось обновить caption: {e_edit}")
                     else:
                         logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
                 
@@ -1615,7 +1606,7 @@ async def send_data_to_n8n(n8n_webhook_url: str, payload: dict):
         if N8N_WEBHOOK_SECRET:
             headers['X-N8N-Signature'] = N8N_WEBHOOK_SECRET
 
-        logger.info(f"Отправка данных в n8n: URL={n8n_webhook_url}, action={payload.get('action', 'unknown')}")
+        logger.info(f"Отправка данных в n8n: URL={n8n_webhook_url}, action={payload.get('action', 'unknown')}, callback_url={payload.get('callback_webhook_url_result', 'N/A')}")
         try:
             async with session.post(n8n_webhook_url, json=payload, headers=headers, timeout=30) as response:
                 response_text = await response.text()
