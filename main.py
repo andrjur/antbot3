@@ -5859,14 +5859,14 @@ async def process_support_response(message: types.Message, state: FSMContext):
 
 @dp.message(CommandStart())
 @db_exception_handler
-async def cmd_start(message: types.Message, state: FSMContext): # <--- Добавили state
-    await state.clear() # <--- Сбрасываем любые зависшие диалоги
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     """Обработчик команды /start."""
     logger.info(f"!!!!!!!!!! CMD_START ВЫЗВАН для пользователя {message.from_user.id} !!!!!!!!!!")
     user = message.from_user
     user_id = user.id
     first_name = user.first_name or user.username or "Пользователь"
-    logger.info(f"cmd_start {user_id=}")
+    logger.info(f"cmd_start {user_id=}, ADMIN_IDS_CONF={ADMIN_IDS_CONF}, is_admin={user_id in ADMIN_IDS_CONF}")
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
@@ -8345,7 +8345,7 @@ async def handle_homework(message: types.Message):
     course_id = await get_course_id_str(course_numeric_id)
 
     # ===== ПРОВЕРКА НА ПРОПУСК ДЗ =====
-    skip_keywords = ["*пропускаю*", "пропускаю", "/skip"]
+    skip_keywords = ["*пропускаю*", "пропускаю", "пропуск", "/skip"]
     message_text_lower = (message.text or "").lower().strip()
     if any(kw in message_text_lower for kw in skip_keywords) or message_text_lower in skip_keywords:
         await message.answer("⏭ Домашка пропущена и автоматически зачтена!", parse_mode=None)
@@ -9095,8 +9095,23 @@ async def on_startup():
                 logger.info(f"Task for user {user_id} already running or scheduled.")
     
     async with aiosqlite.connect(DB_FILE) as conn:
-        cursor = await conn.execute("SELECT COUNT(*) FROM pending_admin_homework")
-        count = (await cursor.fetchone())[0]
+        cursor = await conn.execute("SELECT admin_message_id, admin_chat_id FROM pending_admin_homework")
+        pending_messages = await cursor.fetchall()
+        
+        if pending_messages:
+            logger.info(f"Очистка {len(pending_messages)} pending ДЗ в админ-группе...")
+            for admin_msg_id, admin_chat_id in pending_messages:
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=admin_chat_id,
+                        message_id=admin_msg_id,
+                        reply_markup=None
+                    )
+                except Exception as e_clean:
+                    logger.debug(f"Не удалось убрать кнопки с сообщения {admin_msg_id}: {e_clean}")
+        
+        cursor_count = await conn.execute("SELECT COUNT(*) FROM pending_admin_homework")
+        count = (await cursor_count.fetchone())[0]
         if count > 0:
             await conn.execute("DELETE FROM pending_admin_homework")
             await conn.commit()
