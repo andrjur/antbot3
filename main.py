@@ -761,9 +761,15 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                                                                                       f"Тариф {current_active_version_id}")
 
                     if current_active_version_id == new_version_id:
-                        user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» у вас уже активен."
-                        activation_log_details = f"Попытка повторной активации того же тарифа '{new_version_id}' для курса '{new_course_id}'. Курс уже активен."
+                        # СБРОС hw_status даже при активации того же тарифа!
+                        await conn.execute(
+                            "UPDATE user_courses SET hw_status = 'none', hw_type = NULL WHERE user_id = ? AND course_id = ?",
+                            (user_id, new_course_id)
+                        )
+                        user_message = f"✅ Курс «{escape_md(course_title)}» с тарифом «{escape_md(new_tariff_name)}» у вас уже активен.\n\n🔄 Прогресс ДЗ сброшен."
+                        activation_log_details = f"Повторная активация того же тарифа '{new_version_id}' для курса '{new_course_id}'. Курс уже активен, hw_status сброшен."
                         logger.info(activation_log_details)
+                        await conn.commit()
                         # Запускаем шедулер на всякий случай, если он был остановлен
                         await start_lesson_schedule_task(user_id)
                         return True, user_message  # Считаем успешной, т.к. курс уже активен
