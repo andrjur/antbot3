@@ -6408,8 +6408,12 @@ async def send_course_description(user_id: int, course_id_str: str):  # Прин
         group_messages с lesson_num = 0.
         group_messages с lesson_num IS NULL.
         Если ничего из вышеперечисленного, берется текст первой текстовой части урока №1 (если есть)."""
+    import traceback
     logger.info("=" * 80)
     logger.info(f"send_course_description START")
+    logger.info(f"ЛОГ #0: CALL STACK:")
+    for line in traceback.format_stack()[:-1]:
+        logger.info(f"  {line.strip()}")
     logger.info(f"ЛОГ #1: user_id={user_id}")
     logger.info(f"ЛОГ #2: course_id_str='{course_id_str}'")
     logger.info(f"ЛОГ #3: Вызов get_course_id_int для '{course_id_str}'")
@@ -8193,7 +8197,7 @@ async def handle_homework_result(
     
     # Проверяем, было ли ДЗ отправлено на n8n (админ имеет приоритет)
     if message_id_to_process in homework_sent_to_n8n:
-        logger.info(f"{log_prefix} ДЗ уже было отправлено на n8n, но админ имее�� приоритет")
+        logger.info(f"{log_prefix} ДЗ уже было отправлено на n8n, но админ имее���� приоритет")
         homework_sent_to_n8n.discard(message_id_to_process)
 
     # Основная логика
@@ -8521,22 +8525,30 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 async def handle_homework(message: types.Message):
     """Обрабатывает отправку домашних заданий (фото/документы/текст)"""
     user_id = message.from_user.id
-    logger.info(f" новый обработчик и текстовой домашки и фото  17-04 {user_id=}")
+    logger.info(f"=" * 80)
+    logger.info(f"handle_homework START")
+    logger.info(f"ЛОГ #0: user_id={user_id}")
+    logger.info(f"ЛОГ #0: message.text={message.text}")
+    logger.info(f"=" * 80)
 
     # Получаем данные о курсе
     user_course_data = await get_user_course_data(user_id)
+    logger.info(f"ЛОГ #1: user_course_data={user_course_data}")
     logger.info(f" строка 4162 {user_course_data=}")
     if not user_course_data:
+        logger.info(f"ЛОГ #2: user_course_data=None, активируем курс")
         await message.answer("Проверяю код", parse_mode=None)
         activation_result = await activate_course(user_id, message.text) # Get status code
         is_activated = activation_result[0]
         activation_message = activation_result[1]
+        logger.info(f"ЛОГ #3: activation_result={activation_result}")
+        logger.info(f"ЛОГ #4: is_activated={is_activated}")
 
         await message.answer(activation_message, parse_mode=None) # answer
 
 # ======================== вот тут активация ===================================
         if is_activated:
-            logger.info(f"444 is_activated now")
+            logger.info(f"ЛОГ #5: 444 is_activated now")
             # Load course data to get course_id and version_id
             async with aiosqlite.connect(DB_FILE) as conn:
                 try:
@@ -8549,10 +8561,12 @@ async def handle_homework(message: types.Message):
                     new_course_data = await cursor.fetchone()
                     course_id, version_id = new_course_data
                     
-                    logger.info(f"ACTIVATION: course_id={course_id}, version_id={version_id} ИЗ БД")
+                    logger.info(f"ЛОГ #6: ACTIVATION: course_id={course_id}, version_id={version_id} ИЗ БД")
+                    logger.info(f"ЛОГ #7: ПЕРЕД КОММИТОМ course_id={course_id}")
 
                     await conn.commit()  # СРАЗУ коммит!
-                    logger.info(f"COMMIT после активации: course_id={course_id}, version_id={version_id}")
+                    logger.info(f"ЛОГ #8: COMMIT после активации: course_id={course_id}, version_id={version_id}")
+                    logger.info(f"ЛОГ #9: ПОСЛЕ КОММИТА course_id={course_id}")
 
                 except Exception as e4585:
                     logger.error(f" 😱 Ой-ой! Какая-то ошибка с базой после активации: {e4585}")
@@ -8560,11 +8574,18 @@ async def handle_homework(message: types.Message):
                     return
 
             # ТЕПЕРЬ получаем доп информацию ПОСЛЕ коммита
+            logger.info(f"ЛОГ #10: Вызов get_course_title для course_id={course_id}")
             course_title = await get_course_title(course_id)
-            course_numeric_id = await get_course_id_int(course_id)
-            tariff_name = get_tariff_name(version_id)
+            logger.info(f"ЛОГ #11: course_title={course_title}")
             
-            logger.info(f"ПОСЛЕ КОММИТА: course_id={course_id}, course_numeric_id={course_numeric_id}, course_title={course_title}")
+            logger.info(f"ЛОГ #12: Вызов get_course_id_int для course_id={course_id}")
+            course_numeric_id = await get_course_id_int(course_id)
+            logger.info(f"ЛОГ #13: course_numeric_id={course_numeric_id}")
+            
+            tariff_name = get_tariff_name(version_id)
+            logger.info(f"ЛОГ #14: tariff_name={tariff_name}")
+            
+            logger.info(f"ЛОГ #15: ПЕРЕД send_course_description course_id={course_id}")
             
             if course_numeric_id == 0:
                 logger.error(f"Не найден курс {course_id=}")
@@ -9274,7 +9295,7 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
                     action_type="COURSE_ACTIVATION_BY_TEXT_CODE", # Более специфичный тип
                     course_id=course_id,
                     new_value=version_id, # version_id извлечен из course_data
-                    details=f"Активирован кодом: {escape_md(message.text.strip())}"
+                    details=f"Активирова�� кодом: {escape_md(message.text.strip())}"
                 )
 
                 # Load 0 lesson
