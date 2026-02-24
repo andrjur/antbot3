@@ -2113,14 +2113,24 @@ async def _update_user_course_after_lesson(conn, user_id: int, course_id: str, l
         logger.info(f"Новый урок {lesson_num} отправлен для {user_id}. Время: {now_utc_str}. Это ДЗ: {is_homework}")
         new_hw_status_for_db = 'pending' if is_homework else 'none'
         new_hw_type_for_db = hw_type if is_homework else None  # hw_type_local из _send_lesson_parts
+        
+        logger.info(f"UPDATE user_courses: hw_status='{new_hw_status_for_db}', hw_type={new_hw_type_for_db}, lesson_num={lesson_num}")
 
         await conn.execute(
-            """UPDATE user_courses 
+            """UPDATE user_courses
                SET hw_status = ?, hw_type = ?, current_lesson = ?, last_lesson_sent_time = ?
                WHERE user_id = ? AND course_id = ? AND status = 'active'""",
             (new_hw_status_for_db, new_hw_type_for_db, lesson_num, now_utc_str, user_id, course_id)
         )
         await log_action(user_id, "LESSON_SENT", course_id, lesson_num, new_value=str(user_course_level))
+        
+        # ПРОВЕРКА ЧТО ЗАПИСАЛОСЬ
+        cursor_verify = await conn.execute(
+            "SELECT hw_status FROM user_courses WHERE user_id = ? AND course_id = ? AND status = 'active'",
+            (user_id, course_id)
+        )
+        verify_row = await cursor_verify.fetchone()
+        logger.info(f"VERIFY после UPDATE: hw_status={verify_row[0] if verify_row else 'NULL'}")
     else:
         logger.info(f"Урок {lesson_num} отправлен повторно для {user_id}. Время: {now_utc_str}")
         await conn.execute(
@@ -2297,7 +2307,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
 
             if total_lessons > 0 and current_lesson_for_display >= total_lessons:
                 logger.info(
-                    f"Урок {current_lesson_for_display} является последним для курса {course_id} (всего {total_lessons}).")
+                    f"Урок {current_lesson_for_display} является последним для курса {course_id} (��сего {total_lessons}).")
                 return "🎉 Это был последний урок курса!"
 
             # 2. Получаем данные о курсе пользователя
@@ -8576,6 +8586,15 @@ async def handle_homework(message: types.Message):
     
     # ===== ЛОГИРОВАНИЕ ПЕРЕД ПРОВЕРКОЙ hw_status =====
     logger.info(f"ПЕРЕД ПРОВЕРКОЙ: user_id={user_id}, course_id={course_id}, lesson={current_lesson}, version_id={version_id}")
+    
+    # Проверка hw_status с детальным логом
+    async with aiosqlite.connect(DB_FILE) as conn_hw:
+        cursor_debug = await conn_hw.execute(
+            "SELECT hw_status, hw_type FROM user_courses WHERE user_id = ? AND course_id = ? AND status = 'active'",
+            (user_id, course_id)
+        )
+        debug_row = await cursor_debug.fetchone()
+        logger.info(f"DEBUG hw_status ПЕРЕД проверкой: hw_status={debug_row[0] if debug_row else 'NULL'}, hw_type={debug_row[1] if debug_row and debug_row[1] else 'NULL'}")
 
     # ===== ПРОВЕРКА НА ПРОПУСК ДЗ =====
     skip_keywords = ["*пропускаю*", "пропускаю", "пропуск", "/skip"]
