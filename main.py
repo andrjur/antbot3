@@ -8544,6 +8544,9 @@ async def handle_homework(message: types.Message):
                     await message.answer(" 😥 Кажется, база данных уснула. Попробуйте чуть позже", parse_mode=None)
                     return
 
+            await conn.commit()  # ВАЖНО: коммит перед send_course_description!
+            logger.info(f"COMMIT после активации: course_id={course_id}, version_id={version_id}")
+
             await send_course_description(user_id, course_id) # show course description and new keyboards
 
             logger.info(f"3 перед созданием клавиатуры course_id={course_id}, course_numeric_id={course_numeric_id}")
@@ -8573,7 +8576,11 @@ async def handle_homework(message: types.Message):
         return # break here
 
     course_numeric_id, current_lesson, version_id = user_course_data
-    logger.info(f"handle_homework: course_numeric_id={course_numeric_id}, current_lesson={current_lesson}, version_id={version_id}")
+    logger.info(f"handle_homework START: course_numeric_id={course_numeric_id}, current_lesson={current_lesson}, version_id={version_id}")
+    
+    # Проверка что course_numeric_id правильный
+    course_id_from_func = await get_course_id_str(course_numeric_id)
+    logger.info(f"course_id_from_func={course_id_from_func} для course_numeric_id={course_numeric_id}")
     
     # ===== НОВАЯ ЗАЩИТА =====
     if current_lesson == 0:
@@ -8582,7 +8589,7 @@ async def handle_homework(message: types.Message):
         )
         return
     # =======================
-    course_id = await get_course_id_str(course_numeric_id)
+    course_id = course_id_from_func  # Используем правильное значение
     
     # ===== ЛОГИРОВАНИЕ ПЕРЕД ПРОВЕРКОЙ hw_status =====
     logger.info(f"ПЕРЕД ПРОВЕРКОЙ: user_id={user_id}, course_id={course_id}, lesson={current_lesson}, version_id={version_id}")
