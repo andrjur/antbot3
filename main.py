@@ -1892,6 +1892,24 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
+            # 0. Защита от lesson_num=0 - это описание курса, не урок
+            if lesson_num <= 0:
+                logger.warning(f"send_lesson_to_user: lesson_num={lesson_num} <= 0, показываем главное меню")
+                cursor_v = await conn.execute(
+                    "SELECT version_id, hw_status, hw_type, level FROM user_courses WHERE user_id = ? AND course_id = ?",
+                    (user_id, course_id)
+                )
+                v_row = await cursor_v.fetchone()
+                if v_row:
+                    version_id, hw_status, hw_type, user_level = v_row
+                    await send_main_menu(
+                        user_id, course_id, 0, version_id,
+                        homework_pending=(hw_status == 'pending' or hw_status == 'rejected'),
+                        hw_type=hw_type or 'none',
+                        user_course_level_for_menu=user_level or 1
+                    )
+                return
+
             # 1. Получаем общее количество уроков в курсе (с lesson_num > 0)
             cursor_total = await conn.execute(
                 "SELECT MAX(lesson_num) FROM group_messages WHERE course_id = ? AND lesson_num > 0", (course_id,)
@@ -8331,9 +8349,39 @@ async def handle_homework(message: types.Message):
         await message.answer(
             "Пожалуйста, дождитесь первого урока, чтобы сдать домашнее задание."
         )
-        return  # Выходим из функции
+        return
     # =======================
     course_id = await get_course_id_str(course_numeric_id)
+
+    # ===== ПРОВЕРКА НА ПРОПУСК ДЗ =====
+    skip_keywords = ["*пропускаю*", "пропускаю", "/skip"]
+    message_text_lower = (message.text or "").lower().strip()
+    if any(kw in message_text_lower for kw in skip_keywords) or message_text_lower in skip_keywords:
+        await message.answer("⏭ Домашка пропущена и автоматически зачтена!", parse_mode=None)
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute("""
+                UPDATE user_courses 
+                SET hw_status = 'approved'
+                WHERE user_id = ? AND course_id = ?
+            """, (user_id, course_id))
+            await conn.commit()
+            await conn.execute(
+                "DELETE FROM pending_admin_homework WHERE student_user_id = ? AND course_numeric_id = ? AND lesson_num = ?",
+                (user_id, course_numeric_id, current_lesson)
+            )
+            await conn.commit()
+        logger.info(f"ДЗ для user_id={user_id}, lesson={current_lesson} пропущено пользователем")
+        return
+    # ====================================
+
+    # ===== УДАЛЕНИЕ СТАРЫХ PENDING ДЗ =====
+    async with aiosqlite.connect(DB_FILE) as conn_del:
+        await conn_del.execute(
+            "DELETE FROM pending_admin_homework WHERE student_user_id = ? AND course_numeric_id = ? AND lesson_num = ?",
+            (user_id, course_numeric_id, current_lesson)
+        )
+        await conn_del.commit()
+    # =======================================
 
     # Если тариф v1 → самопроверка
     if version_id == 'v1':
@@ -8617,8 +8665,30 @@ async def handle_homework(message: types.Message):
         #         reply_markup=new_keyboard
         #     )
 
+        hw_hint = ""
+        try:
+            async with aiosqlite.connect(DB_FILE) as conn_time:
+                cursor_next = await conn_time.execute("""
+                    SELECT last_sent_time FROM user_courses 
+                    WHERE user_id = ? AND course_id = ? AND status = 'active'
+                """, (user_id, course_id))
+                next_row = await cursor_next.fetchone()
+                if next_row and next_row[0]:
+                    last_sent_str = next_row[0]
+                    try:
+                        last_sent = datetime.strptime(last_sent_str, '%Y-%m-%d %H:%M:%S')
+                        last_sent = pytz.utc.localize(last_sent)
+                        interval_hours = float(settings.get("message_interval", 24))
+                        next_lesson_time = last_sent + timedelta(hours=interval_hours)
+                        if datetime.now(pytz.utc) > next_lesson_time:
+                            hw_hint = "\n\n💡 Чтобы пропустить ДЗ, напишите *пропускаю* или /skip"
+                    except:
+                        pass
+        except:
+            pass
+
         await message.answer(
-            escape_md(f"✅ {homework_type} на проверке!"),
+            f"✅ {homework_type} на проверке!{hw_hint}",
             parse_mode=None
         )
 
