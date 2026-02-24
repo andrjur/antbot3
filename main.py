@@ -8536,12 +8536,16 @@ async def handle_homework(message: types.Message):
 
             await send_course_description(user_id, course_id) # show course description and new keyboards
 
-            logger.info(f"3 перед созданием клавиатуры{course_numeric_id=}")
+            logger.info(f"3 перед созданием клавиатуры course_id={course_id}, course_numeric_id={course_numeric_id}")
             keyboard = get_main_menu_inline_keyboard(  # await убрали
                 course_numeric_id = course_numeric_id,
                 lesson_num=lesson_num,
                 user_tariff=version_id
             )
+
+            # Проверяем тест-режим
+            is_test_mode = user_id in ADMIN_TEST_MODE
+            test_mode_text = f"⚡ Интервал: {TEST_MODE_INTERVAL_MINUTES} мин (тест-режим)\n💡 Выключить: /test_mode\n\n" if is_test_mode else f"Интервал между уроками: {message_interval} ч\n\n"
 
             # Формируем приветственное сообщение с информацией о курсе и тарифе
             first_name = message.from_user.first_name or message.from_user.username or "Пользователь"
@@ -8549,8 +8553,7 @@ async def handle_homework(message: types.Message):
                 f"*Добро пожаловать*, {escape_md(first_name)}\n\n"
                 f"Вы успешно активировали *{escape_md(course_title)}*\n"
                 f"Ваш тариф: *{escape_md(tariff_name)}*\n"
-                f"⚡ Интервал между уроками: *{TEST_MODE_INTERVAL_MINUTES} мин* (тест-режим)\n"
-                f"💡 Выключить: /test_mode\n\n"
+                f"{test_mode_text}"
                 f"Желаем удачи в прохождении курса"
             )
             logger.info(f"3332 {welcome_message=}")
