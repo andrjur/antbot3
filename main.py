@@ -8512,6 +8512,24 @@ async def handle_homework(message: types.Message):
         await conn_del.commit()
     # =======================================
 
+    # ===== ПРОВЕРКА: ЕСЛИ ДЗ УЖЕ ОДОБРЕНО ДЛЯ ЭТОГО УРОКА =====
+    async with aiosqlite.connect(DB_FILE) as conn_check:
+        cursor_hw_status = await conn_check.execute(
+            "SELECT hw_status FROM user_courses WHERE user_id = ? AND course_id = ?",
+            (user_id, course_id)
+        )
+        hw_status_row = await cursor_hw_status.fetchone()
+        
+        if hw_status_row and hw_status_row[0] == 'approved':
+            # ДЗ уже одобрено для этого урока - принимаем автоматически
+            logger.info(f"ДЗ для урока {current_lesson} уже одобрено - принимаем без проверки")
+            await message.answer(
+                "✅ Домашка принята! (урок уже пройден)",
+                parse_mode=None
+            )
+            return  # НЕ отправляем админу и не создаём pending запись
+        # =======================================
+
     # Если тариф v1 → самопроверка
     if version_id == 'v1':
         try:
@@ -9323,9 +9341,9 @@ async def main():
     WEBAPP_HOST_CONF = os.getenv("WEBAPP_HOST", "::") # '::' как дефолт, если не указано
     WEBHOOK_PATH_CONF = os.getenv("WEBHOOK_PATH", "/bot/") # '/bot/' как дефолт
 
-    # Валидация обязательных переменных
+    # Валидация обязательных перем��нных
     if not BOT_TOKEN_CONF:
-        logger.critical("❌ BOT_TOKEN не найден. Завершение.")
+        logger.critical("❌ BOT_TOKEN не най��ен. Завершение.")
         raise ValueError("BOT_TOKEN не найден.")
     logger.info("✅ BOT_TOKEN найден")
     
