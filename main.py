@@ -939,10 +939,10 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
             if hw_status not in ('approved', 'not_required', 'none'):
                 return
 
-            # ПРОВЕРКА ТЕСТ-РЕЖИМА: если админ в тест-режиме - интервал 2 минуты
+            # ПРОВЕРКА ТЕСТ-РЕЖИМА: если админ в тест-режиме - интервал 5 минут
             if user_id in ADMIN_TEST_MODE:
-                message_interval_hours = 2.0 / 60.0  # 2 минуты в часах
-                logger.debug(f"Тест-режим для {user_id}: интервал {message_interval_hours} ч (2 минуты)")
+                message_interval_hours = TEST_MODE_INTERVAL_MINUTES / 60.0  # 5 минут в часах
+                logger.debug(f"Тест-режим для {user_id}: интервал {message_interval_hours} ч ({TEST_MODE_INTERVAL_MINUTES} минут)")
             else:
                 message_interval_hours = float(settings.get("message_interval", 24.0))
 
@@ -2306,7 +2306,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
             if not base_time_str_for_calc:
                 logger.error(
                     f"Отсутствует и first_lesson_sent_time, и activation_date для user_id={user_id}, course_id={course_id}")
-                return "ошибка расчета времени (н����т базовой даты)"
+                return "о������ибка расчета времени (н������т базовой даты)"
 
             try:
                 # Пытаемся сначала как ISO, потом как ваш формат. Это делает код гибче.
@@ -4257,20 +4257,31 @@ async def cmd_remove_admin(message: types.Message):
 # ====================== ТЕСТ-РЕЖИМ ДЛЯ АДМИНОВ ======================
 # Глобальное хранилище: user_id -> True (если включен тест-режим)
 ADMIN_TEST_MODE = {}
+TEST_MODE_INTERVAL_MINUTES = 5  # Интервал в тест-режиме (минут)
 
 @dp.message(Command("test_mode"), F.from_user.id.in_(ADMIN_IDS_CONF))
 async def cmd_test_mode(message: types.Message):
     """
-    Переключает тест-режим для админа: 2 минуты между уроками вместо 12 часов.
+    Переключает тест-режим для админа: 5 минут между уроками вместо 12 часов.
+    ТОЛЬКО ДЛЯ АДМИНОВ!
     """
     user_id = message.from_user.id
+    
+    # ПРОВЕРКА: только суперадмины
+    if user_id not in ADMIN_IDS_CONF:
+        await message.answer(
+            "❌ Эта команда доступна только суперадминам",
+            parse_mode=None
+        )
+        logger.warning(f"Пользователь {user_id} пытался включить тест-режим (НЕ админ)")
+        return
     
     if user_id in ADMIN_TEST_MODE:
         # Выключаем
         del ADMIN_TEST_MODE[user_id]
         await message.answer(
             "❌ Тест-режим ВЫКЛЮЧЕН\n\n"
-            "Теперь интервал между уроками: 12 часов (как обычно)",
+            f"🕐 Теперь интервал между уроками: 12 часов (как обычно)",
             parse_mode=None
         )
         logger.info(f"Тест-режим ВЫКЛЮЧЕН для админа {user_id}")
@@ -4279,7 +4290,7 @@ async def cmd_test_mode(message: types.Message):
         ADMIN_TEST_MODE[user_id] = True
         await message.answer(
             "✅ Тест-режим ВКЛЮЧЕН\n\n"
-            "⚡ Интервал между уроками: 2 минуты\n"
+            f"⚡ Интервал между уроками: {TEST_MODE_INTERVAL_MINUTES} минут\n"
             "Идеально для быстрой проверки курса!\n\n"
             "Чтобы выключить: /test_mode",
             parse_mode=None
@@ -6066,12 +6077,17 @@ async def cmd_start(message: types.Message, state: FSMContext):
                     
                     logger.info(f"cmd_start: Admin {user_id} has active course {course_id}, showing admin test mode")
                     
+                    # Проверяем тест-режим
+                    test_mode_active = user_id in ADMIN_TEST_MODE
+                    test_mode_status = "⚡ ВКЛЮЧЕН" if test_mode_active else "🕐 ВЫКЛЮЧЕН"
+                    test_mode_interval = f"{TEST_MODE_INTERVAL_MINUTES} мин" if test_mode_active else "12 ч"
+
                     admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="⏹ Остановить тестирование курса", callback_data=MainMenuAction(action="stop_course", course_id_numeric=course_numeric_id).pack())],
                         [InlineKeyboardButton(text="📚 Список уроков", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())],
                         [InlineKeyboardButton(text="🔙 К админскому меню", callback_data="admin_menu")]
                     ])
-                    
+
                     await bot.send_message(
                         user_id,
                         f"👑 РЕЖИМ ТЕСТИРОВАНИЯ\n\n"
@@ -6079,6 +6095,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"🎓 Курс: {course_name}\n"
                         f"🔑 Тариф: {version_name}\n"
                         f"📚 Текущий урок: {lesson_num}\n\n"
+                        f"🕐 Тест-режим: {test_mode_status} ({test_mode_interval})\n"
+                        f"{'⚡ Уроки каждые ' + str(TEST_MODE_INTERVAL_MINUTES) + ' мин' if test_mode_active else '💡 Для быстрого тестирования: /test_mode'}\n\n"
                         f"💡 Команды:\n"
                         f"• /show_codes — курсы и коды\n"
                         f"• /add_course — создать курс\n"
@@ -6090,7 +6108,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"• /set_hw_timeout <сек> — таймаут AI-проверки\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
-                        f"• /remind <id> <msg> — напоминание\n\n"
+                        f"• /remind <id> <msg> — напоминание\n"
+                        f"• /test_mode — переключить тест-режим\n\n"
                         f"Для теста активируйте курс кодом.",
                         reply_markup=admin_keyboard,
                         parse_mode=None
@@ -6246,7 +6265,7 @@ async def callback_admin_menu(callback: CallbackQuery):
     ])
 
     # Проверяем включен ли тест-режим
-    test_mode_status = "⚡ 2 мин" if callback.from_user.id in ADMIN_TEST_MODE else "🕐 12 ч"
+    test_mode_status = "⚡ 5 мин" if callback.from_user.id in ADMIN_TEST_MODE else "🕐 12 ч"
 
     await callback.message.edit_text(
         f"👑 Админское меню\n\n"
@@ -7153,7 +7172,7 @@ def calculate_robokassa_signature(*args) -> str:
 # Доступна только администраторам (или по специальному ключу, если вызывает другой бот)
 
 @dp.message(Command("send_to_user"), F.from_user.id.in_(ADMIN_IDS_CONF))  # ADMIN_IDS_CONF - ваш список ID админов
-async def cmd_send_to_user_handler(message: types.Message, command: CommandObject, bot: Bot): # Добавил bot в аргументы
+async def cmd_send_to_user_handler(message: types.Message, command: CommandObject, bot: Bot): # Добавил bot в ар��ументы
     if not command.args:
         await message.reply("Использование: /send_to_user <user_id> <текст сообщения>\n"
                             "Или ответьте на сообщение пользователя этой командой, указав только текст: /send_to_user <текст сообщения>")
