@@ -2306,7 +2306,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
             if not base_time_str_for_calc:
                 logger.error(
                     f"Отсутствует и first_lesson_sent_time, и activation_date для user_id={user_id}, course_id={course_id}")
-                return "о��������ибка расчета времени (н������т базовой даты)"
+                return "о������������ибка расчета времени (н������т базовой даты)"
 
             try:
                 # Пытаемся сначала как ISO, потом как ваш формат. Это делает код гибче.
@@ -3555,7 +3555,7 @@ async def cmd_upload_lesson(message: types.Message, state: FSMContext):
         # Игнорируем не-админов молча или шлем лесом
         return
 
-    # Получаем списо�� курсов
+    # Получаем сп��со�� курсов
     courses_list_str = "Нет доступных ку��с��в."
     if settings.get("groups"):
         courses_list_str = "\n".join([f"{i+1}. {c_id}" for i, c_id in enumerate(settings["groups"].values())])
@@ -8984,13 +8984,17 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         # --- Формирование основного текста сообщения ---
         is_last_lesson_on_level_sent = (lesson_num >= total_lessons_on_level and total_lessons_on_level > 0)
         is_level_completed_no_hw_pending = is_last_lesson_on_level_sent and not homework_pending
+        
+        # Проверяем тест-режим для админов
+        is_test_mode = user_id in ADMIN_TEST_MODE
+        test_mode_badge = " ⚡[ТЕСТ]" if is_test_mode else ""
 
         base_text_lines = [
-            f"🎓 Курс: {course_title_safe}",
+            f"🎓 Курс: {course_title_safe}{test_mode_badge}",
             f"🔑 Тариф: {tariff_name_safe}",
             f"📖 Урок (отправлен): {lesson_num} из {total_lessons_on_level}",
             f"🥇 Уровень: {user_course_level_for_menu}",
-            f"⏳ Интервал: {interval_safe_str}",
+            f"⏳ Интервал: {TEST_MODE_INTERVAL_MINUTES} мин ⚡" if is_test_mode else f"⏳ Интервал: {interval_safe_str}",
             f"📝 Домашка к уроку {lesson_num}: {domashka_text}"
         ]
 
@@ -9044,6 +9048,8 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 callback_data=ChangeTariffCallback(course_id_str=course_id).pack()  # course_id здесь строковый
             )
         # --- КОНЕЦ НОВОЙ КНОПКИ ---
+        builder.row()
+        builder.button(text="🔙 /start - В главное меню", callback_data="admin_menu")
         builder.button(text="📞 Поддержка", callback_data="menu_support")
         builder.adjust(2)
 
