@@ -772,6 +772,11 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                         # Активен другой тариф! Обновляем.
                         logger.info(
                             f"Смена тарифа для user_id={user_id}, course_id='{new_course_id}' с '{current_active_version_id}' на '{new_version_id}'.")
+                        # СБРОС hw_status для ВСЕХ записей этого курса перед сменой тарифа
+                        await conn.execute(
+                            "UPDATE user_courses SET hw_status = 'none', hw_type = NULL WHERE user_id = ? AND course_id = ?",
+                            (user_id, new_course_id)
+                        )
                         # Деактивируем все старые версии этого курса для этого пользователя
                         await conn.execute(
                             "UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ?",
@@ -801,6 +806,11 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                     # Есть записи, но ни одна не активна (все inactive или completed)
                     logger.info(
                         f"Повторная активация курса '{new_course_id}' с тарифом '{new_version_id}' для user_id={user_id}. Предыдущие статусы были неактивны.")
+                    # СБРОС hw_status для ВСЕХ записей этого курса
+                    await conn.execute(
+                        "UPDATE user_courses SET hw_status = 'none', hw_type = NULL WHERE user_id = ? AND course_id = ?",
+                        (user_id, new_course_id)
+                    )
                     # Деактивируем все старые версии на всякий случай
                     await conn.execute(
                         "UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ? AND version_id != ?",
