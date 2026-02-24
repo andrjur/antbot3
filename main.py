@@ -3637,7 +3637,7 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
     try:
         lesson_num = int(message.text.strip())
         if lesson_num < 0:
-            await message.answer("❌ Номер урока должен быть 0 или больше.\n\nУрок 0 = описание курса (первое сообщение).")
+            await message.answer("❌ Номер урока должен быть 0 или больше.\n\nУрок 0 = описание курса (НУЛЕВОЕ сообщение).")
             return
     except ValueError:
         await message.answer("❌ Введите число.")
@@ -8196,7 +8196,7 @@ async def admin_response_handler(message: types.Message, state: FSMContext):
             logger.info(f"Ответ от админа для {user_id=} успешно переслан.")
         else:
             logger.warning("Не найден user_id в FSM.")
-            await message.answer("Не могу определить, какому пользователю отправить это сообщение.  Убедитес��, что вы ответили на запрос поддержки, инициированный кнопкой.", parse_mode=None)
+            await message.answer("Не могу определить, какому пользователю отправить это сообщение.  Убедите����, что вы ответили на запрос поддержки, инициированный кнопкой.", parse_mode=None)
 
     except Exception as e4386:
         logger.error(f"Ошибка при обработке ответа админа: {e4386}")
