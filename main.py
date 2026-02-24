@@ -714,8 +714,26 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
                 return False, "❌ Неверный код активации."
 
             new_course_id, new_version_id = code_data
-            new_tariff_name = settings.get("tariff_names", {}).get(new_version_id, f"Тариф {new_version_id}")
+            
+            # 0. ПРОВЕРКА: есть ли уроки в курсе
+            cursor_lessons = await conn.execute(
+                "SELECT COUNT(*) FROM group_messages WHERE course_id = ? AND lesson_num > 0",
+                (new_course_id,)
+            )
+            lessons_count = (await cursor_lessons.fetchone())[0]
+            
+            if lessons_count == 0:
+                logger.error(
+                    f"⛔ БЛОКИРОВКА активации: курс '{new_course_id}' пустой (0 уроков). "
+                    f"Сначала загрузите уроки через репост в админ-группу."
+                )
+                return False, (
+                    f"❌ Курс «{escape_md(await get_course_title(new_course_id))}» ещё не готов к запуску.\n"
+                    f"В нём пока нет уроков. Обратитесь к администратору."
+                )
+            
             course_title = await get_course_title(new_course_id)  # Получаем название курса
+            new_tariff_name = settings.get("tariff_names", {}).get(new_version_id, f"Тариф {new_version_id}")
 
             logger.info(
                 f"Попытка активации: user_id={user_id}, code={activation_code} -> course_id='{new_course_id}', version_id='{new_version_id}' ({new_tariff_name})")
@@ -8193,7 +8211,7 @@ async def handle_support_message(message: types.Message, state: FSMContext):
 
                 # Отправляем пользователю подтверждение
                 await message.answer(
-                    "✅ Ваш запрос отправлен в поддержку. Ожидайте ответа.",
+                    "✅ В��ш запрос отправлен в поддержку. Ожидайте ответа.",
                     reply_markup=types.ReplyKeyboardRemove(),  # Убираем клавиатуру
                     parse_mode=None
                 )
