@@ -5124,6 +5124,7 @@ async def update_settings_file():
             pass
 
         # Создаём структуру, сохраняя существующие данные
+        # ВАЖНО: НЕ добавляем поле "courses" - оно не нужно, дублирует groups
         settings = {
             "message_interval": current_settings.get("message_interval", 12),
             "tariff_names": current_settings.get("tariff_names", {
@@ -5132,26 +5133,18 @@ async def update_settings_file():
                 "v3": "Премиум"
             }),
             "groups": current_settings.get("groups", {}),
-            "activation_codes": current_settings.get("activation_codes", {}),
-            "courses": current_settings.get("courses", {})
+            "activation_codes": current_settings.get("activation_codes", {})
         }
 
         # Добавляем новые курсы из БД (только если их ещё нет)
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute("SELECT course_id, group_id, title, description FROM courses")
             courses_db = await cursor.fetchall()
-            
+
             for course_id, group_id, title, description in courses_db:
                 # Добавляем в groups если нет
                 if group_id not in settings["groups"]:
                     settings["groups"][group_id] = course_id
-                
-                # Добавляем в courses если нет
-                if course_id not in settings["courses"]:
-                    settings["courses"][course_id] = {
-                        "title": title or f"{course_id} basic",
-                        "description": description or ""
-                    }
 
             # Добавляем коды активации из БД (только если их ещё нет)
             cursor = await conn.execute("SELECT code_word, course_id, version_id, price_rub FROM course_activation_codes")
@@ -9349,7 +9342,7 @@ async def main():
         # Очистка "осиротевших" курсов (которых нет в settings.json)
         deleted_count, removed_courses = await cleanup_orphaned_courses(settings)
         if deleted_count > 0:
-            logger.warning(f"🧹 Удалено {deleted_count} активных записей для недоступных курсов: {removed_courses}")
+            logger.warning(f"🧹 У��алено {deleted_count} активных записей для недоступных курсов: {removed_courses}")
             # Уведомляем админов
             try:
                 admin_notification = (
