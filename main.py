@@ -8592,35 +8592,35 @@ async def handle_homework(message: types.Message):
     # Определяем тип присланного ДЗ
     submitted_content_type = message.content_type.lower()  # 'text', 'photo', 'document', etc.
 
-    # Проверка типа ДЗ
-    if expected_hw_type != "any" and submitted_content_type != expected_hw_type:
-        # Специальные случаи, если, например, "document" может быть любым файлом,
-        # а ожидается "pdf" (это уже выходит за рамки простого message.content_type)
-        # Пока считаем прямое совпадение.
+    # Проверка типа ДЗ - поддерживаем множественные типы через "|" (например: "text|photo")
+    is_type_allowed = False
+    
+    if expected_hw_type == "any":
+        is_type_allowed = True
+    elif "|" in expected_hw_type:
+        # Множественные типы: "text|photo|document"
+        allowed_types = [t.strip().lower() for t in expected_hw_type.split("|")]
+        is_type_allowed = submitted_content_type in allowed_types
+    else:
+        # Один тип - прямое совпадение
+        is_type_allowed = submitted_content_type == expected_hw_type
 
-        # Если ожидается 'text', а прислали медиа с подписью, это тоже может быть валидно
-        # В этом случае, нужно смотреть и на message.text и на message.caption
-        # Но если ожидается 'photo', а прислали 'text', то это явное несоответствие.
-
-        is_mismatch = True
-        if expected_hw_type == "text" and submitted_content_type in ["photo", "video", "document",
-                                                                     "animation"] and message.caption:
-            # Если ожидаем текст, но прислали медиа с подписью - это может быть альтернативным вариантом текста.
-            # Решите, считать ли это ошибкой. Пока будем считать, что если ждем текст, то только текст.
-            pass  # is_mismatch остается True
-        elif submitted_content_type == expected_hw_type:
-            is_mismatch = False
-
-        if is_mismatch:
-            logger.warning(f"Несоответствие типа ДЗ для урока {current_lesson} курса {course_id}. "
-                           f"Ожидался: '{expected_hw_type}', получен: '{submitted_content_type}'.")
-            await message.reply(
-                escape_md(
-                    f"Вы прислали ДЗ не того типа. Для этого урока ожидается: **{expected_hw_type.capitalize()}**. "
-                    f"Пожалуйста, отправьте ДЗ корректного типа"),
-                parse_mode=None
-            )
-            return  # Прерываем обработку ДЗ
+    # Специальные случаи
+    if not is_type_allowed:
+        # Если ожидается текст, но прислали медиа с подписью - это может быть ок
+        if expected_hw_type == "text" and submitted_content_type in ["photo", "video", "document", "animation"] and message.caption:
+            is_type_allowed = True  # Медиа с подписью считаем как текст
+    
+    if not is_type_allowed:
+        logger.warning(f"Несоответствие типа ДЗ для урока {current_lesson} курса {course_id}. "
+                       f"Ожидался: '{expected_hw_type}', получен: '{submitted_content_type}'.")
+        await message.reply(
+            escape_md(
+                f"Вы прислали ДЗ не того типа. Для этого урока ожидается: **{expected_hw_type.replace('|', ' или ').capitalize()}**. "
+                f"Пожалуйста, отправьте ДЗ корректного типа"),
+            parse_mode=None
+        )
+        return  # Прерываем обработку ДЗ
 
 
 
