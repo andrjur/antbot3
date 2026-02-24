@@ -5910,7 +5910,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
                     
                     logger.info(f"cmd_start: Admin {user_id} has active course {course_id}, showing admin test mode")
                     
-                    # Создаем админскую клавиатуру с кнопкой остановки
                     admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="⏹ Остановить тестирование курса", callback_data=MainMenuAction(action="stop_course", course_id_numeric=course_numeric_id).pack())],
                         [InlineKeyboardButton(text="📚 Список уроков", callback_data=ViewLessonCallback(course_id=course_id, lesson_num=lesson_num).pack())],
@@ -5932,11 +5931,34 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"• /list_admins — список админов\n"
                         f"• /add_admin <ID> — добавить админа\n"
                         f"• /remove_admin <ID> — удалить админа\n"
-                        f"• /set_hw_timeout <мин> — таймаут AI-проверки\n"
+                        f"• /set_hw_timeout <сек> — таймаут AI-проверки\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
                         f"• /remind <id> <msg> — напоминание\n\n"
                         f"Для теста активируйте курс кодом.",
+                        reply_markup=admin_keyboard,
+                        parse_mode=None
+                    )
+                else:
+                    logger.info(f"cmd_start: Admin {user_id} has NO active course, showing admin menu")
+                    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="📚 Список курсов", callback_data="admin_list_courses")],
+                        [InlineKeyboardButton(text="➕ Создать курс", callback_data="admin_add_course")]
+                    ])
+                    await bot.send_message(
+                        user_id,
+                        f"👑 АДМИН-МЕНЮ\n\n"
+                        f"У вас нет активного курса для тестирования.\n\n"
+                        f"💡 Команды:\n"
+                        f"• /show_codes — курсы и коды\n"
+                        f"• /add_course — создать курс\n"
+                        f"• /upload_lesson — загрузить уроки\n"
+                        f"• /list_lessons — список уроков\n"
+                        f"• /list_admins — список админов\n"
+                        f"• /add_admin <ID> — добавить админа\n"
+                        f"• /remove_admin <ID> — удалить админа\n"
+                        f"• /set_hw_timeout <сек> — таймаут AI-проверки\n\n"
+                        f"Или активируйте курс кодом для тестирования.",
                         reply_markup=admin_keyboard,
                         parse_mode=None
                     )
