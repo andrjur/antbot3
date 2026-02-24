@@ -939,7 +939,12 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
             if hw_status not in ('approved', 'not_required', 'none'):
                 return
 
-            message_interval_hours = float(settings.get("message_interval", 24.0))
+            # ПРОВЕРКА ТЕСТ-РЕЖИМА: если админ в тест-режиме - интервал 2 минуты
+            if user_id in ADMIN_TEST_MODE:
+                message_interval_hours = 2.0 / 60.0  # 2 минуты в часах
+                logger.debug(f"Тест-режим для {user_id}: интервал {message_interval_hours} ч (2 минуты)")
+            else:
+                message_interval_hours = float(settings.get("message_interval", 24.0))
 
             if last_sent_time_str:
 
@@ -2301,7 +2306,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
             if not base_time_str_for_calc:
                 logger.error(
                     f"Отсутствует и first_lesson_sent_time, и activation_date для user_id={user_id}, course_id={course_id}")
-                return "ошибка расчета времени (нет базовой даты)"
+                return "ошибка расчета времени (н����т базовой даты)"
 
             try:
                 # Пытаемся сначала как ISO, потом как ваш формат. Это делает код гибче.
@@ -3551,7 +3556,7 @@ async def cmd_upload_lesson(message: types.Message, state: FSMContext):
         return
 
     # Получаем список курсов
-    courses_list_str = "Нет доступных курсов."
+    courses_list_str = "Нет доступных ку��с��в."
     if settings.get("groups"):
         courses_list_str = "\n".join([f"{i+1}. {c_id}" for i, c_id in enumerate(settings["groups"].values())])
 
@@ -4247,6 +4252,41 @@ async def cmd_remove_admin(message: types.Message):
     except Exception as e:
         logger.error(f"Ошибка при удалении админа: {e}")
         await message.answer(f"❌ Ошибка: {e}")
+
+
+# ====================== ТЕСТ-РЕЖИМ ДЛЯ АДМИНОВ ======================
+# Глобальное хранилище: user_id -> True (если включен тест-режим)
+ADMIN_TEST_MODE = {}
+
+@dp.message(Command("test_mode"), F.from_user.id.in_(ADMIN_IDS_CONF))
+async def cmd_test_mode(message: types.Message):
+    """
+    Переключает тест-режим для админа: 2 минуты между уроками вместо 12 часов.
+    """
+    user_id = message.from_user.id
+    
+    if user_id in ADMIN_TEST_MODE:
+        # Выключаем
+        del ADMIN_TEST_MODE[user_id]
+        await message.answer(
+            "❌ Тест-режим ВЫКЛЮЧЕН\n\n"
+            "Теперь интервал между уроками: 12 часов (как обычно)",
+            parse_mode=None
+        )
+        logger.info(f"Тест-режим ВЫКЛЮЧЕН для админа {user_id}")
+    else:
+        # Включаем
+        ADMIN_TEST_MODE[user_id] = True
+        await message.answer(
+            "✅ Тест-режим ВКЛЮЧЕН\n\n"
+            "⚡ Интервал между уроками: 2 минуты\n"
+            "Идеально для быстрой проверки курса!\n\n"
+            "Чтобы выключить: /test_mode",
+            parse_mode=None
+        )
+        logger.info(f"Тест-режим ВКЛЮЧЕН для админа {user_id}")
+
+# ====================== КОНЕЦ ТЕСТ-РЕЖИМА ======================
 
 
 @dp.message(Command("set_hw_timeout"))
@@ -6204,7 +6244,10 @@ async def callback_admin_menu(callback: CallbackQuery):
         [InlineKeyboardButton(text="➕ Добавить курс", callback_data="add_course_menu")],
         [InlineKeyboardButton(text="📚 Список уроков", callback_data="list_lessons_menu")]
     ])
-    
+
+    # Проверяем включен ли тест-режим
+    test_mode_status = "⚡ 2 мин" if callback.from_user.id in ADMIN_TEST_MODE else "🕐 12 ч"
+
     await callback.message.edit_text(
         f"👑 Админское меню\n\n"
         f"💡 Команды:\n"
@@ -6216,7 +6259,8 @@ async def callback_admin_menu(callback: CallbackQuery):
         f"• /set_hw_timeout <мин> — таймаут AI-проверки\n"
         f"• /export_db — экспорт базы\n"
         f"• /import_db — импорт базы\n"
-        f"• /remind <id> <msg> — напоминание",
+        f"• /remind <id> <msg> — напоминание\n"
+        f"• /test_mode — тест-режим ({test_mode_status})\n",
         reply_markup=admin_menu_keyboard,
         parse_mode=None
     )
@@ -8159,7 +8203,7 @@ async def handle_homework_result(
                                                reply_to_message_id=message_id_to_process, parse_mode=None)
                         logger.info(f"{log_prefix} Единое уведомление в админ-чат отправлено.")
                     except Exception as e_admin_notify:
-                        logger.error(f"{log_prefix} Не удалось отправить уведомление в админ-чат: {e_admin_notify}")
+                        logger.error(f"{log_prefix} Не удалось отправит�� уведомление в админ-чат: {e_admin_notify}")
 
             # 5. Удаляем из pending и логируем
             if message_id_to_process:
@@ -9306,7 +9350,7 @@ async def on_shutdown():
                 task.cancel()
             # Ожидание завершения задач
             results = await asyncio.gather(*active_tasks, return_exceptions=True)
-            # Логирование результатов отмены (опционально)
+            # Логирование результатов отмены (опц��онально)
             for i, result in enumerate(results):
                 task_id_for_log = "unknown" # Попытка найти ID задачи для лога
                 try:
