@@ -9439,8 +9439,15 @@ async def default_callback_handler(query: types.CallbackQuery):
 # ---- ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ ВЕБХУКОМ ----
 async def on_startup():
     global bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF
-    # Явное указание global здесь не обязательно, если они уже определены на уровне модуля
-    # и вы их только читаете
+
+    # Логируем git-коммит чтобы видеть какой код запущен
+    try:
+        import subprocess
+        git_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        git_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        logger.info(f"=== КОД: ветка={git_branch}, коммит={git_hash} ===")
+    except Exception:
+        logger.info("=== КОД: git info недоступен ===")
 
     # Проверяем режим работы
     webhook_mode_env = os.getenv("WEBHOOK_MODE", "true").lower()
