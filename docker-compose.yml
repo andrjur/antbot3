@@ -74,6 +74,7 @@ services:
     image: n8nio/n8n:latest
     container_name: antbot-n8n
     restart: unless-stopped
+    user: "1000:1000"
     ports:
       - "5678:5678"
     environment:
@@ -86,8 +87,9 @@ services:
       - NODE_ENV=production
       - WEBHOOK_URL=https://n8n.indikov.ru/
       - GENERIC_TIMEZONE=Europe/Moscow
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
     volumes:
-      - ./n8n_data:/home/node/.n8n
+      - n8n_data:/home/node/.n8n
     networks:
       - antbot-network
     depends_on:
@@ -107,7 +109,7 @@ services:
       - antbot-network
     environment:
       - ALERT_BOT_TOKEN=${ALERT_BOT_TOKEN}
-      - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
+      - ADMIN_CHAT_ID=${ALERT_CHAT_ID}
 
 volumes:
   prometheus-data:

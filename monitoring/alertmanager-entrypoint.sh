@@ -25,13 +25,13 @@ receivers:
   - name: 'telegram'
     telegram_configs:
       - bot_token: '${ALERT_BOT_TOKEN}'
-        chat_id: ${ADMIN_GROUP_ID}
+        chat_id: ${ADMIN_CHAT_ID}
         message: |
           {{ range .Alerts }}
           ⚠️ *{{ .Annotations.summary }}*
-          
+
           {{ .Annotations.description }}
-          
+
           Severity: {{ .Labels.severity }}
           {{ end }}
         parse_mode: 'Markdown'
@@ -39,15 +39,15 @@ receivers:
   - name: 'telegram-critical'
     telegram_configs:
       - bot_token: '${ALERT_BOT_TOKEN}'
-        chat_id: ${ADMIN_GROUP_ID}
+        chat_id: ${ADMIN_CHAT_ID}
         message: |
           🚨 *КРИТИЧЕСКАЯ ОШИБКА*
-          
+
           {{ range .Alerts }}
           *{{ .Annotations.summary }}*
-          
+
           {{ .Annotations.description }}
-          
+
           Время: {{ .StartsAt }}
           {{ end }}
         parse_mode: 'Markdown'
@@ -55,13 +55,13 @@ receivers:
   - name: 'telegram-warning'
     telegram_configs:
       - bot_token: '${ALERT_BOT_TOKEN}'
-        chat_id: ${ADMIN_GROUP_ID}
+        chat_id: ${ADMIN_CHAT_ID}
         message: |
           ⚡ *Предупреждение*
-          
+
           {{ range .Alerts }}
           *{{ .Annotations.summary }}*
-          
+
           {{ .Annotations.description }}
           {{ end }}
         parse_mode: 'Markdown'
