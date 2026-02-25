@@ -1171,19 +1171,18 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
     """
     STEP = 22  # секунд между обновлениями
     elapsed = 0
+    logger.info(f"run_hw_countdown START: msg={admin_msg_id}, timeout={timeout_seconds}, is_media={is_media}")
     try:
         while elapsed < timeout_seconds:
             await asyncio.sleep(STEP)
             elapsed += STEP
             remaining = max(0, timeout_seconds - elapsed)
-            if remaining == 0:
-                break
             countdown_line = f"🤖 До AI-проверки: {remaining} сек"
-            # Заменяем строку с таймером в тексте
             updated_text = "\n".join(
                 countdown_line if line.startswith("🤖") else line
                 for line in base_text.splitlines()
             )
+            logger.info(f"run_hw_countdown: msg={admin_msg_id}, elapsed={elapsed}, remaining={remaining}")
             try:
                 if is_media:
                     await bot.edit_message_caption(
@@ -1199,10 +1198,13 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                         text=updated_text,
                         parse_mode=None,
                     )
+                logger.info(f"run_hw_countdown: msg={admin_msg_id} обновлён, remaining={remaining}")
             except Exception as e:
                 logger.warning(f"run_hw_countdown: не удалось обновить msg {admin_msg_id}: {e}")
+            if remaining == 0:
+                break
     except asyncio.CancelledError:
-        pass
+        logger.info(f"run_hw_countdown: msg={admin_msg_id} отменён (CancelledError)")
     finally:
         hw_countdown_tasks.pop(admin_msg_id, None)
 
