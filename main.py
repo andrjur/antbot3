@@ -608,6 +608,9 @@ last_stats_sent = None # 14-04 todo нафига
 # Set для отслеживания ДЗ, отправленных на n8n (для приоритета админа)
 homework_sent_to_n8n = set()
 
+# Dict для отслеживания задач обратного отсчёта ДЗ: admin_message_id -> asyncio.Task
+hw_countdown_tasks: dict[int, asyncio.Task] = {}
+
 # Создаем кэш для хранения информации о курсе и тарифе
 course_info_cache = {}
 
@@ -923,6 +926,16 @@ async def deactivate_course(user_id: int, course_id: str):
             # Шаг 3: Удаляем pending ДЗ этого студента по этому курсу,
             # чтобы check_pending_homework_timeout не отправил их в n8n после деактивации
             if course_numeric_id is not None:
+                # Сначала получаем ID сообщений для отмены countdown
+                cur_ids = await conn.execute(
+                    "SELECT admin_message_id FROM pending_admin_homework WHERE student_user_id = ? AND course_numeric_id = ?",
+                    (user_id, course_numeric_id)
+                )
+                pending_msg_ids = [r[0] for r in await cur_ids.fetchall()]
+                for mid in pending_msg_ids:
+                    ct = hw_countdown_tasks.pop(mid, None)
+                    if ct and not ct.done():
+                        ct.cancel()
                 deleted = await conn.execute(
                     "DELETE FROM pending_admin_homework WHERE student_user_id = ? AND course_numeric_id = ?",
                     (user_id, course_numeric_id)
@@ -1148,6 +1161,50 @@ async def stop_lesson_schedule_task(user_id: int):
         task.cancel()
         del lesson_check_tasks[user_id]
         logger.info(f"Остановлена задача проверки расписания уроков для пользователя {user_id}.")
+
+
+async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str):
+    """
+    Обратный отсчёт на карточке ДЗ в группе админов.
+    Обновляет сообщение каждые ~20-25 сек, показывая оставшееся время.
+    Останавливается при отмене (asyncio.CancelledError).
+    """
+    STEP = 22  # секунд между обновлениями
+    elapsed = 0
+    try:
+        while elapsed < timeout_seconds:
+            await asyncio.sleep(STEP)
+            elapsed += STEP
+            remaining = max(0, timeout_seconds - elapsed)
+            if remaining == 0:
+                break
+            countdown_line = f"🤖 До AI-проверки: {remaining} сек"
+            # Заменяем строку с таймером в тексте
+            updated_text = "\n".join(
+                countdown_line if line.startswith("🤖") else line
+                for line in base_text.splitlines()
+            )
+            try:
+                if is_media:
+                    await bot.edit_message_caption(
+                        chat_id=admin_chat_id,
+                        message_id=admin_msg_id,
+                        caption=updated_text,
+                        parse_mode=None,
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=admin_chat_id,
+                        message_id=admin_msg_id,
+                        text=updated_text,
+                        parse_mode=None,
+                    )
+            except Exception as e:
+                logger.debug(f"run_hw_countdown: не удалось обновить msg {admin_msg_id}: {e}")
+    except asyncio.CancelledError:
+        pass
+    finally:
+        hw_countdown_tasks.pop(admin_msg_id, None)
 
 
 async def check_pending_homework_timeout():
@@ -8312,6 +8369,10 @@ async def handle_homework_result(
 
             # 5. Удаляем из pending и логируем
             if message_id_to_process:
+                # Отменяем countdown если ещё работает
+                countdown_task = hw_countdown_tasks.pop(message_id_to_process, None)
+                if countdown_task and not countdown_task.done():
+                    countdown_task.cancel()
                 await conn.execute("DELETE FROM pending_admin_homework WHERE admin_message_id = ?",
                                    (message_id_to_process,))
 
@@ -8835,6 +8896,8 @@ async def handle_homework(message: types.Message):
 
         # Отправляем сообщение админам
         sent_admin_message = None  # Для отслеживания отправленного сообщения, если понадобится его ID
+        sent_admin_full_text = None  # Полный текст/caption отправленного сообщения (для countdown)
+        sent_admin_is_media = False  # True если медиа (caption), False если текст
 
         # Формируем базовый caption (без описания из ДЗ, оно добавится ниже если есть)
         base_caption_for_media = admin_message_text
@@ -8855,6 +8918,8 @@ async def handle_homework(message: types.Message):
                 reply_markup=admin_keyboard,
                 parse_mode=None
             )
+            sent_admin_full_text = caption_with_description
+            sent_admin_is_media = True
         elif message.video:
             sent_admin_message = await bot.send_video(
                 chat_id=ADMIN_GROUP_ID,
@@ -8863,6 +8928,8 @@ async def handle_homework(message: types.Message):
                 reply_markup=admin_keyboard,
                 parse_mode=None
             )
+            sent_admin_full_text = caption_with_description
+            sent_admin_is_media = True
         elif message.document:
             sent_admin_message = await bot.send_document(
                 chat_id=ADMIN_GROUP_ID,
@@ -8871,6 +8938,8 @@ async def handle_homework(message: types.Message):
                 reply_markup=admin_keyboard,
                 parse_mode=None
             )
+            sent_admin_full_text = caption_with_description
+            sent_admin_is_media = True
         elif message.audio:  # Новый тип
             sent_admin_message = await bot.send_audio(
                 chat_id=ADMIN_GROUP_ID,
@@ -8879,6 +8948,8 @@ async def handle_homework(message: types.Message):
                 reply_markup=admin_keyboard,
                 parse_mode=None
             )
+            sent_admin_full_text = caption_with_description
+            sent_admin_is_media = True
         elif message.voice:  # Новый тип
             sent_admin_message = await bot.send_voice(
                 chat_id=ADMIN_GROUP_ID,
@@ -8888,6 +8959,8 @@ async def handle_homework(message: types.Message):
                 reply_markup=admin_keyboard,
                 parse_mode=None
             )
+            sent_admin_full_text = caption_with_description
+            sent_admin_is_media = True
         elif message.animation:  # Новый тип (GIF)
             sent_admin_message = await bot.send_animation(
                 chat_id=ADMIN_GROUP_ID,
@@ -8896,6 +8969,8 @@ async def handle_homework(message: types.Message):
                 reply_markup=admin_keyboard,
                 parse_mode=None
             )
+            sent_admin_full_text = caption_with_description
+            sent_admin_is_media = True
         elif message.text:  # Если это текстовая домашка
             # text здесь - это message.text.strip()
             final_admin_text = admin_message_text + f"\n✏️ Текст ДЗ:\n{escape_md(text)}"  # text уже взят из message.text.strip()
@@ -8905,6 +8980,8 @@ async def handle_homework(message: types.Message):
                 reply_markup=admin_keyboard,
                 parse_mode=None
             )
+            sent_admin_full_text = final_admin_text
+            sent_admin_is_media = False
         else:
             logger.warning(f"Получен неподдерживаемый тип контента для ДЗ от user {user_id}: {message.content_type}")
             await message.answer(escape_md("Неподдерживаемый тип файла для домашнего задания."),
@@ -8932,6 +9009,15 @@ async def handle_homework(message: types.Message):
                         f"ДЗ для студента {user_id}, урок {current_lesson} зарегистрировано в pending_admin_homework с admin_message_id {sent_admin_message.message_id}")
             except Exception as e_pending_hw:
                 logger.error(f"Не удалось сохранить информацию о ДЗ в pending_admin_homework: {e_pending_hw}")
+
+        # Запускаем обратный отсчёт на карточке ДЗ
+        if sent_admin_message and sent_admin_full_text:
+            msg_id = sent_admin_message.message_id
+            task = asyncio.create_task(
+                run_hw_countdown(msg_id, ADMIN_GROUP_ID, HW_TIMEOUT_SECONDS, sent_admin_is_media, sent_admin_full_text)
+            )
+            hw_countdown_tasks[msg_id] = task
+            logger.info(f"Запущен countdown для ДЗ admin_msg_id={msg_id}")
 
         # Если нужно обновить callback_data кнопок с ID отправленного сообщения:
         # if sent_admin_message:
