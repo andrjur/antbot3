@@ -1736,7 +1736,7 @@ async def send_data_to_n8n(n8n_webhook_url: str, payload: dict):
     async with aiohttp.ClientSession() as session:
         headers = {'Content-Type': 'application/json'}
         if N8N_WEBHOOK_SECRET:
-            headers['X-N8N-Signature'] = N8N_WEBHOOK_SECRET
+            headers['Authorization'] = N8N_WEBHOOK_SECRET
 
         logger.info(f"Отправка данных в n8n: URL={n8n_webhook_url}, action={payload.get('action', 'unknown')}, callback_url={payload.get('callback_webhook_url_result', 'N/A')}")
         try:
