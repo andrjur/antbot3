@@ -1163,7 +1163,7 @@ async def stop_lesson_schedule_task(user_id: int):
         logger.info(f"Остановлена задача проверки расписания уроков для пользователя {user_id}.")
 
 
-async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str):
+async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
     """
     Обратный отсчёт на карточке ДЗ в группе админов.
     Обновляет сообщение каждые ~20-25 сек, показывая оставшееся время.
@@ -1190,6 +1190,7 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                         message_id=admin_msg_id,
                         caption=updated_text,
                         parse_mode=None,
+                        reply_markup=reply_markup,
                     )
                 else:
                     await bot.edit_message_text(
@@ -1197,6 +1198,7 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                         message_id=admin_msg_id,
                         text=updated_text,
                         parse_mode=None,
+                        reply_markup=reply_markup,
                     )
                 logger.info(f"run_hw_countdown: msg={admin_msg_id} обновлён, remaining={remaining}")
             except Exception as e:
@@ -9015,7 +9017,7 @@ async def handle_homework(message: types.Message):
         if sent_admin_message and sent_admin_full_text:
             msg_id = sent_admin_message.message_id
             task = asyncio.create_task(
-                run_hw_countdown(msg_id, ADMIN_GROUP_ID, HW_TIMEOUT_SECONDS, sent_admin_is_media, sent_admin_full_text)
+                run_hw_countdown(msg_id, ADMIN_GROUP_ID, HW_TIMEOUT_SECONDS, sent_admin_is_media, sent_admin_full_text, reply_markup=admin_keyboard)
             )
             hw_countdown_tasks[msg_id] = task
             logger.info(f"Запущен countdown для ДЗ admin_msg_id={msg_id}")
