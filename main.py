@@ -852,13 +852,12 @@ async def activate_course(user_id: int, activation_code: str, level:int = 1):
 
             # Логирование действия в БД
             if "Смена тарифа" in activation_log_details:
-                # При смене тарифа мы знаем old_value (старый тариф)
-                # current_active_version_id должен быть доступен в этом блоке кода
+                old_tariff = current_active_version_id if active_record else None
                 await log_action(
                     user_id=user_id,
                     action_type="TARIFF_CHANGE",
                     course_id=new_course_id,
-                    old_value=current_active_version_id, # <--- Убедитесь, что эта переменная здесь доступна
+                    old_value=old_tariff,
                     new_value=new_version_id,
                     details=activation_log_details
                 )
@@ -908,16 +907,35 @@ async def deactivate_course(user_id: int, course_id: str):
     """Деактивирует курс для пользователя."""
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Шаг 1: Деактивируем курс
-            await conn.execute("""
-                UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ?
-            """, (user_id, course_id))
+            # Шаг 1: Получаем numeric id курса для очистки pending ДЗ
+            cursor_cid = await conn.execute(
+                "SELECT id FROM courses WHERE course_id = ?", (course_id,)
+            )
+            cid_row = await cursor_cid.fetchone()
+            course_numeric_id = cid_row[0] if cid_row else None
+
+            # Шаг 2: Деактивируем курс
+            await conn.execute(
+                "UPDATE user_courses SET status = 'inactive' WHERE user_id = ? AND course_id = ?",
+                (user_id, course_id)
+            )
+
+            # Шаг 3: Удаляем pending ДЗ этого студента по этому курсу,
+            # чтобы check_pending_homework_timeout не отправил их в n8n после деактивации
+            if course_numeric_id is not None:
+                deleted = await conn.execute(
+                    "DELETE FROM pending_admin_homework WHERE student_user_id = ? AND course_numeric_id = ?",
+                    (user_id, course_numeric_id)
+                )
+                if deleted.rowcount:
+                    logger.info(f"deactivate_course: удалено {deleted.rowcount} pending ДЗ для user={user_id}, course={course_id}")
+
             await conn.commit()
 
-            # Шаг 2: Останавливаем проверку расписания для пользователя
-            await stop_lesson_schedule_task(user_id)
+        # Шаг 4: Останавливаем шедулер
+        await stop_lesson_schedule_task(user_id)
 
-            return True, "✅ Курс успешно деактивирован."
+        return True, "✅ Курс успешно деактивирован."
     except Exception as e586:
         logger.error(f"Ошибка при деактивации курса: {e586}")
         return False, "⚠️ Произошла ошибка при деактивации курса. Попробуйте позже."
@@ -1136,32 +1154,44 @@ async def check_pending_homework_timeout():
     """
     Периодически проверяет ДЗ, которые ожидают проверки более HW_TIMEOUT_SECONDS секунд,
     и отправляет их на n8n webhook если админ не ответил.
+    Supervision: при необработанном исключении перезапускается через 60 сек.
     """
     global HW_TIMEOUT_SECONDS
+    logger.info(f"check_pending_homework_timeout START: HW_TIMEOUT_SECONDS={HW_TIMEOUT_SECONDS}")
+
     while True:
         try:
             await asyncio.sleep(60)
-            
+            logger.debug(f"check_pending_homework_timeout: очередная проверка")
+
             if not N8N_HOMEWORK_CHECK_WEBHOOK_URL:
+                logger.info(f"check_pending_homework_timeout: N8N_WEBHOOK не настроен, пропускаем")
                 continue
-            
+
             async with aiosqlite.connect(DB_FILE) as conn:
                 cutoff_time = datetime.now(pytz.utc) - timedelta(seconds=HW_TIMEOUT_SECONDS)
                 cutoff_time_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
                 
+                logger.info(f"check_pending_homework_timeout: cutoff_time_str={cutoff_time_str}")
+
                 cursor = await conn.execute('''
-                    SELECT admin_message_id, admin_chat_id, student_user_id, 
+                    SELECT admin_message_id, admin_chat_id, student_user_id,
                            course_numeric_id, lesson_num, student_message_id, created_at
                     FROM pending_admin_homework
                     WHERE created_at < ?
                 ''', (cutoff_time_str,))
-                
+
                 pending_rows = await cursor.fetchall()
                 
+                logger.info(f"check_pending_homework_timeout: найдено {len(pending_rows)} pending ДЗ")
+
                 for row in pending_rows:
                     admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at = row
                     
+                    logger.info(f"check_pending_homework_timeout: pending ДЗ admin_msg_id={admin_msg_id}, student_user_id={student_user_id}, course_numeric_id={course_numeric_id}, lesson_num={lesson_num}, created_at={created_at}")
+
                     if admin_msg_id in homework_sent_to_n8n:
+                        logger.info(f"check_pending_homework_timeout: ДЗ #{admin_msg_id} уже отправлено на n8n, пропускаем")
                         continue
                     
                     cursor_student = await conn.execute(
@@ -1232,8 +1262,12 @@ async def check_pending_homework_timeout():
                     else:
                         logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
                 
+        except asyncio.CancelledError:
+            logger.info("check_pending_homework_timeout: задача отменена (shutdown)")
+            return
         except Exception as e:
-            logger.error(f"Ошибка в check_pending_homework_timeout: {e}")
+            logger.error(f"check_pending_homework_timeout: необработанная ошибка, перезапуск через 60 сек: {e}", exc_info=True)
+            await asyncio.sleep(60)
 
 
 def save_settings(settings_s):
@@ -2251,10 +2285,9 @@ async def scheduled_lesson_check(user_id: int):
 
 
 # функция для кэширования статуса курса пользователя
-@lru_cache(maxsize=100)
 async def get_course_status(user_id: int) -> tuple | None:
-    """Кэшируем статус курса на 5 минут"""
-    logger.info(f"кэш get_course_status {user_id=}")
+    """Возвращает статус курса пользователя."""
+    logger.debug(f"get_course_status {user_id=}")
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute("""
@@ -2291,7 +2324,7 @@ async def get_next_lesson_time(user_id: int, course_id: str, current_lesson_for_
         user_id: ID пользователя.
         course_id: ID курса.
         current_lesson_for_display: Номер урока, который СЕЙЧАС отображается в меню
-                                     (то есть, последний отправленный пользователю).
+                                     (то есть, ��оследний отправленный пользователю).
     """
     logger.debug(
         f"get_next_lesson_time: user_id={user_id}, course_id={course_id}, current_lesson_for_display={current_lesson_for_display}")
@@ -4325,6 +4358,45 @@ async def cmd_test_mode(message: types.Message):
         logger.info(f"Тест-режим ВКЛЮЧЕН для админа {user_id}")
 
 # ====================== КОНЕЦ ТЕСТ-РЕЖИМА ======================
+
+
+@dp.message(Command("cleanup_orphaned"))
+async def cmd_cleanup_orphaned(message: types.Message):
+    """Удаляет записи курсов, которых нет в settings.json. Только суперадмины, только в личке."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS_CONF:
+        await message.answer("❌ Только для суперадминов.", parse_mode=None)
+        return
+    if message.chat.type != "private":
+        await message.answer("❌ Команда доступна только в личной переписке с ботом.", parse_mode=None)
+        return
+
+    await message.answer("🔍 Проверяю осиротевшие курсы...", parse_mode=None)
+    current_settings = await load_settings()
+    if not current_settings:
+        await message.answer("❌ Не удалось загрузить settings.json.", parse_mode=None)
+        return
+
+    valid_courses = set(current_settings.get("groups", {}).values())
+    if not valid_courses:
+        await message.answer(
+            "⚠️ В settings.json нет ни одного курса в разделе 'groups'.\n"
+            "Отмена — это удалило бы всех студентов.",
+            parse_mode=None
+        )
+        return
+
+    deleted_count, removed_courses = await cleanup_orphaned_courses(current_settings)
+    if deleted_count == 0:
+        await message.answer("✅ Осиротевших курсов не найдено. База в порядке.", parse_mode=None)
+    else:
+        courses_list = ", ".join(removed_courses)
+        await message.answer(
+            f"🧹 Удалено {deleted_count} активных записей для курсов:\n{courses_list}\n\n"
+            f"(Эти курсы отсутствуют в settings.json)",
+            parse_mode=None
+        )
+    logger.info(f"cmd_cleanup_orphaned выполнен суперадмином {user_id}: удалено {deleted_count} записей {removed_courses}")
 
 
 @dp.message(Command("set_hw_timeout"))
@@ -6402,124 +6474,76 @@ async def callback_show_codes_menu(callback: CallbackQuery):
         await callback.message.edit_text(f"❌ Ошибка: {e}")
 
 
-async def send_course_description(user_id: int, course_id_str: str):  # Принимаем строковый ID
-    """Отправляет описание курса пользователю, пробуя разные источники.
-        courses.description.
-        group_messages с lesson_num = 0.
-        group_messages с lesson_num IS NULL.
-        Если ничего из вышеперечисленного, берется текст первой текстовой части урока №1 (если есть)."""
-    import traceback
-    logger.info("=" * 80)
-    logger.info(f"send_course_description START")
-    logger.info(f"ЛОГ #0: CALL STACK:")
-    for line in traceback.format_stack()[:-1]:
-        logger.info(f"  {line.strip()}")
-    logger.info(f"ЛОГ #1: user_id={user_id}")
-    logger.info(f"ЛОГ #2: course_id_str='{course_id_str}'")
-    logger.info(f"ЛОГ #3: Вызов get_course_id_int для '{course_id_str}'")
-    course_numeric_id_for_log = await get_course_id_int(course_id_str)
-    logger.info(f"ЛОГ #4: course_numeric_id={course_numeric_id_for_log}")
-    logger.info(f"ЛОГ #5: Вызов get_course_title для '{course_id_str}'")
-    course_title_for_log = await get_course_title(course_id_str)
-    logger.info(f"ЛОГ #6: course_title='{course_title_for_log}'")
-    logger.info(f"ЛОГ #7: Начинаем поиск описания в БД")
+async def send_course_description(user_id: int, course_id_str: str):
+    """Отправляет описание курса пользователю.
+    Приоритет источников:
+    1. courses.description
+    2. group_messages WHERE lesson_num = 0
+    3. group_messages WHERE lesson_num IS NULL
+    4. первая текстовая часть урока 1 (с префиксом)
+    """
+    logger.info(f"send_course_description: user_id={user_id}, course_id='{course_id_str}'")
     description_to_send = None
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # 1. Попытка получить описание из courses.description
-            logger.info(f"ЛОГ #8: Попытка #1 - courses.description")
+            # 1. Описание из courses.description
             cursor_courses_desc = await conn.execute(
                 "SELECT description FROM courses WHERE course_id = ?",
                 (course_id_str,)
             )
             row_courses_desc = await cursor_courses_desc.fetchone()
-            logger.info(f"ЛОГ #9: row_courses_desc={row_courses_desc}")
             if row_courses_desc and row_courses_desc[0] and row_courses_desc[0].strip():
                 description_to_send = row_courses_desc[0].strip()
-                logger.info(f"ЛОГ #10: Найдено описание для курса '{course_id_str}' в таблице 'courses'.")
-                logger.info(f"ЛОГ #11: description_to_send (первые 100 симв)='{description_to_send[:100]}...'")
+                logger.debug(f"send_course_description: найдено в courses.description для '{course_id_str}'")
             else:
-                logger.info(f"ЛОГ #10: В courses.description пусто, пробуем урок 0")
-                # 2. Если в courses.description пусто, ищем урок 0 в group_messages
-                logger.info(f"ЛОГ #11: Попытка #2 - lesson_num = 0 в group_messages")
+                # 2. lesson_num = 0 в group_messages
                 cursor_gm_lesson0 = await conn.execute(
                     "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num = 0 ORDER BY id ASC LIMIT 1",
                     (course_id_str,)
                 )
                 row_gm_lesson0 = await cursor_gm_lesson0.fetchone()
-                logger.info(f"ЛОГ #12: row_gm_lesson0={row_gm_lesson0}")
                 if row_gm_lesson0 and row_gm_lesson0[0] and row_gm_lesson0[0].strip():
                     description_to_send = row_gm_lesson0[0].strip()
-                    logger.info(f"ЛОГ #13: Найдено описание для курса '{course_id_str}' как урок 0 в 'group_messages'.")
-                    logger.info(f"ЛОГ #14: description_to_send (первые 100 симв)='{description_to_send[:100]}...'")
+                    logger.debug(f"send_course_description: найдено в group_messages lesson_num=0 для '{course_id_str}'")
                 else:
-                    logger.info(f"ЛОГ #13: Урок 0 не найден, пробуем lesson_num IS NULL")
-                    # 3. Если и урока 0 нет, ищем урок с lesson_num IS NULL (если такая логика предполагалась)
-                    logger.info(f"ЛОГ #14: Попытка #3 - lesson_num IS NULL")
-                    cursor_gm_lesson_null = await conn.execute(
+                    # 3. lesson_num IS NULL
+                    cursor_gm_null = await conn.execute(
                         "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num IS NULL ORDER BY id ASC LIMIT 1",
                         (course_id_str,)
                     )
-                    row_gm_lesson_null = await cursor_gm_lesson_null.fetchone()
-                    logger.info(f"ЛОГ #15: row_gm_lesson_null={row_gm_lesson_null}")
-                    if row_gm_lesson_null and row_gm_lesson_null[0] and row_gm_lesson_null[0].strip():
-                        description_to_send = row_gm_lesson_null[0].strip()
-                        logger.info(f"ЛОГ #16: Найдено описание для курса '{course_id_str}' как урок NULL в 'group_messages'.")
+                    row_gm_null = await cursor_gm_null.fetchone()
+                    if row_gm_null and row_gm_null[0] and row_gm_null[0].strip():
+                        description_to_send = row_gm_null[0].strip()
+                        logger.debug(f"send_course_description: найдено в group_messages lesson_num=NULL для '{course_id_str}'")
 
-            # 4. Если ничего не найдено, ищем первую текстовую часть первого реального урока (lesson_num=1)
+            # 4. Первый текст урока 1
             if not description_to_send:
-                logger.info(
-                    f"Описание не найдено в courses.description, lesson_num=0 или lesson_num IS NULL для '{course_id_str}'. Ищем текст урока 1.")
-                cursor_gm_lesson1_text = await conn.execute(
-                    """SELECT text FROM group_messages 
-                       WHERE course_id = ? AND lesson_num = 1 AND content_type = 'text' AND text IS NOT NULL AND TRIM(text) != ''
+                cursor_lesson1 = await conn.execute(
+                    """SELECT text FROM group_messages
+                       WHERE course_id = ? AND lesson_num = 1 AND content_type = 'text'
+                         AND text IS NOT NULL AND TRIM(text) != ''
                        ORDER BY id ASC LIMIT 1""",
                     (course_id_str,)
                 )
-                row_gm_lesson1_text = await cursor_gm_lesson1_text.fetchone()
-                if row_gm_lesson1_text and row_gm_lesson1_text[0]:
-                    description_to_send = row_gm_lesson1_text[0].strip()
-                    # Возможно, добавить префикс, что это начало первого урока
-                    description_to_send = "Из первого урока:\n" + description_to_send
-                    logger.info(f"В качестве описания для '{course_id_str}' взят текст урока 1.")
+                row_lesson1 = await cursor_lesson1.fetchone()
+                if row_lesson1 and row_lesson1[0]:
+                    description_to_send = "Из первого урока:\n" + row_lesson1[0].strip()
+                    logger.debug(f"send_course_description: взят текст урока 1 для '{course_id_str}'")
 
-            if description_to_send:
-                logger.info(f"ЛОГ #17: description_to_send найден, длина={len(description_to_send)}")
-                # Удаляем HTML-теги, если они есть (простая очистка)
-                # cleaned_description = re.sub(r'<[^>]+>', '', description_to_send)
-                # Для MarkdownV2 специфичные HTML теги не работают, так что re.sub может быть не нужен,
-                # если только в тексте нет непреднамеренных < >.
-                # Главное - правильно экранировать для MarkdownV2.
+        if description_to_send:
+            max_len = 4000
+            escaped_desc = escape_md(description_to_send)
+            for i in range(0, len(escaped_desc), max_len):
+                await bot.send_message(user_id, escaped_desc[i:i + max_len], parse_mode=None, disable_web_page_preview=True)
+            logger.info(f"send_course_description: описание '{course_id_str}' отправлено user={user_id} ({len(escaped_desc)} символов)")
+        else:
+            logger.warning(f"send_course_description: описание не найдено ни в одном источнике для '{course_id_str}'")
+            await bot.send_message(user_id, "Подробное описание для этого курса сейчас недоступно.", parse_mode=None)
 
-                # Разбиваем на части, если описание слишком длинное
-                max_len = 4000  # Максимальная длина сообщения Telegram (с запасом)
-                escaped_desc = escape_md(description_to_send)  # Экранируем один раз весь текст
-                logger.info(f"ЛОГ #18: escaped_desc длина={len(escaped_desc)}")
-
-                for i in range(0, len(escaped_desc), max_len):
-                    part = escaped_desc[i:i + max_len]
-                    await bot.send_message(
-                        user_id,
-                        part,
-                        parse_mode=None,
-                        disable_web_page_preview=True
-                    )
-                logger.info(f"ЛОГ #19: Описание отправлено пользователю {user_id}")
-                logger.info(f"ЛОГ #20: send_course_description END")
-                logger.info("=" * 80)
-                logger.info(
-                    f"Описание для '{course_id_str}' (длина {len(escaped_desc)}) успешно отправлено пользователю {user_id}.")
-            else:
-                logger.warning(
-                    f"Полное описание курса (courses.description, урок 0, урок NULL, урок 1) не найдено для course_id='{course_id_str}'.")
-                await bot.send_message(user_id, escape_md("Подробное описание для этого курса сейчас недоступно."),
-                                       parse_mode=None)
-
-    except Exception as e_scd_v2:
-        logger.error(f"Ошибка в send_course_description v2 для course_id='{course_id_str}': {e_scd_v2}", exc_info=True)
-        await bot.send_message(user_id, escape_md("Не удалось загрузить описание курса. Попробуйте позже."),
-                               parse_mode=None)
+    except Exception as e_scd:
+        logger.error(f"send_course_description: ошибка для course_id='{course_id_str}': {e_scd}", exc_info=True)
+        await bot.send_message(user_id, "Не удалось загрузить описание курса. Попробуйте позже.", parse_mode=None)
 
 
 # help
@@ -8525,215 +8549,121 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 async def handle_homework(message: types.Message):
     """Обрабатывает отправку домашних заданий (фото/документы/текст)"""
     user_id = message.from_user.id
-    logger.info(f"=" * 80)
-    logger.info(f"handle_homework START")
-    logger.info(f"ЛОГ #0: user_id={user_id}")
-    logger.info(f"ЛОГ #0: message.text={message.text}")
-    logger.info(f"=" * 80)
+    logger.info(f"handle_homework: user_id={user_id}, text={message.text!r:.80}")
 
-    # Получаем данные о курсе
     user_course_data = await get_user_course_data(user_id)
-    logger.info(f"ЛОГ #1: user_course_data={user_course_data}")
-    logger.info(f" строка 4162 {user_course_data=}")
+    logger.info(f"handle_homework: user_course_data={user_course_data}")
+
     if not user_course_data:
-        logger.info(f"ЛОГ #2: user_course_data=None, активируем курс")
+        # Нет активного курса — пробуем активировать по коду
+        await stop_lesson_schedule_task(user_id)
         await message.answer("Проверяю код", parse_mode=None)
-        activation_result = await activate_course(user_id, message.text) # Get status code
-        is_activated = activation_result[0]
-        activation_message = activation_result[1]
-        logger.info(f"ЛОГ #3: activation_result={activation_result}")
-        logger.info(f"ЛОГ #4: is_activated={is_activated}")
+        is_activated, activation_message = await activate_course(user_id, message.text)
+        await message.answer(activation_message, parse_mode=None)
 
-        await message.answer(activation_message, parse_mode=None) # answer
-
-# ======================== вот тут активация ===================================
         if is_activated:
-            logger.info(f"ЛОГ #5: 444 is_activated now")
-            # Load course data to get course_id and version_id
+            # Получаем данные активированного курса
             async with aiosqlite.connect(DB_FILE) as conn:
                 try:
                     cursor = await safe_db_execute(
                         conn,
-                        "SELECT course_id, version_id FROM user_courses WHERE user_id = ?",
+                        "SELECT course_id, version_id FROM user_courses WHERE user_id = ? AND status = 'active'",
                         (user_id,)
                     )
-
                     new_course_data = await cursor.fetchone()
                     course_id, version_id = new_course_data
-                    
-                    logger.info(f"ЛОГ #6: ACTIVATION: course_id={course_id}, version_id={version_id} ИЗ БД")
-                    logger.info(f"ЛОГ #7: ПЕРЕД КОММИТОМ course_id={course_id}")
-
-                    await conn.commit()  # СРАЗУ коммит!
-                    logger.info(f"ЛОГ #8: COMMIT после активации: course_id={course_id}, version_id={version_id}")
-                    logger.info(f"ЛОГ #9: ПОСЛЕ КОММИТА course_id={course_id}")
-
+                    await conn.commit()
                 except Exception as e4585:
-                    logger.error(f" 😱 Ой-ой! Какая-то ошибка с базой после активации: {e4585}")
-                    await message.answer(" 😥 Кажется, база данных уснула. Попробуйте чуть позже", parse_mode=None)
+                    logger.error(f"handle_homework: ошибка чтения курса после активации: {e4585}")
+                    await message.answer("Кажется, база данных уснула. Попробуйте чуть позже", parse_mode=None)
                     return
 
-            # ТЕПЕРЬ получаем доп информацию ПОСЛЕ коммита
-            logger.info(f"ЛОГ #10: Вызов get_course_title для course_id={course_id}")
+            logger.info(f"handle_homework: активирован course_id={course_id}, version_id={version_id}")
+
             course_title = await get_course_title(course_id)
-            logger.info(f"ЛОГ #11: course_title={course_title}")
-            
-            logger.info(f"ЛОГ #12: Вызов get_course_id_int для course_id={course_id}")
             course_numeric_id = await get_course_id_int(course_id)
-            logger.info(f"ЛОГ #13: course_numeric_id={course_numeric_id}")
-            
             tariff_name = get_tariff_name(version_id)
-            logger.info(f"ЛОГ #14: tariff_name={tariff_name}")
-            
-            logger.info(f"ЛОГ #15: ПЕРЕД send_course_description course_id={course_id}")
-            
+
             if course_numeric_id == 0:
-                logger.error(f"Не найден курс {course_id=}")
-            lesson_num = 0  # After activation the first lesson is shown
+                logger.error(f"handle_homework: не найден numeric id для курса '{course_id}'")
 
-            # Get the lesson interval information based on user_id and version
             message_interval = settings.get("message_interval", 24)
-            logger.info(f" message_interval = {message_interval} ")
-
             await send_course_description(user_id, course_id)
+            await start_lesson_schedule_task(user_id)
 
-            logger.info(f"3 перед созданием клавиатуры course_id={course_id}, course_numeric_id={course_numeric_id}")
-            keyboard = get_main_menu_inline_keyboard(  # await убрали
-                course_numeric_id = course_numeric_id,
-                lesson_num=lesson_num,
-                user_tariff=version_id
-            )
-
-            # Проверяем тест-режим
             is_test_mode = user_id in ADMIN_TEST_MODE
-            test_mode_text = f"⚡ Интервал: {TEST_MODE_INTERVAL_MINUTES} мин (тест-режим)\n💡 Выключить: /test_mode\n\n" if is_test_mode else f"Интервал между уроками: {message_interval} ч\n\n"
-
-            # Формируем приветственное сообщение с информацией о курсе и тарифе
+            test_mode_text = (
+                f"Интервал: {TEST_MODE_INTERVAL_MINUTES} мин (тест-режим)\nВыключить: /test_mode\n\n"
+                if is_test_mode else
+                f"Интервал между уроками: {message_interval} ч\n\n"
+            )
             first_name = message.from_user.first_name or message.from_user.username or "Пользователь"
             welcome_message = (
-                f"*Добро пожаловать*, {escape_md(first_name)}\n\n"
-                f"Вы успешно активировали *{escape_md(course_title)}*\n"
-                f"Ваш тариф: *{escape_md(tariff_name)}*\n"
+                f"Добро пожаловать, {first_name}\n\n"
+                f"Вы успешно активировали {course_title}\n"
+                f"Ваш тариф: {tariff_name}\n"
                 f"{test_mode_text}"
                 f"Желаем удачи в прохождении курса"
             )
-            logger.info(f"3332 {welcome_message=}")
+            keyboard = get_main_menu_inline_keyboard(
+                course_numeric_id=course_numeric_id,
+                lesson_num=0,
+                user_tariff=version_id
+            )
             await message.answer(welcome_message, reply_markup=keyboard, parse_mode=None)
 
-
-        return # break here
+        return
 
     course_numeric_id, current_lesson, version_id = user_course_data
-    logger.info(f"handle_homework START: course_numeric_id={course_numeric_id}, current_lesson={current_lesson}, version_id={version_id}")
-    
-    # Проверка что course_numeric_id правильный
-    course_id_from_func = await get_course_id_str(course_numeric_id)
-    logger.info(f"course_id_from_func={course_id_from_func} для course_numeric_id={course_numeric_id}")
-    
-    # ===== НОВАЯ ЗАЩИТА =====
-    if current_lesson == 0:
-        await message.answer(
-            "Пожалуйста, дождитесь первого урока, чтобы сдать домашнее задание."
-        )
-        return
-    # =======================
-    course_id = course_id_from_func  # Используем правильное значение
-    
-    # ===== ЛОГИРОВАНИЕ ПЕРЕД ПРОВЕРКОЙ hw_status =====
-    logger.info(f"ПЕРЕД ПРОВЕРКОЙ: user_id={user_id}, course_id={course_id}, lesson={current_lesson}, version_id={version_id}")
-    
-    # Проверка hw_status с детальным логом
-    async with aiosqlite.connect(DB_FILE) as conn_hw:
-        cursor_debug = await conn_hw.execute(
-            "SELECT hw_status, hw_type FROM user_courses WHERE user_id = ? AND course_id = ? AND status = 'active'",
-            (user_id, course_id)
-        )
-        debug_row = await cursor_debug.fetchone()
-        logger.info(f"DEBUG hw_status ПЕРЕД проверкой: hw_status={debug_row[0] if debug_row else 'NULL'}, hw_type={debug_row[1] if debug_row and debug_row[1] else 'NULL'}")
+    course_id = await get_course_id_str(course_numeric_id)
+    logger.info(f"handle_homework: course_id={course_id}, lesson={current_lesson}, version={version_id}")
 
-    # ===== ПРОВЕРКА НА ПРОПУСК ДЗ =====
+    if current_lesson == 0:
+        await message.answer("Пожалуйста, дождитесь первого урока, чтобы сдать домашнее задание.", parse_mode=None)
+        return
+
+    # Проверка на пропуск ДЗ
     skip_keywords = ["*пропускаю*", "пропускаю", "пропуск", "/skip"]
     message_text_lower = (message.text or "").lower().strip()
     if any(kw in message_text_lower for kw in skip_keywords) or message_text_lower in skip_keywords:
         await message.answer("⏭ Домашка пропущена и автоматически зачтена!", parse_mode=None)
         async with aiosqlite.connect(DB_FILE) as conn:
-            await conn.execute("""
-                UPDATE user_courses 
-                SET hw_status = 'approved'
-                WHERE user_id = ? AND course_id = ?
-            """, (user_id, course_id))
-            await conn.commit()
+            await conn.execute(
+                "UPDATE user_courses SET hw_status = 'approved' WHERE user_id = ? AND course_id = ? AND status = 'active'",
+                (user_id, course_id)
+            )
             await conn.execute(
                 "DELETE FROM pending_admin_homework WHERE student_user_id = ? AND course_numeric_id = ? AND lesson_num = ?",
                 (user_id, course_numeric_id, current_lesson)
             )
             await conn.commit()
-        logger.info(f"ДЗ для user_id={user_id}, lesson={current_lesson} пропущено пользователем")
+        logger.info(f"handle_homework: ДЗ урока {current_lesson} пропущено user={user_id}")
         return
-    # ====================================
 
-    # ===== УДАЛЕНИЕ СТАРЫХ PENDING ДЗ =====
+    # Удаляем старое pending ДЗ для этого урока (если было)
     async with aiosqlite.connect(DB_FILE) as conn_del:
         await conn_del.execute(
             "DELETE FROM pending_admin_homework WHERE student_user_id = ? AND course_numeric_id = ? AND lesson_num = ?",
             (user_id, course_numeric_id, current_lesson)
         )
         await conn_del.commit()
-    # =======================================
 
-    # ===== ПРОВЕРКА: ЕСЛИ ДЗ УЖЕ ОДОБРЕНО ДЛЯ ЭТОГО УРОКА =====
-    logger.info("=" * 80)
-    logger.info(f"ЛОГ #1: ПРОВЕРКА hw_status НАЧАЛО")
-    logger.info(f"ЛОГ #2: user_id={user_id}")
-    logger.info(f"ЛОГ #3: course_id={course_id}")
-    logger.info(f"ЛОГ #4: course_numeric_id={course_numeric_id}")
-    logger.info(f"ЛОГ #5: current_lesson={current_lesson}")
-    logger.info(f"ЛОГ #6: version_id={version_id}")
-    
+    # Проверка: ДЗ уже одобрено?
     async with aiosqlite.connect(DB_FILE) as conn_check:
-        logger.info(f"ЛОГ #7: Подключение к БД для проверки hw_status")
-        cursor_hw_status = await conn_check.execute(
-            "SELECT hw_status FROM user_courses WHERE user_id = ? AND course_id = ?",
+        cursor_hw = await conn_check.execute(
+            "SELECT hw_status FROM user_courses WHERE user_id = ? AND course_id = ? AND status = 'active'",
             (user_id, course_id)
         )
-        logger.info(f"ЛОГ #8: SQL запрос выполнен")
-        hw_status_row = await cursor_hw_status.fetchone()
-        logger.info(f"ЛОГ #9: hw_status_row={hw_status_row}")
-        
-        if hw_status_row:
-            logger.info(f"ЛОГ #10: hw_status_row[0]={hw_status_row[0]}")
-            logger.info(f"ЛОГ #11: hw_status_row[0] == 'approved' → {hw_status_row[0] == 'approved'}")
-        else:
-            logger.info(f"ЛОГ #12: hw_status_row is None")
-        
-        logger.info(f"ЛОГ #13: Проверка условия hw_status_row and hw_status_row[0] == 'approved'")
-        
-        if hw_status_row and hw_status_row[0] == 'approved':
-            logger.info(f"ЛОГ #14: УСЛОВИЕ ВЫПОЛНЕНО - hw_status='approved'")
-            logger.info(f"ЛОГ #15: ДЗ для урока {current_lesson} уже одобрено — игнорируем повторную отправку")
-            logger.info(f"ЛОГ #16: user_id={user_id}")
-            logger.info(f"ЛОГ #17: course_id={course_id}")
-            logger.info(f"ЛОГ #18: current_lesson={current_lesson}")
-            logger.info(f"ЛОГ #19: ВОЗВРАТ ИЗ ФУНКЦИИ")
-            logger.info("=" * 80)
-            
-            # ДЗ уже одобрено — игнорируем, просто говорим когда следующий урок
-            logger.info(f"ДЗ для урока {current_lesson} уже одобрено — игнорируем повторную отправку")
-            
-            # Получаем время следующего урока
-            next_lesson_display_text_safe = escape_md(await get_next_lesson_time(user_id, course_id, current_lesson))
-            
-            await message.answer(
-                f"✅ Домашка уже засчитана!\n\n"
-                f"🕒 Следующий урок: {next_lesson_display_text_safe}",
-                parse_mode=None
-            )
-            return  # НЕ отправляем админу и не создаём pending запись
-        else:
-            logger.info(f"ЛОГ #14: УСЛОВИЕ НЕ ВЫПОЛНЕНО - hw_status != 'approved'")
-            logger.info(f"ЛОГ #15: Продолжаем обработку ДЗ")
-    
-    logger.info("=" * 80)
+        hw_row = await cursor_hw.fetchone()
+
+    if hw_row and hw_row[0] == 'approved':
+        logger.info(f"handle_homework: hw_status=approved для user={user_id}, lesson={current_lesson}")
+        next_lesson_time = escape_md(await get_next_lesson_time(user_id, course_id, current_lesson))
+        await message.answer(
+            f"✅ Домашка уже засчитана!\n\nСледующий урок: {next_lesson_time}",
+            parse_mode=None
+        )
+        return
 
     # Если тариф v1 → самопроверка
     if version_id == 'v1':
@@ -9255,7 +9185,7 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
             logger.info(f"7 1318 course_data:Найдены данные курса: {course_data}")
 
         if not course_data:
-            return await message.answer("Неверное кодовое слово. Попробуйте еще раз или свяжитесь с поддержкой.", parse_mode=None)
+            return await message.answer("Неверное кодовое слово. ��опробуйте еще раз или свяжитесь с поддержкой.", parse_mode=None)
 
         course_id, version_id, course_name = course_data
 
@@ -9430,18 +9360,11 @@ async def on_startup():
     use_webhook = webhook_mode_env not in ["false", "0", "no", "off"]
 
     if use_webhook:
-        # final_webhook_path = f"{WEBHOOK_PATH_CONF.rstrip('/')}/{BOT_TOKEN_CONF}"
-        # webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}{final_webhook_path}"
-
-        # WEBHOOK_SECRET_PATH_CONF = os.getenv("WEBHOOK_SECRET_PATH")  # Путь для секретного ключа вебхука 01-07
-        # WEBHOOK_SECRET_TOKEN_CONF = os.getenv("WEBHOOK_SECRET_TOKEN")
-
         webhook_url = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{WEBHOOK_SECRET_PATH_CONF.strip('/')}"
-
         await bot.set_webhook(
             webhook_url,
             drop_pending_updates=True,
-            secret_token=WEBHOOK_SECRET_TOKEN_CONF  # <--- ДОБАВИТЬ ЭТОТ АРГУМЕНТ
+            secret_token=WEBHOOK_SECRET_TOKEN_CONF
         )
         logger.info(f"Webhook set to: {webhook_url}")
     else:
@@ -9626,24 +9549,7 @@ async def main():
         for group_id, group_name in settings.get('groups', {}).items():
             logger.info(f"   - {group_name}: {group_id}")
         
-        # Очистка "осиротевших" курсов (которых нет в settings.json)
-        deleted_count, removed_courses = await cleanup_orphaned_courses(settings)
-        if deleted_count > 0:
-            logger.warning(f"🧹 У��алено {deleted_count} активных записей для недоступных курсов: {removed_courses}")
-            # Уведомляем админов
-            try:
-                admin_notification = (
-                    f"⚠️ *Очистка базы данных*\n\n"
-                    f"Удалено {deleted_count} активных записей студентов\n"
-                    f"для недоступных курсов (отсутствуют в settings.json):\n"
-                )
-                for course in removed_courses:
-                    admin_notification += f"  • `{escape_md(course)}`\n"
-                admin_notification += "\nСтуденты отписаны от этих курсов."
-                await bot.send_message(ADMIN_GROUP_ID, admin_notification, parse_mode=None)
-                logger.info("📨 Админы уведомлены об очистке осиротевших курсов")
-            except Exception as e:
-                logger.error(f"❌ Ошибка при отправке уведомления админам: {e}")
+        # cleanup_orphaned_courses НЕ запускается автоматически — только вручную через /cleanup_orphaned
     else:
         COURSE_GROUPS = []
         logger.warning("⚠️ Настройки 'groups' не загружены или отсутствуют, COURSE_GROUPS пуст.")
