@@ -1200,7 +1200,7 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                         parse_mode=None,
                     )
             except Exception as e:
-                logger.debug(f"run_hw_countdown: не удалось обновить msg {admin_msg_id}: {e}")
+                logger.warning(f"run_hw_countdown: не удалось обновить msg {admin_msg_id}: {e}")
     except asyncio.CancelledError:
         pass
     finally:
@@ -1829,13 +1829,12 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
             is_approved_by_ai = str(data.get("is_approved", "false")).lower() == 'true'
             ai_verdict = "✅ Одобрить" if is_approved_by_ai else "❌ Отклонить"
 
-            # Формируем красивое сообщение-подсказку
-            # ВАЖНО: Мы экранируем фидбек от ИИ и используем parse_mode=MarkdownV2
+            # Формируем подсказку plain text (без Markdown — feedback от ИИ может содержать спецсимволы)
             suggestion_text = (
-                f"🤫 *Подсказка от ИИ (для ДЗ выше):*\n\n"
-                f"**Вердикт ИИ:** {escape_md(ai_verdict)}\n"
-                f"**Комментарий:**\n{escape_md(feedback_from_ai)}\n\n"
-                f"_(Это сообщение видите только вы. Студент ждет вашего финального ответа.)_"
+                f"🤫 Подсказка от ИИ (для ДЗ выше):\n\n"
+                f"Вердикт ИИ: {ai_verdict}\n"
+                f"Комментарий:\n{feedback_from_ai}\n\n"
+                f"(Это сообщение видите только вы. Студент ждет вашего финального ответа.)"
             )
 
             # Отправляем подсказку в админ-чат
@@ -1844,7 +1843,7 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
                     chat_id=ADMIN_GROUP_ID,
                     text=suggestion_text,
                     reply_to_message_id=original_admin_message_id,
-                    parse_mode=None  # Используем MarkdownV2
+                    parse_mode=None
                 )
             except Exception as e_suggestion:
                 logger.error(f"Не удалось отправить подсказку от ИИ админу: {e_suggestion}")
@@ -9456,7 +9455,14 @@ async def on_startup():
     else:
         logger.info("Skipping webhook setup (WEBHOOK_MODE=false)")
 
-
+    logger.info(
+        f"=== КОНФИГУРАЦИЯ СЕРВЕРА ===\n"
+        f"  Бот: {WEBHOOK_HOST_CONF}\n"
+        f"  n8n webhook: {N8N_HOMEWORK_CHECK_WEBHOOK_URL}\n"
+        f"  HW_TIMEOUT_SECONDS: {HW_TIMEOUT_SECONDS}\n"
+        f"  Callback base: {BOT_CALLBACK_BASE_URL}\n"
+        f"=========================="
+    )
 
     logger.info("Запуск фоновых задач для пользователей (таймеры)...")
     
@@ -9486,12 +9492,7 @@ async def on_startup():
                 except Exception as e_clean:
                     logger.debug(f"Не удалось убрать кнопки с сообщения {admin_msg_id}: {e_clean}")
         
-        cursor_count = await conn.execute("SELECT COUNT(*) FROM pending_admin_homework")
-        count = (await cursor_count.fetchone())[0]
-        if count > 0:
-            await conn.execute("DELETE FROM pending_admin_homework")
-            await conn.commit()
-            logger.info(f"Очищено {count} старых ДЗ из pending_admin_homework при старте")
+        logger.info(f"Pending ДЗ при старте сохранены в БД, будут обработаны check_pending_homework_timeout")
     
     asyncio.create_task(check_pending_homework_timeout())
     logger.info("Фоновые задачи запущены.")
