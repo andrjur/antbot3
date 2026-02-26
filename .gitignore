@@ -64,3 +64,5 @@ n8n_data/
 grafana-data/
 prometheus-data/
 alertmanager-data/
+CLAUDE.md
+GOALS.md
