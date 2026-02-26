@@ -1285,22 +1285,13 @@ async def check_pending_homework_timeout():
                         hw_type_row = await cursor_hw_type.fetchone()
                         expected_hw_type = hw_type_row[0] if hw_type_row else "any"
                     
-                    # Строим callback URL для n8n
-                    # Внутренний: http://bot:8080/bot/  (через Docker-сеть, WEBHOOK_PATH_CONF = /bot/)
-                    # Внешний:    https://bot.indikov.ru/<secret_path>/  (через Cloudflare)
+                    # Callback URL для n8n — всегда внешний HTTPS через Cloudflare
+                    # Формат: https://bot.indikov.ru/<secret_path>/n8n_hw_result
+                    host = WEBHOOK_HOST_CONF.rstrip("/")
                     secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
-                    internal_url = os.getenv("BOT_INTERNAL_URL", "").rstrip("/")
-                    if internal_url:
-                        webhook_path = WEBHOOK_PATH_CONF.strip("/")
-                        callback_base = f"{internal_url}/{webhook_path}"
-                        logger.info(f"callback_base: внутренний Docker URL: {callback_base}")
-                    elif secret_path:
-                        callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{secret_path}"
-                        logger.info(f"callback_base: публичный URL с secret_path: {callback_base}")
-                    else:
-                        callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{WEBHOOK_PATH_CONF.strip('/')}"
-                        logger.info(f"callback_base: публичный URL: {callback_base}")
-                    
+                    callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/{WEBHOOK_PATH_CONF.strip('/')}"
+                    logger.info(f"callback_base (внешний): {callback_base}")
+
                     payload = {
                         "action": "check_homework",
                         "student_user_id": student_user_id,
@@ -1317,6 +1308,7 @@ async def check_pending_homework_timeout():
                         "admin_group_id": ADMIN_GROUP_ID,
                         "student_message_id": student_msg_id,
                         "callback_webhook_url_result": f"{callback_base}/n8n_hw_result",
+                        "callback_webhook_url_error": f"{callback_base}/n8n_hw_processing_error",
                         "telegram_bot_token": BOT_TOKEN,
                         "timeout_seconds": HW_TIMEOUT_SECONDS
                     }
