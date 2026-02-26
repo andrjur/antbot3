@@ -151,6 +151,40 @@ Set `missing_lesson_warnings_sent` предотвращает повторные
 
 ---
 
+## 2026-02-26 — bug1 + zadacha1
+
+### bug1-fix1: get_user_course_data возвращал случайный курс при нескольких активных
+**Коммит:** [32be6dd](https://github.com/andrjur/antbot4/commit/32be6dd)
+**Проблема:** SQL без `ORDER BY` и `LIMIT 1` — при нескольких активных записях в `user_courses` возвращал произвольную строку. Это давало неверный `course_id` (напр. `base` вместо `sprint2`) и неверный `version_id='v1'` вместо `'v2'` → мгновенный auto-approve ДЗ.
+**Решение:** `get_user_course_data` и аналогичный SELECT в `handle_homework` получили `ORDER BY activation_date DESC LIMIT 1`.
+
+---
+
+### zadacha1: исправлен JSON payload для n8n
+**Коммит:** [d732ebc](https://github.com/andrjur/antbot4/commit/d732ebc)
+**Проблема:** Несоответствие ключей между ботом и n8n:
+- бот → `student_name`, n8n ожидает → `user_fullname`
+- бот → `admin_message_id`, n8n ожидает → `original_admin_message_id`
+- отсутствовало поле `homework_text`
+- `action` был `check_homework_timeout` вместо `check_homework`
+
+**Решение:**
+- `pending_admin_homework`: добавлена колонка `homework_text` (CREATE TABLE + ALTER TABLE миграция в `on_startup`)
+- `handle_homework`: сохраняет `homework_text` при INSERT
+- `check_pending_homework_timeout`: payload исправлен — переименованы ключи, добавлены `homework_text` и `homework_content_type`
+
+---
+
+### Деплой
+SSH с локальной машины не работает. **Выполнить вручную на сервере:**
+```bash
+cd ~/antbot4 && git pull
+sudo docker compose up -d --build bot
+sudo docker compose logs bot --tail=30 -f
+```
+
+---
+
 ## Архитектурные решения (принятые)
 
 | Решение | Почему |
