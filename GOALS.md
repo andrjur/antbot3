@@ -151,36 +151,185 @@ Set `missing_lesson_warnings_sent` предотвращает повторные
 
 ---
 
-## 2026-02-26 — bug1 + zadacha1
-
-### bug1-fix1: get_user_course_data возвращал случайный курс при нескольких активных
-**Коммит:** [32be6dd](https://github.com/andrjur/antbot4/commit/32be6dd)
-**Проблема:** SQL без `ORDER BY` и `LIMIT 1` — при нескольких активных записях в `user_courses` возвращал произвольную строку. Это давало неверный `course_id` (напр. `base` вместо `sprint2`) и неверный `version_id='v1'` вместо `'v2'` → мгновенный auto-approve ДЗ.
-**Решение:** `get_user_course_data` и аналогичный SELECT в `handle_homework` получили `ORDER BY activation_date DESC LIMIT 1`.
+## 2026-02-26 — Серия исправлений: bug1, zadacha1, callback URL, таймер
 
 ---
 
-### zadacha1: исправлен JSON payload для n8n
-**Коммит:** [d732ebc](https://github.com/andrjur/antbot4/commit/d732ebc)
-**Проблема:** Несоответствие ключей между ботом и n8n:
-- бот → `student_name`, n8n ожидает → `user_fullname`
-- бот → `admin_message_id`, n8n ожидает → `original_admin_message_id`
-- отсутствовало поле `homework_text`
-- `action` был `check_homework_timeout` вместо `check_homework`
+### bug1 — get_user_course_data возвращал случайный курс при нескольких активных записях
+
+**Коммит:** [32be6dd](https://github.com/andrjur/antbot4/commit/32be6dd)
+
+**Диагностика по логам (bug1.md):**
+Пользователь остановил курс `sprint2`, ввёл код активации `sprint2pro`. В логах:
+```
+10:55:46 activate_course() → course_id='sprint2', version_id='v2'
+10:55:46 send_course_description() → course_id_str='base'   ← НЕВЕРНО
+10:55:51 send_main_menu() → hw_status='pending'
+10:55:55 handle_homework() → hw_status='approved'           ← за 4 секунды!
+```
+
+**Корень проблемы:** Функция `get_user_course_data()` (строка ~7526) выполняла SQL-запрос без `ORDER BY` и без `LIMIT 1`:
+```sql
+SELECT courses.id, user_courses.current_lesson, user_courses.version_id
+FROM user_courses
+JOIN courses ON user_courses.course_id = courses.course_id
+WHERE user_courses.user_id = ? AND user_courses.status = 'active'
+```
+При наличии нескольких активных строк в `user_courses` (например, `base` и `sprint2`) SQLite возвращал произвольную строку — ту, которая физически первая в таблице. Возвращался `course_id='base'` и `version_id='v1'` вместо правильных.
+
+**Последствия:**
+- `send_course_description()` получала `course_id='base'` → ничего не находила → слала заглушку
+- `version_id='v1'` → ветка `if version_id == 'v1':` в `handle_homework()` (строка ~8740) мгновенно ставила `hw_status='approved'` без ожидания
+
+**Та же проблема** была в `handle_homework()` в SELECT после активации курса (строка ~8641).
 
 **Решение:**
-- `pending_admin_homework`: добавлена колонка `homework_text` (CREATE TABLE + ALTER TABLE миграция в `on_startup`)
-- `handle_homework`: сохраняет `homework_text` при INSERT
-- `check_pending_homework_timeout`: payload исправлен — переименованы ключи, добавлены `homework_text` и `homework_content_type`
+- `get_user_course_data()` строки 7526–7533: добавлен `ORDER BY user_courses.activation_date DESC LIMIT 1`
+- `handle_homework()` строка 8643: аналогичный фикс — `ORDER BY activation_date DESC LIMIT 1`
+
+```python
+# Было:
+WHERE user_courses.user_id = ? AND user_courses.status = 'active'
+
+# Стало:
+WHERE user_courses.user_id = ? AND user_courses.status = 'active'
+ORDER BY user_courses.activation_date DESC
+LIMIT 1
+```
 
 ---
 
-### Деплой
-SSH с локальной машины не работает. **Выполнить вручную на сервере:**
+### zadacha1 — Несоответствие JSON payload между ботом и n8n
+
+**Коммит:** [d732ebc](https://github.com/andrjur/antbot4/commit/d732ebc)
+
+**Проблема:** n8n-воркфлоу ожидал одни имена полей, а бот слал другие. Из-за этого n8n не мог обработать ДЗ корректно.
+
+Несоответствия:
+| Поле в боте | Ожидалось в n8n | Статус |
+|-------------|-----------------|--------|
+| `student_name` | `user_fullname` | ❌ |
+| `admin_message_id` | `original_admin_message_id` | ❌ |
+| `action: "check_homework_timeout"` | `action: "check_homework"` | ❌ |
+| *(отсутствовало)* | `homework_text` | ❌ |
+| *(отсутствовало)* | `homework_content_type` | ❌ |
+
+**Дополнительно:** текст ДЗ нигде не сохранялся — в таблице `pending_admin_homework` не было колонки для него, поэтому при отправке в n8n поле `homework_text` было пустым.
+
+**Решение:**
+
+1. **Миграция БД** — добавлена колонка `homework_text TEXT` в CREATE TABLE `pending_admin_homework`
+2. **on_startup** — добавлена миграция `ALTER TABLE pending_admin_homework ADD COLUMN homework_text TEXT` с try/except (если колонка уже есть — игнорируем)
+3. **handle_homework** — при INSERT в `pending_admin_homework` теперь сохраняется `homework_text = text or ""`
+4. **check_pending_homework_timeout** — SELECT расширен (добавлен `homework_text`), распаковка row обновлена, payload исправлен:
+
+```python
+# Было:
+payload = {
+    "action": "check_homework_timeout",
+    "student_name": student_name,
+    "admin_message_id": admin_msg_id,
+    ...
+}
+
+# Стало:
+payload = {
+    "action": "check_homework",
+    "user_fullname": student_name,
+    "original_admin_message_id": admin_msg_id,
+    "homework_text": homework_text or "",
+    "homework_content_type": "text",
+    ...
+}
+```
+
+---
+
+### fix: callback URL для n8n — добавлен WEBHOOK_PATH к BOT_INTERNAL_URL
+
+**Коммит:** [b43678f](https://github.com/andrjur/antbot4/commit/b43678f)
+
+**Проблема:** В `check_pending_homework_timeout` при построении `callback_base` для Docker-сети:
+```python
+callback_base = internal_url  # = "http://bot:8080"
+```
+Маршруты зарегистрированы на `/bot/n8n_hw_result`, а бот слал `http://bot:8080/n8n_hw_result` (без `/bot/`) → **404**.
+
+Промежуточный фикс: для внутреннего URL добавлен `WEBHOOK_PATH_CONF` (`/bot/`), для внешнего — использование `WEBHOOK_SECRET_PATH`.
+
+---
+
+### fix: callback URL — всегда внешний HTTPS с secret_path (финальный вариант)
+
+**Коммит:** [a984c5c](https://github.com/andrjur/antbot4/commit/a984c5c)
+
+**Проблема (уточнение архитектуры):** n8n должен звонить обратно в бот через Cloudflare на публичный HTTPS-адрес — не через Docker-сеть. `BOT_INTERNAL_URL` нужен только для того, чтобы **бот звонил в n8n** (обход Cloudflare для исходящих), но не для обратных callback'ов.
+
+**Правильный URL для callback:**
+```
+https://bot.indikov.ru/<WEBHOOK_SECRET_PATH>/n8n_hw_result
+```
+где `WEBHOOK_SECRET_PATH` — секретный путь из `.env`, на котором aiogram слушает входящие запросы от Telegram и n8n.
+
+**Решение:**
+```python
+# Было: сложная логика с тремя ветками (Docker / secret_path / fallback)
+
+# Стало: всегда внешний HTTPS
+host = WEBHOOK_HOST_CONF.rstrip("/")
+secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
+callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/{WEBHOOK_PATH_CONF.strip('/')}"
+
+payload = {
+    ...
+    "callback_webhook_url_result": f"{callback_base}/n8n_hw_result",
+    "callback_webhook_url_error": f"{callback_base}/n8n_hw_processing_error",  # ← новое поле
+    ...
+}
+```
+
+**Добавлено поле** `callback_webhook_url_error` — n8n теперь знает куда сообщать об ошибках обработки.
+
+---
+
+### zadacha2 — Изменение текста и кнопок при истечении таймера run_hw_countdown
+
+**Статус: СЛЕДУЮЩАЯ ЗАДАЧА**
+
+**Текущее поведение:** Функция `run_hw_countdown()` обновляет сообщение в админ-группе каждые 22 секунды, показывая обратный отсчёт `🤖 До AI-проверки: X сек`. Когда таймер доходит до 0, строка остаётся `🤖 До AI-проверки: 0 сек`, кнопки "Принять/Отклонить" остаются видны — **админ может нажать их параллельно с ИИ**, что создаёт конфликт.
+
+**Нужное поведение:** Когда `remaining <= 0`:
+- Строка таймера меняется на `⏳ ИИ-ассистент начал проверку ДЗ, подождите...`
+- Кнопки убираются (`reply_markup=None`) — чтобы исключить конфликт с AI-проверкой
+- После того как n8n присылает ответ через webhook — сообщение обновляется финальным вердиктом
+
+**Что нужно изменить** в функции `run_hw_countdown()` (~строка 1166):
+```python
+if remaining > 0:
+    timer_line = f"🤖 До AI-проверки: {remaining} сек"
+    current_reply_markup = reply_markup   # кнопки сохраняются
+else:
+    timer_line = "⏳ ИИ-ассистент начал проверку ДЗ, подождите..."
+    current_reply_markup = None           # кнопки убираются
+```
+Заменить старую строку таймера в тексте на `timer_line`, вызвать edit с `current_reply_markup`.
+
+---
+
+## Деплой (актуально)
+
+SSH с локальной машины недоступен. **Выполнить вручную на сервере:**
 ```bash
 cd ~/antbot4 && git pull
 sudo docker compose up -d --build bot
 sudo docker compose logs bot --tail=30 -f
+```
+
+**Обязательно проверить `.env` на сервере:**
+```
+BOT_INTERNAL_URL=http://bot:8080        # для исходящих вызовов бота → n8n
+WEBHOOK_SECRET_PATH=<секретный_путь>    # путь вебхука aiogram (для callback URL)
+ALERT_CHAT_ID=-1002591981307
 ```
 
 ---
@@ -196,3 +345,4 @@ sudo docker compose logs bot --tail=30 -f
 | settings.json не в git | Содержит реальные коды активации и цены |
 | HW_TIMEOUT_SECONDS=120 | Дефолт 2 минуты — достаточно для тестов, разумно для продакшна |
 | cleanup_orphaned только вручную | Автозапуск при пустом settings.json → потеря данных студентов |
+| BOT_INTERNAL_URL только для исходящих | n8n callback всегда идёт через внешний HTTPS/Cloudflare → aiogram |
