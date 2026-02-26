@@ -1285,13 +1285,20 @@ async def check_pending_homework_timeout():
                         hw_type_row = await cursor_hw_type.fetchone()
                         expected_hw_type = hw_type_row[0] if hw_type_row else "any"
                     
-                    # BOT_INTERNAL_URL=http://bot:8080 - для n8n через Docker-сеть без Cloudflare
+                    # Строим callback URL для n8n
+                    # Внутренний: http://bot:8080/bot/  (через Docker-сеть, WEBHOOK_PATH_CONF = /bot/)
+                    # Внешний:    https://bot.indikov.ru/<secret_path>/  (через Cloudflare)
+                    secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
                     internal_url = os.getenv("BOT_INTERNAL_URL", "").rstrip("/")
                     if internal_url:
-                        callback_base = internal_url
+                        webhook_path = WEBHOOK_PATH_CONF.strip("/")
+                        callback_base = f"{internal_url}/{webhook_path}"
                         logger.info(f"callback_base: внутренний Docker URL: {callback_base}")
+                    elif secret_path:
+                        callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{secret_path}"
+                        logger.info(f"callback_base: публичный URL с secret_path: {callback_base}")
                     else:
-                        callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
+                        callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}/{WEBHOOK_PATH_CONF.strip('/')}"
                         logger.info(f"callback_base: публичный URL: {callback_base}")
                     
                     payload = {
