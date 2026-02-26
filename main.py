@@ -1237,7 +1237,8 @@ async def check_pending_homework_timeout():
 
                 cursor = await conn.execute('''
                     SELECT admin_message_id, admin_chat_id, student_user_id,
-                           course_numeric_id, lesson_num, student_message_id, created_at
+                           course_numeric_id, lesson_num, student_message_id, created_at,
+                           homework_text
                     FROM pending_admin_homework
                     WHERE created_at < ?
                 ''', (cutoff_time_str,))
@@ -1247,7 +1248,7 @@ async def check_pending_homework_timeout():
                 logger.info(f"check_pending_homework_timeout: найдено {len(pending_rows)} pending ДЗ")
 
                 for row in pending_rows:
-                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at = row
+                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at, homework_text = row
                     
                     logger.info(f"check_pending_homework_timeout: pending ДЗ admin_msg_id={admin_msg_id}, student_user_id={student_user_id}, course_numeric_id={course_numeric_id}, lesson_num={lesson_num}, created_at={created_at}")
 
@@ -1294,16 +1295,18 @@ async def check_pending_homework_timeout():
                         logger.info(f"callback_base: публичный URL: {callback_base}")
                     
                     payload = {
-                        "action": "check_homework_timeout",
+                        "action": "check_homework",
                         "student_user_id": student_user_id,
-                        "student_name": student_name,
+                        "user_fullname": student_name,
                         "course_numeric_id": course_numeric_id,
                         "course_id": course_id_str,
                         "course_title": course_title,
                         "lesson_num": lesson_num,
                         "lesson_assignment_description": lesson_description,
+                        "homework_text": homework_text or "",
+                        "homework_content_type": "text",
                         "expected_homework_type": expected_hw_type,
-                        "admin_message_id": admin_msg_id,
+                        "original_admin_message_id": admin_msg_id,
                         "admin_group_id": ADMIN_GROUP_ID,
                         "student_message_id": student_msg_id,
                         "callback_webhook_url_result": f"{callback_base}/n8n_hw_result",
@@ -1665,6 +1668,7 @@ async def init_db():
                     course_numeric_id INTEGER NOT NULL,
                     lesson_num INTEGER NOT NULL,
                     student_message_id INTEGER,           -- ID исходного сообщения студента с ДЗ (опционально, но полезно)
+                    homework_text TEXT,                   -- Текст ДЗ (для передачи в n8n)
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (student_user_id) REFERENCES users(user_id),
                     FOREIGN KEY (course_numeric_id) REFERENCES courses(id) -- или courses(course_id) если id числовой
@@ -9006,15 +9010,16 @@ async def handle_homework(message: types.Message):
                 async with aiosqlite.connect(DB_FILE) as conn:
                     await conn.execute("""
                         INSERT INTO pending_admin_homework
-                        (admin_message_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_message_id)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (admin_message_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_message_id, homework_text)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         sent_admin_message.message_id,
                         ADMIN_GROUP_ID,
                         user_id,
                         course_numeric_id,
                         current_lesson,
-                        message.message_id
+                        message.message_id,
+                        text or ""
                     ))
                     await conn.commit()
                     logger.info(
@@ -9484,8 +9489,19 @@ async def on_startup():
         f"=========================="
     )
 
+    # Миграция БД: добавить homework_text в pending_admin_homework если колонки ещё нет
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute(
+                "ALTER TABLE pending_admin_homework ADD COLUMN homework_text TEXT"
+            )
+            await conn.commit()
+            logger.info("Миграция: колонка homework_text добавлена в pending_admin_homework")
+    except Exception:
+        pass  # Колонка уже существует — игнорируем
+
     logger.info("Запуск фоновых задач для пользователей (таймеры)...")
-    
+
     async with aiosqlite.connect(DB_FILE) as conn:
         cursor = await conn.execute("SELECT user_id FROM users")
         users_rows = await cursor.fetchall()
