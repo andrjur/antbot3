@@ -1284,7 +1284,14 @@ async def check_pending_homework_timeout():
                         hw_type_row = await cursor_hw_type.fetchone()
                         expected_hw_type = hw_type_row[0] if hw_type_row else "any"
                     
-                    callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
+                    # BOT_INTERNAL_URL=http://bot:8080 - для n8n через Docker-сеть без Cloudflare
+                    internal_url = os.getenv("BOT_INTERNAL_URL", "").rstrip("/")
+                    if internal_url:
+                        callback_base = internal_url
+                        logger.info(f"callback_base: внутренний Docker URL: {callback_base}")
+                    else:
+                        callback_base = f"{WEBHOOK_HOST_CONF.rstrip('/')}{WEBHOOK_PATH_CONF.rstrip('/')}"
+                        logger.info(f"callback_base: публичный URL: {callback_base}")
                     
                     payload = {
                         "action": "check_homework_timeout",
