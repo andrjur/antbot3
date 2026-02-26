@@ -1177,9 +1177,14 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
             await asyncio.sleep(STEP)
             elapsed += STEP
             remaining = max(0, timeout_seconds - elapsed)
-            countdown_line = f"🤖 До AI-проверки: {remaining} сек"
+            if remaining > 0:
+                timer_line = f"🤖 До AI-проверки: {remaining} сек"
+                current_reply_markup = reply_markup
+            else:
+                timer_line = "⏳ ИИ-ассистент начал проверку ДЗ, подождите..."
+                current_reply_markup = None
             updated_text = "\n".join(
-                countdown_line if line.startswith("🤖") else line
+                timer_line if line.startswith("🤖") else line
                 for line in base_text.splitlines()
             )
             logger.info(f"run_hw_countdown: msg={admin_msg_id}, elapsed={elapsed}, remaining={remaining}")
@@ -1190,7 +1195,7 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                         message_id=admin_msg_id,
                         caption=updated_text,
                         parse_mode=None,
-                        reply_markup=reply_markup,
+                        reply_markup=current_reply_markup,
                     )
                 else:
                     await bot.edit_message_text(
@@ -1198,7 +1203,7 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                         message_id=admin_msg_id,
                         text=updated_text,
                         parse_mode=None,
-                        reply_markup=reply_markup,
+                        reply_markup=current_reply_markup,
                     )
                 logger.info(f"run_hw_countdown: msg={admin_msg_id} обновлён, remaining={remaining}")
             except Exception as e:
