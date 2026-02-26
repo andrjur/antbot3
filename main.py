@@ -7524,10 +7524,12 @@ async def get_user_course_data(user_id: int) -> tuple:
     """
     async with aiosqlite.connect(DB_FILE) as conn:
         cursor = await conn.execute("""
-            SELECT courses.id, user_courses.current_lesson, user_courses.version_id 
-            FROM user_courses 
+            SELECT courses.id, user_courses.current_lesson, user_courses.version_id
+            FROM user_courses
             JOIN courses ON user_courses.course_id = courses.course_id
             WHERE user_courses.user_id = ? AND user_courses.status = 'active'
+            ORDER BY user_courses.activation_date DESC
+            LIMIT 1
         """, (user_id,))
         user_course_data = await cursor.fetchone()
         logger.info(f"776 {user_course_data=}  ")
@@ -8638,7 +8640,7 @@ async def handle_homework(message: types.Message):
                 try:
                     cursor = await safe_db_execute(
                         conn,
-                        "SELECT course_id, version_id FROM user_courses WHERE user_id = ? AND status = 'active'",
+                        "SELECT course_id, version_id FROM user_courses WHERE user_id = ? AND status = 'active' ORDER BY activation_date DESC LIMIT 1",
                         (user_id,)
                     )
                     new_course_data = await cursor.fetchone()
