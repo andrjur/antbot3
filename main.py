@@ -63,6 +63,9 @@ WEBAPP_PORT_CONF: int        # Внутренний порт приложени�
 WEBAPP_HOST_CONF: str        # Внутренний хост приложения (INTERNAL_APP_HOST)
 WEBHOOK_PATH_CONF: str       # Базовый путь вебхука (BASE_WEBHOOK_PATH)
 
+# Внутренний URL бота для n8n (в Docker сети)
+BOT_INTERNAL_URL: str = ""   # Например: http://bot:8080
+
 # Загрузка переменных из .env
 load_dotenv()
 
@@ -1343,9 +1346,13 @@ async def check_pending_homework_timeout():
                             expected_hw_type = hw_type_row[0] if hw_type_row else "any"
 
                         # Строим callback URL
-                        host = WEBHOOK_HOST_CONF.rstrip("/")
-                        secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
-                        callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
+                        # Если задан BOT_INTERNAL_URL (для Docker сети), используем его
+                        if BOT_INTERNAL_URL:
+                            callback_base = BOT_INTERNAL_URL.rstrip("/")
+                        else:
+                            host = WEBHOOK_HOST_CONF.rstrip("/")
+                            secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
+                            callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
                         callback_url = f"{callback_base}/n8n_hw_result"
 
                         payload = {
