@@ -17,6 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, KeyboardButton
+import subprocess
 
 # ---- НОВЫЕ ИМПОРТЫ ДЛЯ ВЕБХУКОВ ----
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -2301,7 +2302,7 @@ async def _handle_course_completion(conn, user_id: int, course_id: str, requeste
         callback_data=RestartCourseCallback(course_numeric_id = course_numeric_id, action="restart_current_level").pack()
     )
 
-    builder.button(text=escape_md("Выбрать другой курс"), callback_data="select_other_course")
+    builder.button(text=escape_md("Выбрать другой к������рс"), callback_data="select_other_course")
     builder.button(text=escape_md("Оставить отзыв"), callback_data="leave_feedback")
     builder.adjust(1)  # Все кнопки в один столбец
 
@@ -3064,10 +3065,35 @@ async def check_groups_access(bot: Bot, raw_id: int, gr_name:str):
         return f"Ошибка: {gr_name} | ID: {raw_id}\n Подробнее: {str(e2344)}"
 
 
+def get_last_commit_info():
+    """Получает информацию о последнем git-коммите."""
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%h - %s (%ci)"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        else:
+            return f"Git error: {result.stderr.strip()}"
+    except subprocess.TimeoutExpired:
+        return "Git timeout"
+    except FileNotFoundError:
+        return "Git not installed"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 
 async def send_startup_message(bot: Bot, admin_group_id: int):
     """Отправляет сообщение админам о запуске бота и статусе группов."""
     global settings
+    
+    # Логируем информацию о версии (последний коммит)
+    commit_info = get_last_commit_info()
+    logger.info(f"📦 Версия (последний коммит): {commit_info}")
+    
     logger.info(f"222 {len(settings)=}")
     channel_reports = []
     kanalz=settings.get("groups", {}).items()
@@ -5976,7 +6002,7 @@ async def cb_stop_current_course(query: types.CallbackQuery, callback_data: Main
             await cb_select_other_course(query, state)  # Переиспользуем существующий обработчик
         else:
             logger.warning(f"cb_stop_current_course FAILED: не удалось деактивировать курс {course_id_to_stop_str} для user {user_id}")
-            # Если деактивация не удалась, можно просто обновить меню или ничего не делать
+            # Если деактивация не удалась, можно просто обновить меню или ни��его не делать
             pass
 
     except Exception as e:
@@ -8230,7 +8256,7 @@ async def cb_get_daily_tasks(query: types.CallbackQuery):
 
     builder = InlineKeyboardBuilder()
 
-    # Кнопка для основного задания
+    # Кнопка для основного за��ания
     builder.button(text=f"✅ Выполнить: {main_task['title'][:30]}...",
                    callback_data=f"do_task:{main_task['id']}")  # Отправляем ID из БД
 
