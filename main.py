@@ -9744,9 +9744,14 @@ async def main():
         setup_application(app, dp, bot=bot)
         
         # Путь для результатов проверки ДЗ
-        app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result", handle_n8n_hw_approval)
-        app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
-        app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",handle_n8n_expert_answer)
+        #app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_result", handle_n8n_hw_approval)
+        #app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
+        #app.router.add_post(f"{WEBHOOK_PATH_CONF.rstrip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",handle_n8n_expert_answer)
+        # заменено 27.02.2026
+
+        app.router.add_post(f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}/n8n_hw_result", handle_n8n_hw_approval)
+        app.router.add_post(f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
+        app.router.add_post(f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}",handle_n8n_expert_answer)
 
         logger.info(f"🔗 Дополнительные маршруты n8n:")
         logger.info(f"   - /n8n_hw_result")
