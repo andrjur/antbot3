@@ -1160,7 +1160,7 @@ async def stop_lesson_schedule_task(user_id: int):
         task = lesson_check_tasks[user_id]
         task.cancel()
         del lesson_check_tasks[user_id]
-        logger.info(f"Остановлена задача проверки расписания уроков для пользователя {user_id}.")
+        logger.info(f"Остановлена задача проверки расписания уроков для пользова��еля {user_id}.")
 
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
@@ -1291,10 +1291,10 @@ async def check_pending_homework_timeout():
                         expected_hw_type = hw_type_row[0] if hw_type_row else "any"
                     
                     # Callback URL для n8n — всегда внешний HTTPS через Cloudflare
-                    # Формат: https://bot.indikov.ru/<secret_path>/n8n_hw_result
+                    # Формат: https://bot.indikov.ru/<webhook_path>/n8n_hw_result
                     host = WEBHOOK_HOST_CONF.rstrip("/")
-                    secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
-                    callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/{WEBHOOK_PATH_CONF.strip('/')}"
+                    secret_path = (WEBHOOK_PATH_CONF or "").strip("/")
+                    callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
                     logger.info(f"callback_base (внешний): {callback_base}")
 
                     payload = {
