@@ -7,6 +7,8 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Europe/Moscow
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
     env_file:
       - .env
     ports:
