@@ -76,8 +76,176 @@
 - `check_pending_homework_timeout()` проверяет ДЗ каждые **10 секунд** (было 60).
 - Если ДЗ висит **3 × HW_TIMEOUT_SECONDS** (например, 102 сек при таймауте 34 сек) → бот вызывает `handle_homework_result()` с `is_approved=True`.
 - Студент получает: "✅ Ваше ДЗ принято."
-- Админам отправляется уведомление: "⚠️ ДЗ выше одобрено АВТОМАТИЧЕСКИ (ИИ не ответил за X мин Y сек)."
+- Админам отправляется уведомление: "⚠️ ДЗ @username одобрено АВТОМАТИЧЕСКИ (ИИ не ответил за X мин Y сек)."
 - Форматирование времени: `format_time_duration()` → "34 сек", "4 мин 2 сек", "2 ч 15 мин".
+
+### 5. Ошибка 521 (Web server is down) в n8n
+**Проблема:** n8n не может отправить результат проверки ДЗ обратно в бота. Cloudflare возвращает ошибку 521.
+
+**Причины и решения (подробно):**
+
+#### A. Неверный callback URL в payload
+**Симптом:** n8n стучится не туда.
+
+**Диагностика:**
+```bash
+docker compose logs bot | grep "callback_base"
+```
+
+**Ожидаемый вывод:**
+```
+callback_base (внешний): https://bot.indikov.ru/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL
+n8n callback URL: https://bot.indikov.ru/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL/n8n_hw_result
+```
+
+**Если неправильно:** Проверь `.env`:
+```bash
+cat .env | grep WEBHOOK
+```
+
+**Должно быть:**
+```
+WEBHOOK_HOST=https://bot.indikov.ru
+WEBHOOK_SECRET_PATH=hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL
+WEBHOOK_PATH=/webhook
+```
+
+**В коде бота (main.py):**
+```python
+# Формирование callback URL
+host = WEBHOOK_HOST_CONF.rstrip("/")
+secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
+callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
+callback_url = f"{callback_base}/n8n_hw_result"
+```
+
+#### B. Статичный URL в ноде HTTP Request (n8n)
+**Симптом:** n8n игнорирует payload и шлет на старый URL.
+
+**Диагностика:**
+1. Открой воркфлоу в n8n
+2. Найди ноду **HTTP Request** (отправляет результат боту)
+3. Проверь поле **URL**
+
+**❌ НЕПРАВИЛЬНО:**
+```
+https://bot.indikov.ru/webhook/n8n_hw_result
+```
+
+**✅ ПРАВИЛЬНО (Expression):**
+```javascript
+{{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}
+```
+
+**Исправление:**
+1. Кликни на поле URL
+2. Нажми `⚙️` → "Add Expression" или `{{}}`
+3. Вставь формулу выше
+4. Сохрани воркфлоу
+
+#### C. Cloudflare Origin Rules отсутствует
+**Симптом:** Cloudflare не знает куда перенаправлять трафик.
+
+**Диагностика:**
+1. Cloudflare Dashboard → Rules → Origin Rules
+2. Проверь наличие правила для `bot.indikov.ru`
+
+**Если нет — создай:**
+- **Rule name:** `Bot Redirect`
+- **If hostname:** `equals` → `bot.indikov.ru`
+- **Destination port:** `Rewrite to` → `8080`
+
+**Проверка:**
+```bash
+# С локальной машины:
+curl -I https://bot.indikov.ru/health/live
+# Должен вернуть HTTP/2 200
+```
+
+#### D. Бот слушает неправильный хост
+**Симптом:** Docker не пробрасывает порт.
+
+**Диагностика:**
+```bash
+docker compose logs bot | grep "Порт приложения"
+```
+
+**Ожидаемый вывод:**
+```
+Порт приложения: 8080
+```
+
+**Проверь `.env`:**
+```
+WEBAPP_HOST=0.0.0.0  # ОБЯЗАТЕЛЬНО! Не localhost, не 127.0.0.1
+WEB_SERVER_PORT=8080
+```
+
+**В docker-compose.yml:**
+```yaml
+services:
+  bot:
+    ports:
+      - "8080:8080"  # Проброс порта
+```
+
+#### E. N8N_CALLBACK_SECRET не совпадает
+**Симптом:** Бот отклоняет запрос с 403 Forbidden.
+
+**Диагностика:**
+```bash
+# В .env бота:
+cat .env | grep N8N_CALLBACK_SECRET
+
+# В n8n (нода HTTP Request → Headers):
+X-CALLBACK-SIGNATURE: 500
+```
+
+**Должно совпадать!**
+
+**Решение:**
+1. В `.env` бота: `N8N_CALLBACK_SECRET=500`
+2. В n8n HTTP Request → Headers:
+   - Name: `X-CALLBACK-SIGNATURE`
+   - Value: `=500` (или Expression: `={{ '500' }}`)
+
+---
+
+## 🧪 Тестирование callback от n8n
+
+**Шаг 1: Проверь логи при отправке ДЗ**
+```bash
+docker compose logs -f bot | grep -E "callback|n8n"
+```
+
+**Ожидаемый вывод:**
+```
+📤 ДЗ #123 отправлено на n8n (возраст: 34 сек)
+callback_base (внешний): https://bot.indikov.ru/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL
+n8n callback URL: https://bot.indikov.ru/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL/n8n_hw_result
+```
+
+**Шаг 2: Проверь логи n8n**
+```bash
+docker compose logs n8n | grep -E "POST|webhook"
+```
+
+**Ожидаемый вывод:**
+```
+"POST /webhook/aa46a723-619e-42e9-8e51-49ba51813718" 200
+"POST https://bot.indikov.ru/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL/n8n_hw_result" 200
+```
+
+**Шаг 3: Ручной тест webhook**
+```bash
+# С сервера (vps):
+curl -X POST https://bot.indikov.ru/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL/n8n_hw_result \
+  -H "Content-Type: application/json" \
+  -H "X-CALLBACK-SIGNATURE: 500" \
+  -d '{"feedback_text":"Тест","is_approved":true,"student_user_id":123}'
+
+# Должен вернуть 200 OK
+```
 
 ---
 
