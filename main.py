@@ -1161,7 +1161,7 @@ async def stop_lesson_schedule_task(user_id: int):
         task = lesson_check_tasks[user_id]
         task.cancel()
         del lesson_check_tasks[user_id]
-        logger.info(f"Остановлена задача проверки расписания уроков для пользова������еля {user_id}.")
+        logger.info(f"Остановлена задача проверки расписания уроков дл�������� пользова������еля {user_id}.")
 
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
@@ -1291,10 +1291,10 @@ async def check_pending_homework_timeout():
                         hw_type_row = await cursor_hw_type.fetchone()
                         expected_hw_type = hw_type_row[0] if hw_type_row else "any"
                     
-                    # Callback URL для n8n — всегда внешний HTTPS через Cloudflare
-                    # Формат: https://bot.indikov.ru/<webhook_path>/n8n_hw_result
+                    # Callback URL для n8n — используем WEBHOOK_SECRET_PATH_CONF (тот же путь что и для телеграм-вебхука)
+                    # Формат: https://bot.indikov.ru/<secret_path>/n8n_hw_result
                     host = WEBHOOK_HOST_CONF.rstrip("/")
-                    secret_path = (WEBHOOK_PATH_CONF or "").strip("/")
+                    secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
                     callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
                     callback_url = f"{callback_base}/n8n_hw_result"
                     logger.info(f"callback_base (внешний): {callback_base}")
@@ -1325,18 +1325,35 @@ async def check_pending_homework_timeout():
                     logger.info(f"n8n response: success={success}, response={response[:200] if response else 'None'}")
                     
                     homework_sent_to_n8n.add(admin_msg_id)
-                    
+
                     if success:
                         logger.info(f"ДЗ #{admin_msg_id} отправлено на n8n")
+                        # Создаём клавиатуру с кнопками для оператора
+                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                        from aiogram.utils.keyboard import InlineKeyboardBuilder
+                        
+                        builder = InlineKeyboardBuilder()
+                        builder.button(text="✅ Одобрить", callback_data=f"hw_manual_approve:{admin_msg_id}:{student_user_id}:{course_numeric_id}:{lesson_num}")
+                        builder.button(text="❌ Отклонить", callback_data=f"hw_manual_reject:{admin_msg_id}:{student_user_id}:{course_numeric_id}:{lesson_num}")
+                        builder.adjust(2)
+                        
+                        base_caption = f"🤖 ИИ-ассистент проверяет ДЗ...\n\n{student_name}\n\n⏳ Ожидайте результат (~{HW_TIMEOUT_SECONDS} сек)\n⚠️ Если ИИ не ответит — будет автоодобрение"
+                        
                         try:
+                            # Сначала проверяем, есть ли медиа в сообщении
+                            # Для pending_admin_homework предполагаем что это фото/медиа
                             await bot.edit_message_caption(
                                 chat_id=admin_chat_id,
                                 message_id=admin_msg_id,
-                                caption=f"🤖 ИИ-ассистент проверяет ДЗ...\n\n{student_name}\n\n⏳ Ожидайте результат",
-                                reply_markup=None
+                                caption=base_caption,
+                                parse_mode=None,
+                                reply_markup=builder.as_markup()
                             )
                         except Exception as e_edit:
                             logger.debug(f"Не удалось обновить caption: {e_edit}")
+                        
+                        # Запускаем таймер с кнопками (предполагаем что это медиа)
+                        asyncio.create_task(run_hw_countdown(bot, admin_msg_id, admin_chat_id, HW_TIMEOUT_SECONDS, True, base_caption, builder.as_markup()))
                     else:
                         logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
                 
@@ -1789,6 +1806,117 @@ async def cb_ask_expert_start(query: types.CallbackQuery, state: FSMContext):
     await query.message.answer(escape_md("Напишите ваш вопрос эксперту или ИИ:"))
     await state.set_state(AskExpertState.waiting_for_expert_question)
     await query.answer()
+
+
+# ====================================================================
+# Обработчики кнопок ручной проверки ДЗ (когда ИИ сломался)
+# ====================================================================
+
+@dp.callback_query(lambda c: c.data.startswith("hw_manual_approve:"))
+async def cb_hw_manual_approve(query: types.CallbackQuery):
+    """Ручное одобрение ДЗ оператором."""
+    data = query.data.split(":")
+    if len(data) < 5:
+        await query.answer("❌ Ошибка формата", show_alert=True)
+        return
+    
+    admin_msg_id = int(data[1])
+    student_user_id = int(data[2])
+    course_numeric_id = int(data[3])
+    lesson_num = int(data[4])
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Обновляем статус ДЗ
+            await conn.execute("""
+                UPDATE homework_gallery
+                SET status = 'approved', feedback_text = 'Одобрено оператором (ИИ не ответил)'
+                WHERE admin_message_id = ?
+            """, (admin_msg_id,))
+            
+            # Удаляем из pending
+            await conn.execute("""
+                DELETE FROM pending_admin_homework
+                WHERE admin_message_id = ?
+            """, (admin_msg_id,))
+            
+            await conn.commit()
+        
+        # Отправляем уведомление студенту
+        course_id_str = await get_course_id_str(course_numeric_id)
+        try:
+            await bot.send_message(
+                student_user_id,
+                f"✅ Ваше ДЗ по курсу '{course_id_str}' урок {lesson_num} одобрено оператором.\n\n(ИИ-ассистент временно недоступен)"
+            )
+        except Exception as e_student:
+            logger.warning(f"Не удалось отправить студенту {student_user_id}: {e_student}")
+        
+        # Обновляем сообщение админа
+        await query.message.edit_caption(
+            caption=f"✅ Одобрено оператором\n(ИИ не ответил)",
+            reply_markup=None
+        )
+        await query.answer("✅ ДЗ одобрено")
+        
+    except Exception as e:
+        logger.error(f"cb_hw_manual_approve error: {e}", exc_info=True)
+        await query.answer("❌ Ошибка при одобрении", show_alert=True)
+
+
+@dp.callback_query(lambda c: c.data.startswith("hw_manual_reject:"))
+async def cb_hw_manual_reject(query: types.CallbackQuery):
+    """Ручное отклонение ДЗ оператором."""
+    data = query.data.split(":")
+    if len(data) < 5:
+        await query.answer("❌ Ошибка формата", show_alert=True)
+        return
+    
+    admin_msg_id = int(data[1])
+    student_user_id = int(data[2])
+    course_numeric_id = int(data[3])
+    lesson_num = int(data[4])
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Обновляем статус ДЗ
+            await conn.execute("""
+                UPDATE homework_gallery
+                SET status = 'rejected', feedback_text = 'Отклонено оператором (ИИ не ответил)'
+                WHERE admin_message_id = ?
+            """, (admin_msg_id,))
+            
+            # Удаляем из pending
+            await conn.execute("""
+                DELETE FROM pending_admin_homework
+                WHERE admin_message_id = ?
+            """, (admin_msg_id,))
+            
+            await conn.commit()
+        
+        # Отправляем уведомление студенту
+        course_id_str = await get_course_id_str(course_numeric_id)
+        try:
+            await bot.send_message(
+                student_user_id,
+                f"❌ Ваше ДЗ по курсу '{course_id_str}' урок {lesson_num} отклонено оператором.\n\n(ИИ-ассистент временно недоступен)\n\nПожалуйста, отправьте работу повторно."
+            )
+        except Exception as e_student:
+            logger.warning(f"Не удалось отправить студенту {student_user_id}: {e_student}")
+        
+        # Обновляем сообщение админа
+        await query.message.edit_caption(
+            caption=f"❌ Отклонено оператором\n(ИИ не ответил)",
+            reply_markup=None
+        )
+        await query.answer("❌ ДЗ отклонено")
+        
+    except Exception as e:
+        logger.error(f"cb_hw_manual_reject error: {e}", exc_info=True)
+        await query.answer("❌ Ошибка при отклонении", show_alert=True)
+
+
+# ====================================================================
 
 
 @dp.message(AskExpertState.waiting_for_expert_question, F.text)
@@ -3347,7 +3475,7 @@ async def create_course_old_format(message: types.Message, args: list):
         f"✅ Курс *{escape_md(course_id)}* создан (быстрый формат)!\n\n"
         f"📍 Группа: `{escape_md(group_id_str)}`\n"
         f"🔑 Коды: `{escape_md(code1)}`, `{escape_md(code2)}`, `{escape_md(code3)}`\n\n"
-        f"💾 Настройки сохранены в settings.json",
+        f"💾 Настройки сохране��ы в settings.json",
         parse_mode=None
     )
 
@@ -4745,7 +4873,7 @@ async def callback_delete_course_menu(callback: CallbackQuery):
 async def callback_delete_course_confirm(callback: CallbackQuery):
     """Подтверждение удаления курса"""
     if callback.from_user.id not in ADMIN_IDS_CONF:
-        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        await callback.answer("�� Только для администраторов.", show_alert=True)
         return
     
     course_id = callback.data.split(":")[1]
@@ -5999,7 +6127,7 @@ async def cb_stop_current_course(query: types.CallbackQuery, callback_data: Main
                 parse_mode=None
             )
             # Перенаправляем на выбор другого курса
-            await cb_select_other_course(query, state)  # Переиспользуем существующий обработчик
+            await cb_select_other_course(query, state)  # Переиспользуем существующий обработ��ик
         else:
             logger.warning(f"cb_stop_current_course FAILED: не удалось деактивировать курс {course_id_to_stop_str} для user {user_id}")
             # Если деактивация не удалась, можно просто обновить меню или ни��его не делать
@@ -7160,7 +7288,7 @@ async def cb_show_active_course_main_menu(query: types.CallbackQuery, callback_d
 
     # Используем current_lesson_db, так как requested_lesson_num из callback_data
     # может быть просто "маркером" для входа в меню.
-    # Или, если мы хотим перейти именно к lesson_num из callback_data (например, после "Содержание курса"):
+    # Или, если мы хотим перейти и��енно к lesson_num из callback_data (например, после "Содержание курса"):
     lesson_to_show_in_menu = requested_lesson_num  # или current_lesson_db, если это более актуально
 
     await send_main_menu(
@@ -9231,7 +9359,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
                 text="📚 Содержание/Повтор",  # Изменено название для ясности
                 callback_data=SelectLessonForRepeatCallback(course_numeric_id=course_numeric_id).pack()
             )
-        # ... (остальные кнопки Прогресс, Все курсы и т.д. как были) ...
+        # ... (остальные кнопки Прогр��сс, Все курсы и т.д. как были) ...
         builder.row()
 
         builder.button(text="📈 Прогресс", callback_data="menu_progress")
