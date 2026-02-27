@@ -55,6 +55,7 @@ COURSE_GROUPS: list
 # Они будут загружены из os.getenv() в функции main()
 BOT_TOKEN_CONF: str
 ADMIN_IDS_CONF: list[int] = []
+GIT_VERSION: str = "unknown"  # Версия бота (git commit)
 
 # Имена ниже соответствуют вашему .env
 WEBHOOK_HOST_CONF: str       # Публичный URL (BASE_PUBLIC_URL)
@@ -6505,6 +6506,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         user_id,
                         f"👑 АДМИН-МЕНЮ\n\n"
                         f"У вас нет активного курса для тестирования.\n\n"
+                        f"📦 Версия бота: `{GIT_VERSION}`\n\n"
                         f"💡 Команды:\n"
                         f"• /show_codes — курсы и коды\n"
                         f"• /add_course — создать курс\n"
@@ -6516,7 +6518,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"• /set_hw_timeout <сек> — таймаут AI-проверки (сейчас {hw_timeout_formatted})\n\n"
                         f"Или активируйте курс кодом для тестирования.",
                         reply_markup=admin_keyboard,
-                        parse_mode=None
+                        parse_mode="Markdown"
                     )
                 return
 
@@ -8256,7 +8258,7 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
             )
 
             prompt_text = "Пожалуйста, введите ваш комментарий для студента (одобрение):" if action == "approve_reason" else "Пожалуйста, введите причину отклонения для студента:"
-            # Определяем исходный текст/caption сообщения, к которому добавим prompt_text
+            # Определяем исходный текст/caption сообщения, к которому доба����им prompt_text
             original_message_content = ""
             if callback_query.message.text:
                 original_message_content = callback_query.message.text
@@ -9693,16 +9695,19 @@ async def default_callback_handler(query: types.CallbackQuery):
 
 # ---- ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ ВЕБХУКОМ ----
 async def on_startup():
-    global bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF
+    global bot, WEBHOOK_HOST_CONF, WEBHOOK_PATH_CONF, BOT_TOKEN_CONF, GIT_VERSION
 
     # Логируем git-коммит чтобы видеть какой код запущен
     try:
         import subprocess
         git_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
         git_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
-        logger.info(f"=== КОД: ветка={git_branch}, коммит={git_hash} ===")
+        git_date = subprocess.check_output(["git", "log", "-1", "--format=%ci"], stderr=subprocess.DEVNULL).decode().strip()
+        GIT_VERSION = f"{git_branch}/{git_hash} ({git_date})"
+        logger.info(f"=== КОД: ветка={git_branch}, коммит={git_hash}, дата={git_date} ===")
     except Exception:
         logger.info("=== КОД: git info недоступен ===")
+        GIT_VERSION = "unknown"
 
     # Проверяем режим работы
     webhook_mode_env = os.getenv("WEBHOOK_MODE", "true").lower()
