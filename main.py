@@ -1170,38 +1170,38 @@ async def stop_lesson_schedule_task(user_id: int):
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
     """
-    Обратный отсчёт на карточке ДЗ в группе админов.
-    Обновляет сообщение каждые ~20 сек, показывая сколько времени осталось до отправки в n8n.
-    Когда время вышло — убирает кнопки и пишет "ИИ-ассистент начал проверку".
-    Останавливается при отмене (asyncio.CancelledError).
+    Обратный отсчёт. Если время вышло — убирает кнопки и считает ВРЕМЯ ПРОВЕРКИ ИИ.
+    Останавливается при отмене.
     """
-    STEP = 20  # секунд между обновлениями
+    STEP = 10  # Шаг 10 секунд (синхронно с проверкой)
     elapsed = 0
+    max_wait = timeout_seconds * 3  # Максимум ждем (до авто-одобрения)
+
     logger.info(f"run_hw_countdown START: msg={admin_msg_id}, timeout={timeout_seconds}, is_media={is_media}")
     try:
-        while elapsed < timeout_seconds:
+        while elapsed <= max_wait:
             await asyncio.sleep(STEP)
             elapsed += STEP
-            remaining = max(0, timeout_seconds - elapsed)
             
-            # Обновляем только строку с таймером
-            if remaining > 0:
+            # --- ФОРМИРУЕМ СТРОКУ ТАЙМЕРА ---
+            if elapsed <= timeout_seconds:
+                remaining = timeout_seconds - elapsed
                 timer_line = f"🤖 До AI-проверки: {remaining} сек"
                 current_reply_markup = reply_markup
             else:
-                timer_line = "⏳ ИИ-ассистент начал проверку ДЗ     подождите..."
+                checking_time = elapsed - timeout_seconds
+                timer_line = f"⏳ ИИ проверяет ДЗ... ({checking_time} сек)"
                 current_reply_markup = None
             
-            # Заменяем только строку с таймером
+            # --- ЗАМЕНЯЕМ СТРОКУ В ТЕКСТЕ ---
             updated_lines = []
             for line in base_text.splitlines():
-                if line.startswith("🤖 До AI-проверки:") or line.startswith("⏳ ИИ-ассистент"):
+                if line.startswith("🤖 До AI-проверки:") or line.startswith("⏳ ИИ проверяет ДЗ"):
                     updated_lines.append(timer_line)
                 else:
                     updated_lines.append(line)
             updated_text = "\n".join(updated_lines)
             
-            logger.info(f"run_hw_countdown: msg={admin_msg_id}, elapsed={elapsed}, remaining={remaining}")
             try:
                 if is_media:
                     await bot.edit_message_caption(
@@ -1219,14 +1219,11 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                         parse_mode=None,
                         reply_markup=current_reply_markup,
                     )
-                logger.info(f"run_hw_countdown: msg={admin_msg_id} обновлён, remaining={remaining}")
             except Exception as e:
-                logger.warning(f"run_hw_countdown: не удалось обновить msg {admin_msg_id}: {e}")
+                pass  # Игнорируем ошибки "message not modified"
             
-            if remaining == 0:
-                break
     except asyncio.CancelledError:
-        logger.info(f"run_hw_countdown: msg={admin_msg_id} отменён (CancelledError)")
+        logger.info(f"run_hw_countdown: msg={admin_msg_id} отменён (ДЗ проверено!)")
     finally:
         hw_countdown_tasks.pop(admin_msg_id, None)
 
@@ -1347,11 +1344,12 @@ async def check_pending_homework_timeout():
 
                         # Строим callback URL
                         # Если задан BOT_INTERNAL_URL (для Docker сети), используем его
+                        secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
                         if BOT_INTERNAL_URL:
-                            callback_base = BOT_INTERNAL_URL.rstrip("/")
+                            # Теперь внутренний URL ТОЖЕ использует secret_path, чтобы не было 404!
+                            callback_base = f"{BOT_INTERNAL_URL.rstrip('/')}/{secret_path}"
                         else:
                             host = WEBHOOK_HOST_CONF.rstrip("/")
-                            secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
                             callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
                         callback_url = f"{callback_base}/n8n_hw_result"
 
@@ -2330,7 +2328,7 @@ async def _send_lesson_parts(user_id: int, course_id: str, lesson_num: int, user
 
         if piece_level > user_course_level:
             logger.info(
-                f"Пропуск части {k} урока {lesson_num} (ур��ве��ь сообщения {piece_level} > уровня пользователя {user_course_level})")
+                f"Пропуск части {k} урока {lesson_num} (ур��ве��ь со��бщения {piece_level} > уровня пользователя {user_course_level})")
             continue
 
         safe_caption = escape_md(current_piece_text)
@@ -3464,10 +3462,10 @@ async def cmd_add_course(message: types.Message, state: FSMContext, command: Com
     await state.set_state(AddCourseFSM.waiting_group_id)
     await message.answer(
         "🆕 Создание нового курса (7 шагов)\n\n"
-        "Шаг 1/7: Введите ID группы Telegram\n"
+        "Шаг 1/7: Введите ID гр������ппы Telegram\n"
         "Пример: `-1001234567890`\n\n"
         "💡 Чтобы узнать ID группы:\n"
-        "1. Добавьте б��та @getidsbot в группу\n"
+        "1. Добавь��е б��та @getidsbot в группу\n"
         "2. Он покажет ID (начинается с -100)\n\n"
         "💡 Для отмены отправьте /cancel"
     )
@@ -8276,7 +8274,7 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
             # await state.clear() # Опционально, если хотим прервать ожидание текста
 
         if action == "approve_hw":
-            await callback_query.answer("Одобряю ДЗ...")
+            await callback_query.answer("��добряю ДЗ...")
             await handle_homework_result(user_id, course_id_str, course_numeric_id, lesson_num, admin_user_id, "", True,
                                          callback_query, admin_message_id_with_buttons)
         elif action == "reject_hw":
@@ -9382,7 +9380,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         course_numeric_id = await get_course_id_int(course_id)
         if course_numeric_id == 0 and course_id:  # Если get_course_id_int вернул 0, но course_id был
             logger.error(
-                f"Критическая ошибка: не удалось получить числовой ID для курса '{course_id}' в send_main_menu.")
+                f"Критическая ошибк��: не удалось получить числовой ID для курса '{course_id}' в send_main_menu.")
             await bot.send_message(user_id, escape_md(
                 "Произошла ошибка при загрузке меню курса (ID не найден). Обратитесь в поддержку."),
                                    parse_mode=None)
@@ -10043,10 +10041,18 @@ async def main():
         except asyncio.CancelledError:
             logger.info("Webhook server stopped")
     else:
-        # Polling режим - запускаем минимальный HTTP сервер для health checks
+        # Polling режим - запускаем минимальный HTTP сервер для health checks и n8n callback
         app = web.Application()
+        app['bot'] = bot  # Передаем бота в aiohttp (для коллбэков)
+        
+        # 1. Роуты для Health Check
         app.router.add_get('/health/live', liveness_probe)
         app.router.add_get('/health', liveness_probe)
+        
+        # 2. Роуты для N8N (чтобы внутренний URL работал без 404!)
+        app.router.add_post(f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}/n8n_hw_result", handle_n8n_hw_approval)
+        app.router.add_post(f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}/n8n_hw_processing_error", handle_n8n_hw_error)
+        app.router.add_post(f"/{WEBHOOK_SECRET_PATH_CONF.strip('/')}/n8n_expert_answer/{{user_id}}/{{message_id}}", handle_n8n_expert_answer)
         
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
@@ -10055,13 +10061,13 @@ async def main():
         
         logger.info("=" * 60)
         logger.info("✅ БОТ УСПЕШНО ЗАПУЩЕН В РЕЖИМЕ POLLING")
-        logger.info(f"🌐 Health endpoint: http://0.0.0.0:{WEBAPP_PORT_CONF}/health/live")
+        logger.info(f"🌐 Внутренний сервер: http://0.0.0.0:{WEBAPP_PORT_CONF}")
+        logger.info(f"🔗 n8n callbacks слушают путь: /{WEBHOOK_SECRET_PATH_CONF.strip('/')}/n8n_hw_result")
         logger.info("=" * 60)
         
         # Запускаем polling в фоне
         polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
         
-        # Ждем пока polling работает
         try:
             await polling_task
         except asyncio.CancelledError:
