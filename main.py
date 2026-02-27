@@ -9752,8 +9752,13 @@ async def on_startup():
         GIT_VERSION = f"{git_branch}/{git_hash} ({git_date})"
         logger.info(f"=== КОД: ветка={git_branch}, коммит={git_hash}, дата={git_date} ===")
     except Exception:
-        logger.info("=== КОД: git info недоступен ===")
-        GIT_VERSION = "unknown"
+        # Git не доступен — читаем из файла VERSION
+        try:
+            with open("VERSION", "r") as f:
+                GIT_VERSION = f.read().strip()
+        except Exception:
+            GIT_VERSION = "unknown"
+        logger.info(f"=== КОД: git info недоступен, версия={GIT_VERSION} ===")
 
     # Проверяем режим работы
     webhook_mode_env = os.getenv("WEBHOOK_MODE", "true").lower()

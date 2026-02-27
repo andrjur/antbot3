@@ -17,6 +17,7 @@ services:
       - ./bot.db:/app/bot.db  # База данных
       - ./logs:/app/logs      # Логи
       - ./settings.json:/app/settings.json  # Настройки
+      - ./VERSION:/app/VERSION  # Версия бота
     networks:
       - antbot-network
     healthcheck:
