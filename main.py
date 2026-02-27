@@ -1161,7 +1161,7 @@ async def stop_lesson_schedule_task(user_id: int):
         task = lesson_check_tasks[user_id]
         task.cancel()
         del lesson_check_tasks[user_id]
-        logger.info(f"Остановлена задача проверки расписания уроков дл������������������������������ пользова������еля {user_id}.")
+        logger.info(f"Остановлена задача проверки расписания уроков дл������������������������������������ пользова������еля {user_id}.")
 
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
@@ -1269,6 +1269,14 @@ async def check_pending_homework_timeout():
                         
                         course_id_str = await get_course_id_str(course_numeric_id)
                         
+                        # Получаем username студента для уведомления
+                        cursor_student = await conn.execute(
+                            "SELECT username, first_name FROM users WHERE user_id = ?",
+                            (student_user_id,)
+                        )
+                        student_info = await cursor_student.fetchone()
+                        student_username = f"@{student_info[0]}" if student_info and student_info[0] else student_info[1] if student_info else f"User {student_user_id}"
+                        
                         # Вызываем штатную функцию обработки результата
                         await handle_homework_result(
                             user_id=student_user_id,
@@ -1286,7 +1294,7 @@ async def check_pending_homework_timeout():
                         try:
                             await bot.send_message(
                                 chat_id=ADMIN_GROUP_ID,
-                                text=f"⚠️ ДЗ выше одобрено АВТОМАТИЧЕСКИ (ИИ не ответил за {format_time_duration(3 * HW_TIMEOUT_SECONDS)}).",
+                                text=f"⚠️ ДЗ {student_username} одобрено АВТОМАТИЧЕСКИ (ИИ не ответил за {format_time_duration(3 * HW_TIMEOUT_SECONDS)}).",
                                 reply_to_message_id=admin_msg_id,
                                 parse_mode=None
                             )
@@ -2314,7 +2322,7 @@ async def _send_lesson_parts(user_id: int, course_id: str, lesson_num: int, user
 
         if piece_level > user_course_level:
             logger.info(
-                f"Пропуск части {k} урока {lesson_num} (уровень сообщения {piece_level} > уровня пользователя {user_course_level})")
+                f"Пропуск части {k} урока {lesson_num} (ур��ве��ь сообщения {piece_level} > уровня пользователя {user_course_level})")
             continue
 
         safe_caption = escape_md(current_piece_text)
@@ -3451,7 +3459,7 @@ async def cmd_add_course(message: types.Message, state: FSMContext, command: Com
         "Шаг 1/7: Введите ID группы Telegram\n"
         "Пример: `-1001234567890`\n\n"
         "💡 Чтобы узнать ID группы:\n"
-        "1. Добавьте бота @getidsbot в группу\n"
+        "1. Добавьте б��та @getidsbot в группу\n"
         "2. Он покажет ID (начинается с -100)\n\n"
         "💡 Для отмены отправьте /cancel"
     )
@@ -6476,7 +6484,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"• /list_admins — список админов\n"
                         f"• /add_admin <ID> — добавить админа\n"
                         f"• /remove_admin <ID> — удалить админа\n"
-                        f"• /set_hw_timeout <сек> — таймаут AI-проверки\n"
+                        f"• /set_hw_timeout <сек> — таймаут AI-проверки (сейчас {format_time_duration(HW_TIMEOUT_SECONDS)})\n"
                         f"• /export_db — экспорт базы\n"
                         f"• /import_db — импорт базы\n"
                         f"• /remind <id> <msg> — напоминание\n"
@@ -8910,6 +8918,20 @@ async def handle_homework(message: types.Message):
 
     course_numeric_id, current_lesson, version_id = user_course_data
     course_id = await get_course_id_str(course_numeric_id)
+    
+    # Если current_lesson=0, пробуем прочитать актуальное значение из БД
+    # (может быть рассинхрон при быстрой отправке ДЗ после урока)
+    if current_lesson == 0:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            cursor = await conn.execute(
+                "SELECT current_lesson FROM user_courses WHERE user_id = ? AND status = 'active'",
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+            if row and row[0] > 0:
+                current_lesson = row[0]
+                logger.info(f"handle_homework: исправлено current_lesson=0 → {current_lesson}")
+    
     logger.info(f"handle_homework: course_id={course_id}, lesson={current_lesson}, version={version_id}")
 
     if current_lesson == 0:
@@ -9350,7 +9372,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         if lesson_has_homework_defined:  # Если для этого урока в принципе есть ДЗ
             if homework_pending:  # Если текущий статус в user_courses - pending или rejected
                 domashka_text = f"ожидается ({expected_hw_type_for_this_lesson})"
-            else:  # ДЗ для этого урока было, и сейчас оно принято (hw_status = 'approved' или 'none'/'not_required' и т.п.)
+            else:  # ДЗ для этого урока было, и сейчас оно принят�� (hw_status = 'approved' или 'none'/'not_required' и т.п.)
                 # Или это урок 0, для которо��о ДЗ не бывает pending.
                 if lesson_num == 0:  # Для урока-описания
                     domashka_text = escape_md("не предусмотрена")
