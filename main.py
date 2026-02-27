@@ -6460,7 +6460,24 @@ async def cmd_start(message: types.Message, state: FSMContext):
                     # Проверяем тест-режим
                     test_mode_active = user_id in ADMIN_TEST_MODE
                     test_mode_status = "⚡ ВКЛЮЧЕН" if test_mode_active else "🕐 ВЫКЛЮЧЕН"
-                    test_mode_interval = f"{TEST_MODE_INTERVAL_MINUTES} мин" if test_mode_active else "12 ч"
+                    
+                    # Получаем интервал из settings.json
+                    message_interval_hours = settings.get("message_interval", 24)
+                    if test_mode_active:
+                        test_mode_interval = f"{TEST_MODE_INTERVAL_MINUTES} мин (тест)"
+                        interval_text = f"⚡ Уроки каждые {TEST_MODE_INTERVAL_MINUTES} мин"
+                    else:
+                        # Форматируем интервал в человекочитаемый вид
+                        if message_interval_hours < 1:
+                            interval_minutes = int(message_interval_hours * 60)
+                            test_mode_interval = f"{interval_minutes} мин"
+                            interval_text = f"⚡ Уроки каждые {interval_minutes} мин"
+                        elif message_interval_hours == 1:
+                            test_mode_interval = "1 час"
+                            interval_text = "⚡ Уроки каждый час"
+                        else:
+                            test_mode_interval = f"{message_interval_hours} ч"
+                            interval_text = f"⚡ Уроки каждые {message_interval_hours} ч"
 
                     admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="⏹ Остановить тестирование курса", callback_data=MainMenuAction(action="stop_course", course_id_numeric=course_numeric_id).pack())],
@@ -6476,7 +6493,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"🔑 Тариф: {version_name}\n"
                         f"📚 Текущий урок: {lesson_num}\n\n"
                         f"🕐 Тест-режим: {test_mode_status} ({test_mode_interval})\n"
-                        f"{'⚡ Уроки каждые ' + str(TEST_MODE_INTERVAL_MINUTES) + ' мин' if test_mode_active else '💡 Для быстрого тестирования: /test_mode'}\n\n"
+                        f"{interval_text}\n"
+                        f"{'Чтобы выключить: /test_mode' if test_mode_active else '💡 Для быстрого тестирования: /test_mode'}\n\n"
                         f"💡 Команды:\n"
                         f"• /show_codes — курсы и коды\n"
                         f"• /add_course — создать курс\n"
@@ -6501,12 +6519,23 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         [InlineKeyboardButton(text="➕ Создать курс", callback_data="admin_add_course")]
                     ])
                     hw_timeout_formatted = format_time_duration(HW_TIMEOUT_SECONDS)
+                    
+                    # Получаем интервал из settings.json
+                    message_interval_hours = settings.get("message_interval", 24)
+                    if message_interval_hours < 1:
+                        interval_minutes = int(message_interval_hours * 60)
+                        interval_text = f"{interval_minutes} мин"
+                    elif message_interval_hours == 1:
+                        interval_text = "1 час"
+                    else:
+                        interval_text = f"{message_interval_hours} ч"
 
                     await bot.send_message(
                         user_id,
                         f"👑 АДМИН-МЕНЮ\n\n"
                         f"У вас нет активного курса для тестирования.\n\n"
                         f"📦 Версия бота: {GIT_VERSION}\n\n"
+                        f"🕐 Интервал между уроками: {interval_text}\n\n"
                         f"💡 Команды:\n"
                         f"• /show_codes — курсы и коды\n"
                         f"• /add_course — создать курс\n"
@@ -7162,7 +7191,7 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
 
 
     if not all_system_courses:
-        await query.message.edit_text(escape_md("К сожалению, сейчас нет доступных курсов для выбора."),
+        await query.message.edit_text(escape_md("К сожалению, се��час нет доступных курсов для выбора."),
                                       parse_mode=None, reply_markup=None)
         return
 
@@ -8194,6 +8223,16 @@ def get_tariff_name(version_id: str) -> str:
         "v3": "VIP"
     }
     return TARIFF_NAMES.get(version_id, f"Тариф {version_id}")
+
+
+def get_next_lesson_time(user_id: int, course_id: str) -> str:
+    """Возвращает время следующего урока для пользователя."""
+    try:
+        # Это заглушка — реальное время нужно брать из user_courses.last_sent_time
+        # Для простоты возвращаем "скоро" или "неизвестно"
+        return "скоро"  # TODO: реализовать расчёт времени
+    except Exception:
+        return "неизвестно"
 
 
 # НАДО 18-04
