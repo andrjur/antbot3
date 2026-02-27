@@ -1014,7 +1014,7 @@ async def check_lesson_schedule(user_id: int, hours=24, minutes=0):
                     time_left = next_lesson_event_time_utc - current_time_aware_utc
 
                     if time_left.total_seconds() > 10 and not (hours == 0 and minutes == 0):
-                        display_next_lesson_time = await get_next_lesson_time(user_id, course_id, current_lesson_db)
+                        display_next_lesson_time = get_next_lesson_time(user_id, course_id, current_lesson_db)
                         status_time_message = f"⏳ Следующий урок: {display_next_lesson_time}\n"
 
                         if menu_message_id:
@@ -3460,7 +3460,7 @@ async def cmd_add_course(message: types.Message, state: FSMContext, command: Com
             # Старый формат - быстрое создание
             return await create_course_old_format(message, args)
     
-    # Новый FSM формат
+    # Новый FSM ф������рмат
     await state.set_state(AddCourseFSM.waiting_group_id)
     await message.answer(
         "🆕 Создание нового курса (7 шагов)\n\n"
@@ -4854,7 +4854,7 @@ async def callback_delete_all_confirm(callback: CallbackQuery):
     
     await callback.message.edit_text(
         "⚠️ ВНИМАНИЕ!\n\n"
-        "Вы уверены, что хотите удалить ВСЕ уроки из баз�� данных?\n\n"
+        "Вы уверены, что хотите удалить ВСЕ уроки из б��з�� данных?\n\n"
         "Это действие НЕОБРАТИМО!",
         reply_markup=keyboard
     )
@@ -6018,7 +6018,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
     # Кнопка для ввода номера урока вручную и кнопка "Назад"
     lessons_buttons_builder.row(
         InlineKeyboardButton(text="✍️ Ввести номер", callback_data=f"manual_lesson_repeat:{course_numeric_id}"),
-        InlineKeyboardButton(text="⬅️ Назад в меню",  # Callback ведет в send_main_menu для ТЕКУЩЕГО урока пользователя
+        InlineKeyboardButton(text="⬅️ Назад в меню",  # Callback ведет �� send_main_menu для ТЕКУЩЕГО урока пользователя
                              callback_data=ShowActiveCourseMenuCallback(course_numeric_id=course_numeric_id,
                                                                         lesson_num=user_current_lesson_on_course).pack())
     )
@@ -7191,7 +7191,7 @@ async def cb_select_other_course(query: types.CallbackQuery, state: FSMContext):
                 "status": uc_status, "current_lesson": uc_lesson,
                 "version_id": uc_version, "numeric_id": uc_numeric_id
             }
-            if uc_status == 'active' and not active_course_for_back_button: # Запоминаем первый активный для кнопки "Назад"
+            if uc_status == 'active' and not active_course_for_back_button: # Запоминаем первый акти��ны�� для кнопки "Назад"
                 active_course_for_back_button = {
                     "numeric_id": uc_numeric_id, "current_lesson": uc_lesson,
                 }
@@ -8272,7 +8272,7 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
                 f"process_homework_action вызван, когда бот уже в состоянии Form.feedback. Возможно, админ нажал кнопку, пока бот ждал текст. Очищаю состояние.")
             # Можно либо проигнорировать этот вызов, либо очистить состояние и продолжить,
             # предполагая, что новое нажатие кнопки важнее.
-            # Пока просто залогируем и продолжи��. Если это создает проблемы, нужно будет решить, как лучше обрабатывать.
+            # Пока просто залогируем и ��родо��жи��. Если это создает проблемы, нужно будет решить, как лучше обрабатывать.
             # await state.clear() # Опционально, если хотим прервать ожидание текста
 
         if action == "approve_hw":
@@ -9022,7 +9022,7 @@ async def handle_homework(message: types.Message):
 
     if hw_row and hw_row[0] == 'approved':
         logger.info(f"handle_homework: hw_status=approved для user={user_id}, lesson={current_lesson}")
-        next_lesson_time = escape_md(await get_next_lesson_time(user_id, course_id, current_lesson))
+        next_lesson_time = escape_md(get_next_lesson_time(user_id, course_id, current_lesson))
         await message.answer(
             f"✅ Домашка уже засчитана!\n\nСледующий урок: {next_lesson_time}",
             parse_mode=None
@@ -9393,7 +9393,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
         tariff_name_safe = escape_md(settings.get("tariff_names", {}).get(version_id, "Базовый"))
         interval_value = settings.get("message_interval", 24)
         interval_safe_str = escape_md(str(interval_value)) + " ч"
-        next_lesson_display_text_safe = escape_md(await get_next_lesson_time(user_id, course_id, lesson_num))
+        next_lesson_display_text_safe = escape_md(get_next_lesson_time(user_id, course_id, lesson_num))
 
 
         # добавочка 21 мая
