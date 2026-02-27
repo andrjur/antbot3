@@ -46,7 +46,19 @@ TelegramBadRequest: can't parse entities: Can't find end of the entity starting 
 
 **Урок:** Использовать Markdown только там, где можно гарантировать отсутствие спецсимволов. Для версий и технических данных — `parse_mode=None`.
 
-### Fix 3: Конфликт обработчиков (aiogram 3 Routing)
+### Fix 3: Ошибка await в get_next_lesson_time() (27.02.2026)
+**Проблема:** Функция `get_next_lesson_time()` вызывалась с `await`, но она не async.
+```
+TypeError: object str can't be used in 'await' expression
+```
+**Решение:** Убран `await` из всех вызовов:
+- `send_main_menu()` (строка ~9396)
+- `handle_homework()` (строка ~9025)
+- `send_lesson_to_user()` (строка ~1017)
+
+**Урок:** Проверять является ли функция async перед использованием await.
+
+### Fix 4: Конфликт обработчиков (aiogram 3 Routing)
 **Проблема:** Бот игнорировал команду `/upload_lesson` и другие команды админа. Команды перехватывались общим обработчиком `handle_text` (который ловит `F.text`), возвращали `UNHANDLED`, но дальше по цепочке не шли.
 **Решение:**
 1. Настроен строгий порядок регистрации обработчиков в файле (сверху вниз): Команды -> FSM -> Общие (text/media).

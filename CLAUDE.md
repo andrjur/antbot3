@@ -128,7 +128,26 @@ n8n **не должен** иметь жёстко прописанный URL д�
 URL: {{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}
 ```
 
-### 7. Docker сеть — внутренние vs внешние URL
+### 8. Функция get_next_lesson_time() — НЕ async
+
+**Проблема:** Функция `get_next_lesson_time()` была вызвана с `await`, что вызывало ошибку:
+```
+TypeError: object str can't be used in 'await' expression
+```
+
+**Решение:** Функция **НЕ async**, поэтому `await` не нужен:
+```python
+# ❌ ПЛОХО:
+next_lesson = await get_next_lesson_time(user_id, course_id, lesson_num)
+
+# ✅ ХОРОШО:
+next_lesson = get_next_lesson_time(user_id, course_id, lesson_num)
+```
+
+**Где используется:**
+- `send_main_menu()` (строка ~9396)
+- `handle_homework()` (строка ~9025)
+- `send_lesson_to_user()` (строка ~1017)
 - **Внутри Docker:** `http://bot:8080` (для связи контейнеров)
 - **Снаружи (Cloudflare):** `https://bot.indikov.ru` (для Telegram и n8n callback)
 
