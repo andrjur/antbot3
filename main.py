@@ -1165,7 +1165,7 @@ async def stop_lesson_schedule_task(user_id: int):
         task = lesson_check_tasks[user_id]
         task.cancel()
         del lesson_check_tasks[user_id]
-        logger.info(f"Остановлена задача проверки расписания уроков дл������������������������������������ пользова������еля {user_id}.")
+        logger.info(f"Остановлена задача проверки расписания уроков для пользоваеля {user_id}.")
 
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
@@ -4854,7 +4854,7 @@ async def callback_delete_all_confirm(callback: CallbackQuery):
     
     await callback.message.edit_text(
         "⚠️ ВНИМАНИЕ!\n\n"
-        "Вы уверены, что хотите удалить ВСЕ уроки из базы данных?\n\n"
+        "Вы уверены, что хотите удалить ВСЕ уроки из баз�� данных?\n\n"
         "Это действие НЕОБРАТИМО!",
         reply_markup=keyboard
     )
@@ -8232,7 +8232,7 @@ def get_tariff_name(version_id: str) -> str:
     return TARIFF_NAMES.get(version_id, f"Тариф {version_id}")
 
 
-def get_next_lesson_time(user_id: int, course_id: str) -> str:
+def get_next_lesson_time(user_id: int, course_id: str, lesson_num: int = 0) -> str:
     """Возвращает время следующего урока для пользователя."""
     try:
         # Это заглушка — реальное время нужно брать из user_courses.last_sent_time
@@ -8272,7 +8272,7 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
                 f"process_homework_action вызван, когда бот уже в состоянии Form.feedback. Возможно, админ нажал кнопку, пока бот ждал текст. Очищаю состояние.")
             # Можно либо проигнорировать этот вызов, либо очистить состояние и продолжить,
             # предполагая, что новое нажатие кнопки важнее.
-            # Пока просто залогируем и продолжим. Если это создает проблемы, нужно будет решить, как лучше обрабатывать.
+            # Пока просто залогируем и продолжи��. Если это создает проблемы, нужно будет решить, как лучше обрабатывать.
             # await state.clear() # Опционально, если хотим прервать ожидание текста
 
         if action == "approve_hw":
