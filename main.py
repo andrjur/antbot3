@@ -1171,7 +1171,7 @@ async def stop_lesson_schedule_task(user_id: int):
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
     """
     Обратный отсчёт на карточке ДЗ в группе админов.
-    Обновляет сообщение каждые ~20 сек, показывая сколько времени прошло.
+    Обновляет сообщение каждые ~20 сек, показывая сколько времени осталось до отправки в n8n.
     Когда время вышло — убирает кнопки и пишет "ИИ-ассистент начал проверку".
     Останавливается при отмене (asyncio.CancelledError).
     """
@@ -6018,7 +6018,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
     # Кнопка для ввода номера урока вручную и кнопка "Назад"
     lessons_buttons_builder.row(
         InlineKeyboardButton(text="✍️ Ввести номер", callback_data=f"manual_lesson_repeat:{course_numeric_id}"),
-        InlineKeyboardButton(text="⬅️ Назад в меню",  # Callback ведет �� send_main_menu для ТЕКУЩЕГО урока пользователя
+        InlineKeyboardButton(text="⬅����� Назад в меню",  # Callback ведет �� send_main_menu для ТЕКУЩЕГО урока пользователя
                              callback_data=ShowActiveCourseMenuCallback(course_numeric_id=course_numeric_id,
                                                                         lesson_num=user_current_lesson_on_course).pack())
     )
@@ -9185,7 +9185,7 @@ async def handle_homework(message: types.Message):
         f"📚 Курс: {escape_md(display_course_title)}\n"
         f"⚡ Тариф: {escape_md(version_id)}\n"
         f"📖 Урок: {current_lesson}\n"
-        f"🤖 До AI-проверки: 0 сек назад\n"
+        f"🤖 До AI-проверки: {HW_TIMEOUT_SECONDS} сек\n"
     )
 
     try:
