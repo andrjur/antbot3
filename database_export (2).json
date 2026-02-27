@@ -45,16 +45,6 @@
             "course_type": "LESSON_BASED"
         },
         {
-            "course_id": "sprint21",
-            "id": 6,
-            "group_id": "1003710956962",
-            "title": "sprint21 basic",
-            "message_interval": 24.0,
-            "description": "Курс, который не даст тебе слиться 🎯\nУстал от марафонов, которые покупаешь и бросаешь на второй день?\nДобро пожаловать в «НЕЙРО-РЕСЕТ» — хардкорный 28-дневный спринт по восстановлению сна и снижению стресса.\nМы взяли механику agile-спринтов, добавили строгую проверку искусственным интеллектом и направили это на самую важную цель — твою батарейку 🔋.\nПравила игры просты:\n1️⃣ Бот выдает задание (например: убрать телефон за 2 метра от кровати).\n2️⃣ Ты делаешь фото-доказательство.\n3️⃣ Если ИИ или куратор видят, что ты схитрил — задание не принято. Дальше не пройдешь.\nТолько конкретные действия, меняющие твою нейрохимию. Через 28 дней твой мелатонин вырастет на 50%, а кортизол рухнет вниз.\nОсмелишься проверить, сможешь ли ты пройти ИИ-контролера?",
-            "created_at": "2026-02-24 09:37:07",
-            "course_type": "LESSON_BASED"
-        },
-        {
             "course_id": "sprint2",
             "id": 7,
             "group_id": "-1003710956962",
@@ -121,15 +111,60 @@
             "course_id": "sprint2",
             "version_id": "v2",
             "status": "inactive",
-            "hw_status": "none",
-            "hw_type": "none",
-            "current_lesson": 0,
+            "hw_status": "approved",
+            "hw_type": null,
+            "current_lesson": 1,
             "level": 1,
-            "first_lesson_sent_time": "2026-02-24 07:24:40",
-            "last_lesson_sent_time": "2026-02-24 07:24:40",
+            "first_lesson_sent_time": "2026-02-24 12:01:13",
+            "last_lesson_sent_time": "2026-02-24 12:01:14",
             "is_completed": 0,
             "last_menu_message_id": null,
-            "activation_date": "2026-02-24 07:24:40"
+            "activation_date": "2026-02-24 12:01:13"
+        },
+        {
+            "user_id": 954230772,
+            "course_id": "sprint2",
+            "version_id": "v3",
+            "status": "inactive",
+            "hw_status": "approved",
+            "hw_type": null,
+            "current_lesson": 1,
+            "level": 1,
+            "first_lesson_sent_time": "2026-02-24 12:27:37",
+            "last_lesson_sent_time": "2026-02-24 12:27:37",
+            "is_completed": 0,
+            "last_menu_message_id": null,
+            "activation_date": "2026-02-24 12:27:37"
+        },
+        {
+            "user_id": 954230772,
+            "course_id": "sprint2",
+            "version_id": "v1",
+            "status": "inactive",
+            "hw_status": "approved",
+            "hw_type": "text",
+            "current_lesson": 5,
+            "level": 1,
+            "first_lesson_sent_time": "2026-02-24 13:09:17",
+            "last_lesson_sent_time": "2026-02-24 14:42:57",
+            "is_completed": 0,
+            "last_menu_message_id": 5765,
+            "activation_date": "2026-02-24 13:09:17"
+        },
+        {
+            "user_id": 954230772,
+            "course_id": "base",
+            "version_id": "v2",
+            "status": "inactive",
+            "hw_status": "none",
+            "hw_type": null,
+            "current_lesson": 3,
+            "level": 1,
+            "first_lesson_sent_time": "2026-02-24 14:43:54",
+            "last_lesson_sent_time": "2026-02-24 14:54:08",
+            "is_completed": 0,
+            "last_menu_message_id": null,
+            "activation_date": "2026-02-24 14:43:54"
         }
     ],
     "group_messages": [
@@ -1112,6 +1147,86 @@
             "is_bouns": 0,
             "open_time": null,
             "timestamp": "2026-02-24 11:27:06"
+        },
+        {
+            "id": 118,
+            "group_id": "direct_upload_954230772",
+            "lesson_num": 4,
+            "course_id": "sprint2",
+            "content_type": "photo",
+            "is_homework": 0,
+            "hw_type": null,
+            "text": "",
+            "file_id": "AgACAgIAAxkBAAIWrmmdw-LdAAHTa24zLhB9Q52Rm4PycQACkxNrG5_u8EhPbfvIjt2yzQEAAwIAA3gAAzoE",
+            "level": 1,
+            "message_id": 5806,
+            "is_forwarded": 0,
+            "forwarded_from_chat_id": null,
+            "forwarded_message_id": null,
+            "snippet": null,
+            "is_bouns": 0,
+            "open_time": null,
+            "timestamp": "2026-02-24 15:29:38"
+        },
+        {
+            "id": 119,
+            "group_id": "direct_upload_954230772",
+            "lesson_num": 5,
+            "course_id": "sprint2",
+            "content_type": "photo",
+            "is_homework": 0,
+            "hw_type": null,
+            "text": "",
+            "file_id": "AgACAgIAAxkBAAIWsGmdxLg_iihEtUlfVT0AARuky9h5mAACFA1rG6-NkUvLAAGcdgnevy0BAAMCAAN5AAM6BA",
+            "level": 1,
+            "message_id": 5808,
+            "is_forwarded": 0,
+            "forwarded_from_chat_id": null,
+            "forwarded_message_id": null,
+            "snippet": null,
+            "is_bouns": 0,
+            "open_time": null,
+            "timestamp": "2026-02-24 15:33:12"
+        },
+        {
+            "id": 120,
+            "group_id": "direct_upload_954230772",
+            "lesson_num": 6,
+            "course_id": "sprint2",
+            "content_type": "text",
+            "is_homework": 0,
+            "hw_type": null,
+            "text": "6 день...",
+            "file_id": null,
+            "level": 1,
+            "message_id": 5810,
+            "is_forwarded": 0,
+            "forwarded_from_chat_id": null,
+            "forwarded_message_id": null,
+            "snippet": null,
+            "is_bouns": 0,
+            "open_time": null,
+            "timestamp": "2026-02-24 15:34:17"
+        },
+        {
+            "id": 121,
+            "group_id": "direct_upload_954230772",
+            "lesson_num": 6,
+            "course_id": "sprint2",
+            "content_type": "photo",
+            "is_homework": 0,
+            "hw_type": null,
+            "text": "",
+            "file_id": "AgACAgIAAxkBAAIWs2mdxPl50wQCxbH3f_xp6ya_m9OxAAJEFWsbPhfYSEXYmUoSlqPpAQADAgADeQADOgQ",
+            "level": 1,
+            "message_id": 5811,
+            "is_forwarded": 0,
+            "forwarded_from_chat_id": null,
+            "forwarded_message_id": null,
+            "snippet": null,
+            "is_bouns": 0,
+            "open_time": null,
+            "timestamp": "2026-02-24 15:34:17"
         }
     ],
     "course_activation_codes": [
@@ -1152,24 +1267,6 @@
             "price_rub": 0
         },
         {
-            "code_word": "sprint21",
-            "course_id": "sprint21",
-            "version_id": "v1",
-            "price_rub": 0
-        },
-        {
-            "code_word": "sprint2ai",
-            "course_id": "sprint21",
-            "version_id": "v2",
-            "price_rub": 0
-        },
-        {
-            "code_word": "sprint2_vip",
-            "course_id": "sprint21",
-            "version_id": "v3",
-            "price_rub": 0
-        },
-        {
             "code_word": "base1",
             "course_id": "base",
             "version_id": "v1",
@@ -1199,6 +1296,50 @@
             "new_value": "v2",
             "details": "Курс 'sprint2' (тариф 'v2') успешно активирован.",
             "timestamp": "2026-02-24 07:24:40.329010+00:00"
+        },
+        {
+            "id": 58,
+            "user_id": 954230772,
+            "action_type": "COURSE_ACTIVATION",
+            "course_id": "sprint2",
+            "lesson_num": null,
+            "old_value": null,
+            "new_value": "v2",
+            "details": "Активирован/возобновлен курс 'sprint2' с тарифом 'v2'. Прогресс сброшен.",
+            "timestamp": "2026-02-24 12:01:13.683265+00:00"
+        },
+        {
+            "id": 59,
+            "user_id": 954230772,
+            "action_type": "COURSE_ACTIVATION",
+            "course_id": "sprint2",
+            "lesson_num": null,
+            "old_value": null,
+            "new_value": "v3",
+            "details": "Активирован/возобновлен курс 'sprint2' с тарифом 'v3'. Прогресс сброшен.",
+            "timestamp": "2026-02-24 12:27:37.378430+00:00"
+        },
+        {
+            "id": 60,
+            "user_id": 954230772,
+            "action_type": "COURSE_ACTIVATION",
+            "course_id": "sprint2",
+            "lesson_num": null,
+            "old_value": null,
+            "new_value": "v1",
+            "details": "Активирован/возобновлен курс 'sprint2' с тарифом 'v1'. Прогресс сброшен.",
+            "timestamp": "2026-02-24 13:09:17.727181+00:00"
+        },
+        {
+            "id": 61,
+            "user_id": 954230772,
+            "action_type": "COURSE_ACTIVATION",
+            "course_id": "base",
+            "lesson_num": null,
+            "old_value": null,
+            "new_value": "v2",
+            "details": "Курс 'base' (тариф 'v2') успешно активирован.",
+            "timestamp": "2026-02-24 14:43:54.702382+00:00"
         }
     ],
     "course_reviews": [

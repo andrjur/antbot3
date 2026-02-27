@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(git -C C:/clau log --oneline -10)",
+      "Bash(git -C C:/clau remote:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(ls:*)",
+      "Bash(python3:*)",
+      "Bash(git rm:*)",
+      "Bash(ssh andrjur@etppjmdtxr \"cd ~/antbot4 && git pull && sudo docker compose up -d --build bot 2>&1 | tail -20\")",
+      "Bash(ssh -o ConnectTimeout=10 andrjur@ssh-andrjur.alwaysdata.net \"cd ~/antbot4 && git pull && sudo docker compose up -d --build bot 2>&1 | tail -20\")",
+      "Bash(test:*)"
+    ]
+  }
+}

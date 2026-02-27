@@ -1,0 +1,52 @@
+
+antbot  | 00:58:41 6543 [send_course_description] - send_course_description: user_id=954230772, course_id='sprint2'  INFO
+antbot  | 00:58:41 6597 [send_course_description] - send_course_description: описание 'sprint2' отправлено user=954230772 (759 символов)  INFO
+antbot  | 00:58:41 2137 [_send_lesson_parts] - Пропуск части 2 урока 1 (уровень сообщения 2 > уровня пользователя 1)  INFO
+antbot  | 00:58:41 172 [feed_update] - Update id=841441439 is handled. Duration 582 ms by bot id=7473862113  INFO
+antbot  | 00:58:41 2176 [_send_lesson_parts] - Часть 3 урока 1 является ДЗ типа: None  INFO
+antbot  | 00:58:41 2178 [_send_lesson_parts] - Обработано/отправлено 2 из 3 частей урока 1.  INFO
+antbot  | 00:58:41 2205 [_update_user_course_after_lesson] - Новый урок 1 отправлен для 954230772. Время: 2026-02-25 21:58:41. Это ДЗ: True  INFO
+antbot  | 00:58:41 2209 [_update_user_course_after_lesson] - UPDATE user_courses: hw_status='pending', hw_type=None, lesson_num=1  INFO
+antbot  | 00:58:46 1978 [log_action] - Ошибка логирования действия LESSON_SENT для user_id=954230772: database is locked  ERROR
+antbot  | 00:58:46 2225 [_update_user_course_after_lesson] - VERIFY после UPDATE: hw_status=pending  INFO
+antbot  | 00:58:46 9073 [send_main_menu] - send_main_menu START: user_id=954230772, course_id='sprint2', lesson_num=1, version_id='v2', homework_pending=True, hw_type='None', level=1  INFO
+antbot  | 00:58:46 9241 [send_main_menu] - send_main_menu END: Успешно отправлено меню для user_id=954230772, course_id='sprint2', menu_message_id=6269  INFO
+antbot  | 00:58:46 2094 [send_lesson_to_user] - ✅ Обработка для урока 1 курса 'sprint2' (user 954230772) завершена.  INFO
+antbot  | 00:58:49 8541 [handle_text] - handle_text: text='yyyyyyyyyyyyyyyyyyyyyyyyyyyy' user_id=954230772  INFO
+antbot  | 00:58:49 8548 [handle_text] - handle_text: active_course=('sprint2',)  INFO
+antbot  | 00:58:49 8551 [handle_text] - handle_text: отправляем в handle_homework  INFO
+antbot  | 00:58:49 8614 [handle_homework] - handle_homework: user_id=954230772, text='yyyyyyyyyyyyyyyyyyyyyyyyyyyy'  INFO
+antbot  | 00:58:49 7524 [get_user_course_data] - 776 user_course_data=(7, 1, 'v2')    INFO
+antbot  | 00:58:49 8617 [handle_homework] - handle_homework: user_course_data=(7, 1, 'v2')  INFO
+antbot  | 00:58:49 8681 [handle_homework] - handle_homework: course_id=sprint2, lesson=1, version=v2  INFO
+antbot  | 00:58:49 8803 [handle_homework] - Не найден ожидаемый тип ДЗ (hw_type) для урока 1 курса sprint2. Разрешаю любой тип.  WARNING
+antbot  | 00:58:49 8878 [handle_homework] - admin_message_content: ✏️ Текст: yyyyyyyyyyyyyyyyyyyyyyyyyyyy file_id=None  INFO
+antbot  | 00:58:49 8991 [handle_homework] - ДЗ отправлено админам: msg_id=857  INFO
+antbot  | 00:58:49 9009 [handle_homework] - ДЗ для студента 954230772, урок 1 зарегистрировано в pending_admin_homework с admin_message_id 857  INFO
+antbot  | 00:58:49 9021 [handle_homework] - Запущен countdown для ДЗ admin_msg_id=857  INFO
+antbot  | 00:58:49 1174 [run_hw_countdown] - run_hw_countdown START: msg=857, timeout=120, is_media=False  INFO
+antbot  | 00:58:49 172 [feed_update] - Update id=841441440 is handled. Duration 186 ms by bot id=7473862113  INFO
+antbot  | 00:59:11 1185 [run_hw_countdown] - run_hw_countdown: msg=857, elapsed=22, remaining=98  INFO
+antbot  | 00:59:11 1201 [run_hw_countdown] - run_hw_countdown: msg=857 обновлён, remaining=98  INFO
+antbot  | 00:59:21 1234 [check_pending_homework_timeout] - check_pending_homework_timeout: cutoff_time_str=2026-02-25 21:57:21  INFO
+antbot  | 00:59:21 1245 [check_pending_homework_timeout] - check_pending_homework_timeout: найдено 0 pending ДЗ  INFO
+antbot  | 00:59:33 1185 [run_hw_countdown] - run_hw_countdown: msg=857, elapsed=44, remaining=76  INFO
+antbot  | 00:59:34 1201 [run_hw_countdown] - run_hw_countdown: msg=857 обновлён, remaining=76  INFO
+antbot  | 00:59:56 1185 [run_hw_countdown] - run_hw_countdown: msg=857, elapsed=66, remaining=54  INFO
+antbot  | 00:59:56 1201 [run_hw_countdown] - run_hw_countdown: msg=857 обновлён, remaining=54  INFO
+antbot  | 01:00:18 1185 [run_hw_countdown] - run_hw_countdown: msg=857, elapsed=88, remaining=32  INFO
+antbot  | 01:00:18 1201 [run_hw_countdown] - run_hw_countdown: msg=857 обновлён, remaining=32  INFO
+antbot  | 01:00:21 1234 [check_pending_homework_timeout] - check_pending_homework_timeout: cutoff_time_str=2026-02-25 21:58:21  INFO
+antbot  | 01:00:21 1245 [check_pending_homework_timeout] - check_pending_homework_timeout: найдено 0 pending ДЗ  INFO
+antbot  | 01:00:40 1185 [run_hw_countdown] - run_hw_countdown: msg=857, elapsed=110, remaining=10  INFO
+antbot  | 01:00:40 1201 [run_hw_countdown] - run_hw_countdown: msg=857 обновлён, remaining=10  INFO
+antbot  | 01:01:02 1185 [run_hw_countdown] - run_hw_countdown: msg=857, elapsed=132, remaining=0  INFO
+antbot  | 01:01:02 1201 [run_hw_countdown] - run_hw_countdown: msg=857 обновлён, remaining=0  INFO
+antbot  | 01:01:21 1234 [check_pending_homework_timeout] - check_pending_homework_timeout: cutoff_time_str=2026-02-25 21:59:21  INFO
+antbot  | 01:01:21 1245 [check_pending_homework_timeout] - check_pending_homework_timeout: найдено 1 pending ДЗ  INFO
+antbot  | 01:01:21 1250 [check_pending_homework_timeout] - check_pending_homework_timeout: pending ДЗ admin_msg_id=857, student_user_id=954230772, course_numeric_id=7, lesson_num=1, created_at=2026-02-25 21:58:49  INFO
+antbot  | 01:01:21 1743 [send_data_to_n8n] - Отправка данных в n8n: URL=https://n8n.indikov.ru/webhook/aa46a723-619e-42e9-8e51-49ba51813718, action=check_homework_timeout, callback_url=https://bot.indikov.ru/webhook/n8n_hw_result  INFO
+antbot  | 01:01:22 1754 [send_data_to_n8n] - Ошибка n8n. Статус: 403. Ответ: Authorization data is wrong!  ERROR
+antbot  | 01:01:22 1306 [check_pending_homework_timeout] - n8n response: success=False, response=HTTP 403  INFO
+antbot  | 01:01:22 1322 [check_pending_homework_timeout] - Ошибка отправки ДЗ #857 на n8n: HTTP 403  ERROR
+andrjur@etppjmdtxr:~/antbot4$

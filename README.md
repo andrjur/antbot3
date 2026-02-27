@@ -32,6 +32,7 @@ N8N_HOMEWORK_CHECK_URL=https://n8n.yourdomain.ru/webhook/aa46a723-619e-42e9-8e51
 N8N_WEBHOOK_SECRET=<секрет для Authorization заголовка>
 N8N_CALLBACK_SECRET=<секрет от n8n в бот, например 500>
 BOT_INTERNAL_URL=http://bot:8080    # Внутренний Docker URL (без Cloudflare!)
+прописать жестко в ноде Edit a text message в поле Chat ID ADMIN_GROUP_ID (-10025**** вашу группу)
 
 # Таймаут ДЗ
 HW_TIMEOUT_SECONDS=120
