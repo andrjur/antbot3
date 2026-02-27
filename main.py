@@ -1161,16 +1161,17 @@ async def stop_lesson_schedule_task(user_id: int):
         task = lesson_check_tasks[user_id]
         task.cancel()
         del lesson_check_tasks[user_id]
-        logger.info(f"Остановлена задача проверки расписания уроков дл�������� пользова������еля {user_id}.")
+        logger.info(f"Остановлена задача проверки расписания уроков дл���������������������� пользова������еля {user_id}.")
 
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
     """
     Обратный отсчёт на карточке ДЗ в группе админов.
-    Обновляет сообщение каждые ~20-25 сек, показывая оставшееся время.
+    Обновляет сообщение каждые ~20 сек, показывая сколько времени прошло.
+    Когда время вышло — убирает кнопки и пишет "ИИ-ассистент начал проверку".
     Останавливается при отмене (asyncio.CancelledError).
     """
-    STEP = 22  # секунд между обновлениями
+    STEP = 20  # секунд между обновлениями
     elapsed = 0
     logger.info(f"run_hw_countdown START: msg={admin_msg_id}, timeout={timeout_seconds}, is_media={is_media}")
     try:
@@ -1178,16 +1179,24 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
             await asyncio.sleep(STEP)
             elapsed += STEP
             remaining = max(0, timeout_seconds - elapsed)
+            
+            # Обновляем только строку с таймером
             if remaining > 0:
                 timer_line = f"🤖 До AI-проверки: {remaining} сек"
                 current_reply_markup = reply_markup
             else:
-                timer_line = "⏳ ИИ-ассистент начал проверку ДЗ, подождите..."
+                timer_line = "⏳ ИИ-ассистент начал проверку ДЗ     подождите..."
                 current_reply_markup = None
-            updated_text = "\n".join(
-                timer_line if line.startswith("🤖") else line
-                for line in base_text.splitlines()
-            )
+            
+            # Заменяем только строку с таймером
+            updated_lines = []
+            for line in base_text.splitlines():
+                if line.startswith("🤖 До AI-проверки:") or line.startswith("⏳ ИИ-ассистент"):
+                    updated_lines.append(timer_line)
+                else:
+                    updated_lines.append(line)
+            updated_text = "\n".join(updated_lines)
+            
             logger.info(f"run_hw_countdown: msg={admin_msg_id}, elapsed={elapsed}, remaining={remaining}")
             try:
                 if is_media:
@@ -1209,6 +1218,7 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
                 logger.info(f"run_hw_countdown: msg={admin_msg_id} обновлён, remaining={remaining}")
             except Exception as e:
                 logger.warning(f"run_hw_countdown: не удалось обновить msg {admin_msg_id}: {e}")
+            
             if remaining == 0:
                 break
     except asyncio.CancelledError:
@@ -1337,11 +1347,11 @@ async def check_pending_homework_timeout():
                         builder.button(text="❌ Отклонить", callback_data=f"hw_manual_reject:{admin_msg_id}:{student_user_id}:{course_numeric_id}:{lesson_num}")
                         builder.adjust(2)
                         
-                        base_caption = f"🤖 ИИ-ассистент проверяет ДЗ...\n\n{student_name}\n\n⏳ Ожидайте результат (~{HW_TIMEOUT_SECONDS} сек)\n⚠️ Если ИИ не ответит — будет автоодобрение"
+                        # Получаем текущий текст сообщения (чтобы сохранить формат)
+                        base_caption = f"⏳ ИИ-ассистент начал проверку ДЗ     подождите...\n\n{student_name}\n\n⚠️ Если ИИ не ответит через {HW_TIMEOUT_SECONDS} сек — будет автоодобрение"
                         
                         try:
-                            # Сначала проверяем, есть ли медиа в сообщении
-                            # Для pending_admin_homework предполагаем что это фото/медиа
+                            # Обновляем сообщение с кнопками
                             await bot.edit_message_caption(
                                 chat_id=admin_chat_id,
                                 message_id=admin_msg_id,
@@ -1351,9 +1361,6 @@ async def check_pending_homework_timeout():
                             )
                         except Exception as e_edit:
                             logger.debug(f"Не удалось обновить caption: {e_edit}")
-                        
-                        # Запускаем таймер с кнопками (предполагаем что это медиа)
-                        asyncio.create_task(run_hw_countdown(bot, admin_msg_id, admin_chat_id, HW_TIMEOUT_SECONDS, True, base_caption, builder.as_markup()))
                     else:
                         logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
                 
@@ -1847,14 +1854,14 @@ async def cb_hw_manual_approve(query: types.CallbackQuery):
         try:
             await bot.send_message(
                 student_user_id,
-                f"✅ Ваше ДЗ по курсу '{course_id_str}' урок {lesson_num} одобрено оператором.\n\n(ИИ-ассистент временно недоступен)"
+                f"✅ Ваше ДЗ по курсу '{course_id_str}' урок {lesson_num} принято."
             )
         except Exception as e_student:
             logger.warning(f"Не удалось отправить студенту {student_user_id}: {e_student}")
-        
+
         # Обновляем сообщение админа
         await query.message.edit_caption(
-            caption=f"✅ Одобрено оператором\n(ИИ не ответил)",
+            caption=f"✅ Одобрено оператором\n(ИИ не ответил в течение {HW_TIMEOUT_SECONDS} сек)",
             reply_markup=None
         )
         await query.answer("✅ ДЗ одобрено")
@@ -1899,14 +1906,14 @@ async def cb_hw_manual_reject(query: types.CallbackQuery):
         try:
             await bot.send_message(
                 student_user_id,
-                f"❌ Ваше ДЗ по курсу '{course_id_str}' урок {lesson_num} отклонено оператором.\n\n(ИИ-ассистент временно недоступен)\n\nПожалуйста, отправьте работу повторно."
+                f"❌ Ваше ДЗ по курсу '{course_id_str}' урок {lesson_num} отклонено.\n\nПожалуйста, отправьте работу повторно."
             )
         except Exception as e_student:
             logger.warning(f"Не удалось отправить студенту {student_user_id}: {e_student}")
-        
+
         # Обновляем сообщение админа
         await query.message.edit_caption(
-            caption=f"❌ Отклонено оператором\n(ИИ не ответил)",
+            caption=f"❌ Отклонено оператором\n(ИИ не ответил в течение {HW_TIMEOUT_SECONDS} сек)",
             reply_markup=None
         )
         await query.answer("❌ ДЗ отклонено")
@@ -2316,12 +2323,12 @@ async def _send_lesson_parts(user_id: int, course_id: str, lesson_num: int, user
             if "wrong file identifier" in str(e_send_part):
                 logger.error(f"Обнаружен неверный file_id: '{file_id}'. Эта часть урока не будет отправлена.")
             # Можно добавить await bot.send_message(user_id, "Часть урока не удалось отправить...")
-            continue  # Пробуем отправить следующую часть
+            continue  # Пробуем отправить след��ющую часть
 
         if is_homework:
             is_homework_local = True
             hw_type_local = hw_type
-            logger.info(f"Часть {k} урока {lesson_num} является ДЗ типа: {hw_type_local}")
+            logger.info(f"Часть {k} ��ро��а {lesson_num} является ДЗ типа: {hw_type_local}")
 
     logger.info(f"Обработано/отправлено {parts_sent_count} из {len(lesson_content)} частей урока {lesson_num}.")
     return is_homework_local, hw_type_local
@@ -3473,9 +3480,9 @@ async def create_course_old_format(message: types.Message, args: list):
     
     await message.answer(
         f"✅ Курс *{escape_md(course_id)}* создан (быстрый формат)!\n\n"
-        f"📍 Группа: `{escape_md(group_id_str)}`\n"
+        f"📍 Гр��ппа: `{escape_md(group_id_str)}`\n"
         f"🔑 Коды: `{escape_md(code1)}`, `{escape_md(code2)}`, `{escape_md(code3)}`\n\n"
-        f"💾 Настройки сохране��ы в settings.json",
+        f"💾 Настройки с��хр��не��ы в settings.json",
         parse_mode=None
     )
 
@@ -4634,36 +4641,59 @@ async def cmd_cleanup_orphaned(message: types.Message):
 async def cmd_set_hw_timeout(message: types.Message):
     """Установить таймаут AI-проверки ДЗ (только админы)"""
     global HW_TIMEOUT_SECONDS
-    
+
     if not await is_admin(message.from_user.id):
         await message.answer("❌ Только для администраторов.")
         return
-    
+
+    def format_timeout(seconds: int) -> str:
+        """Форматирует таймаут в человекочитаемый вид."""
+        if seconds >= 3600:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours} ч {minutes} мин" if minutes > 0 else f"{hours} ч"
+        elif seconds >= 60:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes} мин {secs} сек" if secs > 0 else f"{minutes} мин"
+        else:
+            return f"{seconds} сек"
+
     try:
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
+            current_formatted = format_timeout(HW_TIMEOUT_SECONDS)
             await message.answer(
-                f"Текущий таймаут: {HW_TIMEOUT_SECONDS} сек\n\n"
-                f"Использование: /set_hw_timeout <секунды>\n"
-                f"Пример: /set_hw_timeout 60"
+                f"⏱ Текущий таймаут AI-проверки: **{current_formatted}**\n\n"
+                f"Использование: `/set_hw_timeout <секунды>`\n"
+                f"Пример: `/set_hw_timeout 120`",
+                parse_mode="Markdown"
             )
             return
-        
+
         try:
             new_timeout = int(args[1])
             if new_timeout < 10 or new_timeout > 600:
-                await message.answer("❌ Таймаут должен быть от 10 до 600 секунд")
+                await message.answer("❌ Таймаут должен быть от 10 до 600 секунд (от 10 сек до 10 мин)")
                 return
-            
+
             old_timeout = HW_TIMEOUT_SECONDS
             HW_TIMEOUT_SECONDS = new_timeout
-            
-            await message.answer(f"✅ Таймаут AI-проверки изменён: {old_timeout} → {new_timeout} сек")
-            logger.info(f"HW_TIMEOUT изменён: {old_timeout} -> {new_timeout} сек (by {message.from_user.id})")
-            
+
+            old_formatted = format_timeout(old_timeout)
+            new_formatted = format_timeout(new_timeout)
+
+            await message.answer(
+                f"✅ Таймаут AI-проверки изменён:\n"
+                f"  Было: {old_formatted}\n"
+                f"  Стало: {new_formatted}",
+                parse_mode=None
+            )
+            logger.info(f"HW_TIMEOUT изменён: {old_timeout} ({old_formatted}) -> {new_timeout} ({new_formatted}) сек (by {message.from_user.id})")
+
         except ValueError:
             await message.answer("❌ Укажите число секунд")
-            
+
     except Exception as e:
         logger.error(f"Ошибка при установке таймаута: {e}")
         await message.answer(f"❌ Ошибка: {e}")
@@ -4844,14 +4874,14 @@ async def callback_delete_course_menu(callback: CallbackQuery):
             courses = await cursor.fetchall()
         
         if not courses:
-            await callback.message.edit_text("📭 Нет курсов с уроками.")
+            await callback.message.edit_text("📭 Н��т курсов с уроками.")
             return
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[])
         for (course_id,) in courses:
             keyboard.inline_keyboard.append([
                 InlineKeyboardButton(
-                    text=f"🗑️ {course_id}",
+                    text=f"🗑�� {course_id}",
                     callback_data=f"delete_course_confirm:{course_id}"
                 )
             ])
@@ -6450,6 +6480,21 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         [InlineKeyboardButton(text="📚 Список курсов", callback_data="admin_list_courses")],
                         [InlineKeyboardButton(text="➕ Создать курс", callback_data="admin_add_course")]
                     ])
+                    # Форматирование таймаута
+                    def format_timeout_menu(seconds: int) -> str:
+                        if seconds >= 3600:
+                            hours = seconds // 3600
+                            minutes = (seconds % 3600) // 60
+                            return f"{hours} ч {minutes} мин" if minutes > 0 else f"{hours} ч"
+                        elif seconds >= 60:
+                            minutes = seconds // 60
+                            secs = seconds % 60
+                            return f"{minutes} мин {secs} сек" if secs > 0 else f"{minutes} мин"
+                        else:
+                            return f"{seconds} сек"
+
+                    hw_timeout_formatted = format_timeout_menu(HW_TIMEOUT_SECONDS)
+
                     await bot.send_message(
                         user_id,
                         f"👑 АДМИН-МЕНЮ\n\n"
@@ -6462,7 +6507,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"• /list_admins — список админов\n"
                         f"• /add_admin <ID> — добавить админа\n"
                         f"• /remove_admin <ID> — удалить админа\n"
-                        f"• /set_hw_timeout <сек> — таймаут AI-проверки\n\n"
+                        f"• /set_hw_timeout <сек> — таймаут AI-проверки (сейчас {hw_timeout_formatted})\n\n"
                         f"Или активируйте курс кодом для тестирования.",
                         reply_markup=admin_keyboard,
                         parse_mode=None
@@ -9058,7 +9103,7 @@ async def handle_homework(message: types.Message):
         f"📚 Курс: {escape_md(display_course_title)}\n"
         f"⚡ Тариф: {escape_md(version_id)}\n"
         f"📖 Урок: {current_lesson}\n"
-        f"🤖 Через {HW_TIMEOUT_SECONDS} сек уйдет на AI-проверку\n"
+        f"🤖 До AI-проверки: 0 сек назад\n"
     )
 
     try:
