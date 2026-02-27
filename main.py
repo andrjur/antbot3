@@ -1161,7 +1161,7 @@ async def stop_lesson_schedule_task(user_id: int):
         task = lesson_check_tasks[user_id]
         task.cancel()
         del lesson_check_tasks[user_id]
-        logger.info(f"Остановлена задача проверки расписания уроков дл���������������������� пользова������еля {user_id}.")
+        logger.info(f"Остановлена задача проверки расписания уроков дл������������������������������ пользова������еля {user_id}.")
 
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
@@ -1229,8 +1229,9 @@ async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_second
 
 async def check_pending_homework_timeout():
     """
-    Периодически проверяет ДЗ, которые ожидают проверки более HW_TIMEOUT_SECONDS секунд,
-    и отправляет их на n8n webhook если админ не ответил.
+    Периодически проверяет ДЗ.
+    Если прошло HW_TIMEOUT_SECONDS -> отправляет в n8n.
+    Если прошло 3 * HW_TIMEOUT_SECONDS -> авто-аппрув внутри бота.
     Supervision: при необработанном исключении перезапускается через 60 сек.
     """
     global HW_TIMEOUT_SECONDS
@@ -1238,120 +1239,145 @@ async def check_pending_homework_timeout():
 
     while True:
         try:
-            await asyncio.sleep(60)
+            await asyncio.sleep(10)  # Проверяем каждые 10 секунд (важно для коротких таймаутов)
             logger.debug(f"check_pending_homework_timeout: очередная проверка")
 
-            if not N8N_HOMEWORK_CHECK_WEBHOOK_URL:
-                logger.info(f"check_pending_homework_timeout: N8N_WEBHOOK не настроен, пропускаем")
-                continue
-
             async with aiosqlite.connect(DB_FILE) as conn:
-                cutoff_time = datetime.now(pytz.utc) - timedelta(seconds=HW_TIMEOUT_SECONDS)
-                cutoff_time_str = cutoff_time.strftime('%Y-%m-%d %H:%M:%S')
-                
-                logger.info(f"check_pending_homework_timeout: cutoff_time_str={cutoff_time_str}")
+                now = datetime.now(pytz.utc)
 
+                # Забираем ВСЕ ожидающие ДЗ
                 cursor = await conn.execute('''
                     SELECT admin_message_id, admin_chat_id, student_user_id,
                            course_numeric_id, lesson_num, student_message_id, created_at,
                            homework_text
                     FROM pending_admin_homework
-                    WHERE created_at < ?
-                ''', (cutoff_time_str,))
-
+                ''')
                 pending_rows = await cursor.fetchall()
-                
-                logger.info(f"check_pending_homework_timeout: найдено {len(pending_rows)} pending ДЗ")
+
+                logger.debug(f"check_pending_homework_timeout: найдено {len(pending_rows)} pending ДЗ")
 
                 for row in pending_rows:
-                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at, homework_text = row
-                    
-                    logger.info(f"check_pending_homework_timeout: pending ДЗ admin_msg_id={admin_msg_id}, student_user_id={student_user_id}, course_numeric_id={course_numeric_id}, lesson_num={lesson_num}, created_at={created_at}")
+                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at_str, homework_text = row
 
-                    if admin_msg_id in homework_sent_to_n8n:
-                        logger.info(f"check_pending_homework_timeout: ДЗ #{admin_msg_id} уже отправлено на n8n, пропускаем")
-                        continue
-                    
-                    cursor_student = await conn.execute(
-                        "SELECT username, first_name FROM users WHERE user_id = ?",
-                        (student_user_id,)
-                    )
-                    student_info = await cursor_student.fetchone()
-                    student_name = f"{student_info[1]} (@{student_info[0]})" if student_info else f"User {student_user_id}"
-                    
-                    course_id_str = await get_course_id_str(course_numeric_id)
-                    course_title = await get_course_title(course_id_str)
-                    
-                    # Получаем текст задания и ДЗ
-                    async with aiosqlite.connect(DB_FILE) as conn2:
-                        cursor_lesson = await conn2.execute(
-                            """SELECT text FROM group_messages 
-                               WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text'
-                               ORDER BY id ASC""",
-                            (course_id_str, lesson_num)
-                        )
-                        lesson_parts = await cursor_lesson.fetchall()
-                        lesson_description = "\n".join([row[0] for row in lesson_parts if row[0]])
+                    # Считаем возраст ДЗ в секундах
+                    created_at = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=pytz.utc)
+                    age_seconds = (now - created_at).total_seconds()
+
+                    # --- ЛОГИКА 1: АВТО-АППРУВ (если ИИ завис / n8n сломался) ---
+                    if age_seconds >= (3 * HW_TIMEOUT_SECONDS):
+                        logger.warning(f"⚠️ ДЗ #{admin_msg_id} висит уже {age_seconds:.0f} сек ({age_seconds/60:.1f} мин). Авто-одобрение (n8n не ответил).")
                         
-                        cursor_hw_type = await conn2.execute(
-                            """SELECT hw_type FROM group_messages 
-                               WHERE course_id = ? AND lesson_num = ? AND is_homework = 1 LIMIT 1""",
-                            (course_id_str, lesson_num)
+                        course_id_str = await get_course_id_str(course_numeric_id)
+                        
+                        # Вызываем штатную функцию обработки результата
+                        await handle_homework_result(
+                            user_id=student_user_id,
+                            course_id=course_id_str,
+                            course_numeric_id=course_numeric_id,
+                            lesson_num=lesson_num,
+                            admin_id=0,  # 0 = Система/ИИ
+                            feedback_text="Принято.",  # Коротко для клиента
+                            is_approved=True,
+                            callback_query=None,
+                            original_admin_message_id_to_delete=admin_msg_id
                         )
-                        hw_type_row = await cursor_hw_type.fetchone()
-                        expected_hw_type = hw_type_row[0] if hw_type_row else "any"
-                    
-                    # Callback URL для n8n — используем WEBHOOK_SECRET_PATH_CONF (тот же путь что и для телеграм-вебхука)
-                    # Формат: https://bot.indikov.ru/<secret_path>/n8n_hw_result
-                    host = WEBHOOK_HOST_CONF.rstrip("/")
-                    secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
-                    callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
-                    callback_url = f"{callback_base}/n8n_hw_result"
-                    logger.info(f"callback_base (внешний): {callback_base}")
-                    logger.info(f"n8n callback URL: {callback_url}")
+                        
+                        # Добавим примечание админам, что это авто-аппрув по таймауту
+                        try:
+                            await bot.send_message(
+                                chat_id=ADMIN_GROUP_ID,
+                                text=f"⚠️ ДЗ выше одобрено АВТОМАТИЧЕСКИ (ИИ не ответил за {format_time_duration(3 * HW_TIMEOUT_SECONDS)}).",
+                                reply_to_message_id=admin_msg_id,
+                                parse_mode=None
+                            )
+                        except Exception as e_notify:
+                            logger.error(f"Не удалось отправить уведомление об авто-одобрении: {e_notify}")
 
-                    payload = {
-                        "action": "check_homework",
-                        "student_user_id": student_user_id,
-                        "user_fullname": student_name,
-                        "course_numeric_id": course_numeric_id,
-                        "course_id": course_id_str,
-                        "course_title": course_title,
-                        "lesson_num": lesson_num,
-                        "lesson_assignment_description": lesson_description,
-                        "homework_text": homework_text or "",
-                        "homework_content_type": "text",
-                        "expected_homework_type": expected_hw_type,
-                        "original_admin_message_id": admin_msg_id,
-                        "admin_group_id": ADMIN_GROUP_ID,
-                        "student_message_id": student_msg_id,
-                        "callback_webhook_url_result": callback_url,
-                        "callback_webhook_url_error": f"{callback_base}/n8n_hw_processing_error",
-                        "telegram_bot_token": BOT_TOKEN,
-                        "timeout_seconds": HW_TIMEOUT_SECONDS
-                    }
-                    
-                    success, response = await send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload)
-                    logger.info(f"n8n response: success={success}, response={response[:200] if response else 'None'}")
-                    
-                    homework_sent_to_n8n.add(admin_msg_id)
+                        # Удаляем из списка отправленных в n8n
+                        homework_sent_to_n8n.discard(admin_msg_id)
+                        continue  # Переходим к следующему ДЗ
 
-                    if success:
-                        logger.info(f"ДЗ #{admin_msg_id} отправлено на n8n")
+                    # --- ЛОГИКА 2: ОТПРАВКА В n8n (обычный таймаут ручной проверки) ---
+                    if age_seconds >= HW_TIMEOUT_SECONDS and admin_msg_id not in homework_sent_to_n8n:
+                        if not N8N_HOMEWORK_CHECK_WEBHOOK_URL:
+                            logger.info(f"check_pending_homework_timeout: N8N_WEBHOOK не настроен, пропускаем")
+                            continue
+
+                        # Получаем данные студента и курса для отправки
+                        cursor_student = await conn.execute(
+                            "SELECT username, first_name FROM users WHERE user_id = ?",
+                            (student_user_id,)
+                        )
+                        student_info = await cursor_student.fetchone()
+                        student_name = f"{student_info[1]} (@{student_info[0]})" if student_info else f"User {student_user_id}"
+
+                        course_id_str = await get_course_id_str(course_numeric_id)
+                        course_title = await get_course_title(course_id_str)
+
+                        # Получаем текст задания
+                        async with aiosqlite.connect(DB_FILE) as conn2:
+                            cursor_lesson = await conn2.execute(
+                                """SELECT text FROM group_messages
+                                   WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text'
+                                   ORDER BY id ASC""",
+                                (course_id_str, lesson_num)
+                            )
+                            lesson_parts = await cursor_lesson.fetchall()
+                            lesson_description = "\n".join([r[0] for r in lesson_parts if r[0]])
+
+                            cursor_hw_type = await conn2.execute(
+                                """SELECT hw_type FROM group_messages
+                                   WHERE course_id = ? AND lesson_num = ? AND is_homework = 1 LIMIT 1""",
+                                (course_id_str, lesson_num)
+                            )
+                            hw_type_row = await cursor_hw_type.fetchone()
+                            expected_hw_type = hw_type_row[0] if hw_type_row else "any"
+
+                        # Строим callback URL
+                        host = WEBHOOK_HOST_CONF.rstrip("/")
+                        secret_path = (WEBHOOK_SECRET_PATH_CONF or "").strip("/")
+                        callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
+                        callback_url = f"{callback_base}/n8n_hw_result"
+
+                        payload = {
+                            "action": "check_homework",
+                            "student_user_id": student_user_id,
+                            "user_fullname": student_name,
+                            "course_numeric_id": course_numeric_id,
+                            "course_id": course_id_str,
+                            "course_title": course_title,
+                            "lesson_num": lesson_num,
+                            "lesson_assignment_description": lesson_description,
+                            "homework_text": homework_text or "",
+                            "homework_content_type": "text",
+                            "expected_homework_type": expected_hw_type,
+                            "original_admin_message_id": admin_msg_id,
+                            "admin_group_id": ADMIN_GROUP_ID,
+                            "student_message_id": student_msg_id,
+                            "callback_webhook_url_result": callback_url,
+                            "callback_webhook_url_error": f"{callback_base}/n8n_hw_processing_error",
+                            "telegram_bot_token": BOT_TOKEN,
+                            "timeout_seconds": HW_TIMEOUT_SECONDS
+                        }
+
+                        # Отправляем в n8n (не блокируя цикл)
+                        logger.info(f"📤 ДЗ #{admin_msg_id} отправлено на n8n (возраст: {age_seconds:.0f} сек)")
+                        asyncio.create_task(send_data_to_n8n(N8N_HOMEWORK_CHECK_WEBHOOK_URL, payload))
+                        homework_sent_to_n8n.add(admin_msg_id)
+
                         # Создаём клавиатуру с кнопками для оператора
                         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                         from aiogram.utils.keyboard import InlineKeyboardBuilder
-                        
+
                         builder = InlineKeyboardBuilder()
                         builder.button(text="✅ Одобрить", callback_data=f"hw_manual_approve:{admin_msg_id}:{student_user_id}:{course_numeric_id}:{lesson_num}")
                         builder.button(text="❌ Отклонить", callback_data=f"hw_manual_reject:{admin_msg_id}:{student_user_id}:{course_numeric_id}:{lesson_num}")
                         builder.adjust(2)
-                        
-                        # Получаем текущий текст сообщения (чтобы сохранить формат)
+
+                        # Обновляем сообщение с кнопками (НЕ затирая весь текст!)
                         base_caption = f"⏳ ИИ-ассистент начал проверку ДЗ     подождите...\n\n{student_name}\n\n⚠️ Если ИИ не ответит через {HW_TIMEOUT_SECONDS} сек — будет автоодобрение"
-                        
+
                         try:
-                            # Обновляем сообщение с кнопками
                             await bot.edit_message_caption(
                                 chat_id=admin_chat_id,
                                 message_id=admin_msg_id,
@@ -1361,9 +1387,7 @@ async def check_pending_homework_timeout():
                             )
                         except Exception as e_edit:
                             logger.debug(f"Не удалось обновить caption: {e_edit}")
-                    else:
-                        logger.error(f"Ошибка отправки ДЗ #{admin_msg_id} на n8n: {response}")
-                
+
         except asyncio.CancelledError:
             logger.info("check_pending_homework_timeout: задача отменена (shutdown)")
             return
@@ -2302,7 +2326,7 @@ async def _send_lesson_parts(user_id: int, course_id: str, lesson_num: int, user
                     continue
                 await bot.send_message(user_id, safe_caption, parse_mode=None)
             elif file_id:
-                # Динамический вызов метода отправки
+                # Динамический вызо�� метода о��правки
                 send_method_name = f"send_{content_type}"
                 if hasattr(bot, send_method_name):
                     send_method = getattr(bot, send_method_name)
@@ -4646,23 +4670,10 @@ async def cmd_set_hw_timeout(message: types.Message):
         await message.answer("❌ Только для администраторов.")
         return
 
-    def format_timeout(seconds: int) -> str:
-        """Форматирует таймаут в человекочитаемый вид."""
-        if seconds >= 3600:
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            return f"{hours} ч {minutes} мин" if minutes > 0 else f"{hours} ч"
-        elif seconds >= 60:
-            minutes = seconds // 60
-            secs = seconds % 60
-            return f"{minutes} мин {secs} сек" if secs > 0 else f"{minutes} мин"
-        else:
-            return f"{seconds} сек"
-
     try:
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            current_formatted = format_timeout(HW_TIMEOUT_SECONDS)
+            current_formatted = format_time_duration(HW_TIMEOUT_SECONDS)
             await message.answer(
                 f"⏱ Текущий таймаут AI-проверки: **{current_formatted}**\n\n"
                 f"Использование: `/set_hw_timeout <секунды>`\n"
@@ -4680,8 +4691,8 @@ async def cmd_set_hw_timeout(message: types.Message):
             old_timeout = HW_TIMEOUT_SECONDS
             HW_TIMEOUT_SECONDS = new_timeout
 
-            old_formatted = format_timeout(old_timeout)
-            new_formatted = format_timeout(new_timeout)
+            old_formatted = format_time_duration(old_timeout)
+            new_formatted = format_time_duration(new_timeout)
 
             await message.answer(
                 f"✅ Таймаут AI-проверки изменён:\n"
@@ -4837,7 +4848,7 @@ async def callback_delete_all_confirm(callback: CallbackQuery):
 async def callback_delete_all_execute(callback: CallbackQuery):
     """Выполнение удаления всех уроков"""
     if callback.from_user.id not in ADMIN_IDS_CONF:
-        await callback.answer("❌ Только для администраторов.", show_alert=True)
+        await callback.answer("❌ Только д��я администраторов.", show_alert=True)
         return
     
     await callback.answer()
@@ -6480,20 +6491,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         [InlineKeyboardButton(text="📚 Список курсов", callback_data="admin_list_courses")],
                         [InlineKeyboardButton(text="➕ Создать курс", callback_data="admin_add_course")]
                     ])
-                    # Форматирование таймаута
-                    def format_timeout_menu(seconds: int) -> str:
-                        if seconds >= 3600:
-                            hours = seconds // 3600
-                            minutes = (seconds % 3600) // 60
-                            return f"{hours} ч {minutes} мин" if minutes > 0 else f"{hours} ч"
-                        elif seconds >= 60:
-                            minutes = seconds // 60
-                            secs = seconds % 60
-                            return f"{minutes} мин {secs} сек" if secs > 0 else f"{minutes} мин"
-                        else:
-                            return f"{seconds} сек"
-
-                    hw_timeout_formatted = format_timeout_menu(HW_TIMEOUT_SECONDS)
+                    hw_timeout_formatted = format_time_duration(HW_TIMEOUT_SECONDS)
 
                     await bot.send_message(
                         user_id,
@@ -8164,6 +8162,20 @@ async def send_message_to_user(user_id: int, text: str, reply_markup: InlineKeyb
         logger.error(f"Ошибка при отправке сообщения пользователю {user_id}: {e4037}", exc_info=True)
 
 
+def format_time_duration(seconds: int) -> str:
+    """Форматирует секунды в читаемый вид (секунды, минуты или часы)."""
+    if seconds < 60:
+        return f"{seconds} сек"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes} мин {secs} сек" if secs > 0 else f"{minutes} мин"
+    else:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f"{hours} ч {minutes} мин" if minutes > 0 else f"{hours} ч"
+
+
 def get_tariff_name(version_id: str) -> str:
     """Возвращает человекочитаемое название тарифа."""
     TARIFF_NAMES = {
@@ -9339,7 +9351,7 @@ async def send_main_menu(user_id: int, course_id: str, lesson_num: int, version_
             if homework_pending:  # Если текущий статус в user_courses - pending или rejected
                 domashka_text = f"ожидается ({expected_hw_type_for_this_lesson})"
             else:  # ДЗ для этого урока было, и сейчас оно принято (hw_status = 'approved' или 'none'/'not_required' и т.п.)
-                # Или это урок 0, для которого ДЗ не бывает pending.
+                # Или это урок 0, для которо��о ДЗ не бывает pending.
                 if lesson_num == 0:  # Для урока-описания
                     domashka_text = escape_md("не предусмотрена")
                 else:
