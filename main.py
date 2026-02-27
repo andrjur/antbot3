@@ -6506,7 +6506,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         user_id,
                         f"👑 АДМИН-МЕНЮ\n\n"
                         f"У вас нет активного курса для тестирования.\n\n"
-                        f"📦 Версия бота: `{GIT_VERSION}`\n\n"
+                        f"📦 Версия бота: {GIT_VERSION}\n\n"
                         f"💡 Команды:\n"
                         f"• /show_codes — курсы и коды\n"
                         f"• /add_course — создать курс\n"
@@ -6518,7 +6518,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         f"• /set_hw_timeout <сек> — таймаут AI-проверки (сейчас {hw_timeout_formatted})\n\n"
                         f"Или активируйте курс кодом для тестирования.",
                         reply_markup=admin_keyboard,
-                        parse_mode="Markdown"
+                        parse_mode=None
                     )
                 return
 
@@ -8258,7 +8258,7 @@ async def process_homework_action(callback_query: types.CallbackQuery, callback_
             )
 
             prompt_text = "Пожалуйста, введите ваш комментарий для студента (одобрение):" if action == "approve_reason" else "Пожалуйста, введите причину отклонения для студента:"
-            # Определяем исходный текст/caption сообщения, к которому доба����им prompt_text
+            # Определяем исх��дный текст/caption сообщения, к которому доба����им prompt_text
             original_message_content = ""
             if callback_query.message.text:
                 original_message_content = callback_query.message.text
