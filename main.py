@@ -1160,7 +1160,7 @@ async def stop_lesson_schedule_task(user_id: int):
         task = lesson_check_tasks[user_id]
         task.cancel()
         del lesson_check_tasks[user_id]
-        logger.info(f"Остановлена задача проверки расписания уроков для пользова��еля {user_id}.")
+        logger.info(f"Остановлена задача проверки расписания уроков для пользова������еля {user_id}.")
 
 
 async def run_hw_countdown(admin_msg_id: int, admin_chat_id: int, timeout_seconds: int, is_media: bool, base_text: str, reply_markup=None):
@@ -1295,7 +1295,9 @@ async def check_pending_homework_timeout():
                     host = WEBHOOK_HOST_CONF.rstrip("/")
                     secret_path = (WEBHOOK_PATH_CONF or "").strip("/")
                     callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
+                    callback_url = f"{callback_base}/n8n_hw_result"
                     logger.info(f"callback_base (внешний): {callback_base}")
+                    logger.info(f"n8n callback URL: {callback_url}")
 
                     payload = {
                         "action": "check_homework",
@@ -1312,7 +1314,7 @@ async def check_pending_homework_timeout():
                         "original_admin_message_id": admin_msg_id,
                         "admin_group_id": ADMIN_GROUP_ID,
                         "student_message_id": student_msg_id,
-                        "callback_webhook_url_result": f"{callback_base}/n8n_hw_result",
+                        "callback_webhook_url_result": callback_url,
                         "callback_webhook_url_error": f"{callback_base}/n8n_hw_processing_error",
                         "telegram_bot_token": BOT_TOKEN,
                         "timeout_seconds": HW_TIMEOUT_SECONDS
@@ -5991,7 +5993,7 @@ async def cmd_set_timezone(message: types.Message):
         request_location=True
     ))
     builder.add(KeyboardButton(
-        text="⌨️ Выбрать вручную",
+        text="⌨️ ��ыбрат�� вручную",
     ))
     await message.answer(
         "Выберите способ определения часового пояса:",
@@ -7172,7 +7174,7 @@ async def cb_restart_or_next_level_course(query: types.CallbackQuery, callback_d
 
             if action == "next_level":
                 new_level_for_user = current_user_level_db + 1
-                # Дополнительно можно проверить, существует ли вообще контент для new_level_for_user,
+                # Дополнительно можно проверить, существует ��и вообще контент для new_level_for_user,
                 # хотя кнопка должна была появиться только если он есть.
                 cursor_check_level = await conn.execute(
                     "SELECT 1 FROM group_messages WHERE course_id = ? AND level = ? LIMIT 1",
