@@ -1,0 +1,591 @@
+{
+  "name": "good2AI Agent in n8n",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=`Ты — мудрый и очень добрый наставник на онлайн-курсе.\nТвоя задача — проанализировать домашнюю работу.\n\nИмя студента: {{ $('Edit Fields').item.json.student_name }}\nПол: определи пол самостоятельно по имени студента и строго соблюдай окончания глаголов (сделал/сделала, молодец/умница, смог/смогла).\n\nКонтекст задания:\n{{ $('Edit Fields').item.json.lesson_desc }}\n\n---\nРАБОТА СТУДЕНТА:\n{{ $(\"Merge\").first() && $(\"Merge\").first().json.data ? \"[ПРИКРЕПЛЕНО ИЗОБРАЖЕНИЕ]\" : \"\" }}\n{{ $('Edit Fields').item.json.hw_text }}\n---\n\nТВОИ ПРАВИЛА:\n1. Обязательно обращайся к студенту по имени и пиши фидбек в правильном роде (он/она).\n2. Если в работе есть тег[ПРИКРЕПЛЕНО ИЗОБРАЖЕНИЕ], обязательно проанализируй его и упомяни. Если тега нет, НИКОГДА не упоминай рисунки/фото.\n3. Если работа осмысленная и по теме — ставь \"is_approved\": true.\n4. Если работа состоит из пары символов (например, \"777\", \"ок\") или бессмысленная — строго \"is_approved\": false.\n5. Твой \"feedback_text\" должен быть личным, ободряющим и объяснять вердикт.\n\nОтвет СТРОГО в формате JSON. JSON должен содержать только два ключа: \"is_approved\" (boolean) и \"feedback_text\" (string). Верни только JSON без маркдаун-разметки (без json).`",
+        "options": {
+          "systemMessage": "Верни ТОЛЬКО валидный JSON без маркдаун-разметки (без ```json), без приветствий и лишних слов."
+        }
+      },
+      "id": "f584d596-9e0d-453d-8ef6-f1e60fd59feb",
+      "name": "Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        304,
+        384
+      ],
+      "retryOnFail": true,
+      "notesInFlow": true,
+      "alwaysOutputData": true,
+      "maxTries": 5,
+      "waitBetweenTries": 350,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen3.5-flash-02-23",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        208,
+        736
+      ],
+      "id": "696d5957-3f3a-41e6-9823-1b083d539c87",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "BT6u6hYxUcBltOkv",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aa46a723-619e-42e9-8e51-49ba51813718",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        288
+      ],
+      "id": "6b18db91-9dc6-4974-8b78-7b8249ef2988",
+      "name": "Webhook-homework",
+      "webhookId": "aa46a723-619e-42e9-8e51-49ba51813718",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ekBe6PJguM1vYu7W",
+          "name": "N8N_WEBHOOK_SECRE"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "080ee5fb-782f-47d6-9d64-98ec8e8c52f2",
+              "name": "=student_user_id",
+              "value": "={{ $json.body.student_user_id }}",
+              "type": "string"
+            },
+            {
+              "id": "78fcca79-e818-4b3c-803f-94deda4f3104",
+              "name": "course_id",
+              "value": "={{ $json.body.course_numeric_id }}",
+              "type": "string"
+            },
+            {
+              "id": "969420d2-791b-40a4-924d-ec7e332d3d6b",
+              "name": "lesson_num",
+              "value": "={{ $json.body.lesson_num }}",
+              "type": "string"
+            },
+            {
+              "id": "2d2c5f78-ecaf-408d-acdb-ff6d7a4d086d",
+              "name": "admin_chat_id",
+              "value": "={{ $json.body.admin_group_id }}",
+              "type": "string"
+            },
+            {
+              "id": "5b60f83f-1667-4f43-9ab5-e7aad6d988f1",
+              "name": "target_message_id",
+              "value": "={{ $json.body.original_admin_message_id || $json.body.admin_message_id }}",
+              "type": "string"
+            },
+            {
+              "id": "c324098f-8660-4435-acef-09352a9a0a45",
+              "name": "student_name",
+              "value": "={{ ($json.body.user_fullname || $json.body.student_name || 'Студент').split(' ')[0] }}",
+              "type": "string"
+            },
+            {
+              "id": "753df8c9-e2c2-4ea6-aef4-5608ef8f92b1",
+              "name": "hw_text",
+              "value": "={{ $json.body.homework_text || '[Текст отсутствует]' }}",
+              "type": "string"
+            },
+            {
+              "id": "2653261d-4f8b-494d-8bb3-975e69a96b0f",
+              "name": "hw_file_id",
+              "value": "={{ $json.body.homework_file_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "2168a0e7-3cb9-44a2-b21c-85050c3405b2",
+              "name": "lesson_desc",
+              "value": "={{ $json.body.lesson_assignment_description ||'Оценить ДЗ' }}",
+              "type": "string"
+            },
+            {
+              "id": "e55934e8-9d40-41ff-bba3-2a0919b1847e",
+              "name": "",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -720,
+        288
+      ],
+      "id": "0a69ffd5-8c95-4d51-81e4-927c7a5c1048",
+      "name": "Edit Fields",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}\n",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-CALLBACK-SIGNATURE",
+              "value": "=500"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "feedback_text",
+              "value": "={{ $('Code').item.json.feedback_text }}"
+            },
+            {
+              "name": "is_approved",
+              "value": "={{ $('Code').item.json.is_approved }}"
+            },
+            {
+              "name": "original_admin_message_id",
+              "value": "={{ $('Webhook-homework').item.json.body.original_admin_message_id || $('Webhook-homework').item.json.body.admin_message_id }}"
+            },
+            {
+              "name": "student_user_id",
+              "value": "={{ $('Edit Fields').item.json.student_user_id }}"
+            },
+            {
+              "name": "course_numeric_id",
+              "value": "={{ $('Webhook-homework').item.json.body.course_numeric_id }}"
+            },
+            {
+              "name": "lesson_num",
+              "value": "={{ $('Webhook-homework').item.json.body.lesson_num }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1008,
+        320
+      ],
+      "id": "9b9f511b-e63b-4e68-be9d-f492029149a4",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ekBe6PJguM1vYu7W",
+          "name": "N8N_WEBHOOK_SECRE"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        32,
+        448
+      ],
+      "id": "50aeb7e0-16d6-4b4e-9595-88d6ef1bc633",
+      "name": "Merge",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}\n",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-CALLBACK-SIGNATURE",
+              "value": "=500"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "feedback_text",
+              "value": "=OK  Возникла небольшая техническая проблема, поэтому мы одобрили это задание автоматически. Спасибо за понимание!"
+            },
+            {
+              "name": "is_approved",
+              "value": "=True"
+            },
+            {
+              "name": "original_admin_message_id",
+              "value": "={{ $('Webhook-homework').item.json.body.original_admin_message_id }}"
+            },
+            {
+              "name": "student_user_id",
+              "value": "={{ $('Edit Fields').item.json.student_user_id }}"
+            },
+            {
+              "name": "course_numeric_id",
+              "value": "={{ $('Webhook-homework').item.json.body.course_numeric_id }}"
+            },
+            {
+              "name": "lesson_num",
+              "value": "={{ $('Webhook-homework').item.json.body.lesson_num }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1024,
+        608
+      ],
+      "id": "7f936b8d-dfe5-4a16-a5f1-f496b1961371",
+      "name": "HTTP Request2",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ekBe6PJguM1vYu7W",
+          "name": "N8N_WEBHOOK_SECRE"
+        }
+      },
+      "disabled": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Edit Fields').item.json.student_homework_file_id }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -336,
+        480
+      ],
+      "id": "08842b94-8efb-4963-aca8-a3699ea9e9ac",
+      "name": "Get a file",
+      "webhookId": "f2d472aa-3e48-4cd4-9321-2685e94ffe4c",
+      "alwaysOutputData": false,
+      "retryOnFail": true,
+      "waitBetweenTries": 200,
+      "maxTries": 2,
+      "credentials": {
+        "telegramApi": {
+          "id": "dppxB2BsMREfAmx6",
+          "name": "Antbot_api"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5b1189a6-6cee-49af-ad61-c91de051a0ea",
+              "leftValue": "={{ $('Edit Fields').item.json.hw_file_id  }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -496,
+        640
+      ],
+      "id": "931a2758-9023-4b38-a7fa-921481ad78d8",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawOutput = $('Agent').first().json.output;\n\nlet isApproved = true; \nlet feedbackText = `Агент вернул некорректный ответ, но задание одобрено автоматически. \\n\\n(Ответ ИИ: ${rawOutput})`;\n\nconst jsonMatch = rawOutput.match(/(\\{[\\s\\S]*\\})/);\n\nif (jsonMatch && jsonMatch[1]) {\n  try {\n    const parsedData = JSON.parse(jsonMatch[1]);\n    if (typeof parsedData.is_approved === 'boolean') isApproved = parsedData.is_approved;\n    if (typeof parsedData.feedback_text === 'string') feedbackText = parsedData.feedback_text;\n  } catch (e) {\n    console.error(\"Parse error:\", e.message);\n  }\n} else {\n  feedbackText = rawOutput;\n  isApproved = true; \n}\n\nreturn {\n  json: {\n    is_approved: isApproved,\n    feedback_text: feedbackText\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        352
+      ],
+      "id": "06d0295a-492d-4f41-897a-7c8171ccabed",
+      "name": "Code",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "=-1002591981307",
+        "messageId": "={{ $('Edit Fields').item.json.target_message_id }}",
+        "replyMarkup": "inlineKeyboard",
+        "text": "=⏳ ИИ-ассистент начал проверку ДЗ. Студент: {{ $('Edit Fields').item.json.student_name }}. Пожалуйста, подождите...",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -384,
+        -160
+      ],
+      "id": "c6c5280b-a15a-4830-bb55-20ae15f61c52",
+      "name": "Edit a text message",
+      "webhookId": "9347b722-0ca1-4617-b943-2beeaee2d17c",
+      "alwaysOutputData": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "dppxB2BsMREfAmx6",
+          "name": "Antbot_api"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-CALLBACK-SIGNATURE",
+              "value": "=500"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "original_admin_message_id",
+              "value": "={{ $('Webhook-homework').item.json.body.original_admin_message_id }}"
+            },
+            {
+              "name": "student_user_id",
+              "value": "={{ $('Webhook-homework').item.json.body.student_user_id }}"
+            },
+            {
+              "name": "course_numeric_id",
+              "value": "={{ $('Webhook-homework').item.json.body.course_numeric_id }}"
+            },
+            {
+              "name": "lesson_num",
+              "value": "={{ $('Webhook-homework').item.json.body.lesson_num }}"
+            },
+            {
+              "name": "status",
+              "value": "processing"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -704,
+        64
+      ],
+      "id": "ba4a6826-fe0e-4172-bf8f-9df96d5c4b15",
+      "name": "HTTP Request1",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ekBe6PJguM1vYu7W",
+          "name": "N8N_WEBHOOK_SECRE"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook-homework": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit a text message": {
+      "main": [
+        []
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a file": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Get a file",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "a9a3efb1-6277-405e-8dc7-63ac97058862",
+  "meta": {
+    "instanceId": "14556ca7589cf14a5bd79ba5c472bcf1b451007380d01a7e3b562e771321d9e0"
+  },
+  "id": "2VqyCrDCshzIrBot",
+  "tags": []
+}

@@ -8629,7 +8629,10 @@ async def handle_homework_result(
                 message_to_user_main_part = ""
                 if is_approved:
                     message_to_user_main_part = f"✅ Ваше домашнее задание по курсу *{escape_md(course_id)}*, урок *{lesson_num}* принято"
-                    if feedback_text: message_to_user_main_part += f"\n\n*Комментарий:*\n{escape_md(feedback_text)}"
+                    # Отправляем текст ИИ (до 240 символов)
+                    if feedback_text:
+                        feedback_short = feedback_text[:240] + "..." if len(feedback_text) > 240 else feedback_text
+                        message_to_user_main_part += f"\n\n*Комментарий:*\n{escape_md(feedback_short)}"
                     # --- НАЧАЛО ИНТЕГРАЦИИ --- todo 05-07
                     # Начисляем баллы за успешное ДЗ старого типа
                     course_title = await get_course_title(course_id)
@@ -8638,7 +8641,9 @@ async def handle_homework_result(
                     # --- КОНЕЦ ИНТЕГРАЦИИ ---
                 else:
                     message_to_user_main_part = f"❌ Ваше домашнее задание по курсу *{escape_md(course_id)}*, урок *{lesson_num}* отклонено"
-                    if feedback_text: message_to_user_main_part += f"\n\n*Причина:*\n{escape_md(feedback_text)}"
+                    if feedback_text:
+                        feedback_short = feedback_text[:240] + "..." if len(feedback_text) > 240 else feedback_text
+                        message_to_user_main_part += f"\n\n*Причина:*\n{escape_md(feedback_short)}"
 
                 await bot.send_message(user_id, message_to_user_main_part, parse_mode=None)
                 await send_main_menu(user_id, course_id, lesson_num, version_id, homework_pending=(not is_approved),
