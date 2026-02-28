@@ -1999,8 +1999,9 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
         logger.info(f"Получен callback от n8n (HW Approval): {data}")
 
         # --- ПРОВЕРКА СТАТУСА PROCESSING (ИИ НАЧАЛ ПРОВЕРКУ) ---
+        # ПРОВЕРЯЕМ В САМОМ НАЧАЛЕ, ДО ОБРАБОТКИ ДАННЫХ!
         if data.get("status") == "processing":
-            admin_message_id = data.get("admin_message_id")
+            admin_message_id = data.get("admin_message_id") or data.get("original_admin_message_id")
             if admin_message_id:
                 try:
                     # Показываем админам что ИИ начал проверку
@@ -2318,7 +2319,7 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
 
 
 async def _get_lesson_content_from_db(conn, course_id: str, lesson_num: int) -> list:
-    """Вспомогательная функция для получения контента урока из БД."""
+    """Вспомо��ательная функция для получения контента урока из БД."""
     cursor_lesson = await conn.execute("""
         SELECT text, content_type, file_id, is_homework, hw_type, level 
         FROM group_messages
