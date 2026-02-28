@@ -8629,10 +8629,9 @@ async def handle_homework_result(
                 message_to_user_main_part = ""
                 if is_approved:
                     message_to_user_main_part = f"✅ Ваше домашнее задание по курсу *{escape_md(course_id)}*, урок *{lesson_num}* принято"
-                    # Отправляем текст ИИ (до 240 символов)
+                    # Отправляем ПОЛНЫЙ текст ИИ студенту (без урезания)
                     if feedback_text:
-                        feedback_short = feedback_text[:240] + "..." if len(feedback_text) > 240 else feedback_text
-                        message_to_user_main_part += f"\n\n*Комментарий:*\n{escape_md(feedback_short)}"
+                        message_to_user_main_part += f"\n\n*Комментарий ИИ:*\n{escape_md(feedback_text)}"
                     # --- НАЧАЛО ИНТЕГРАЦИИ --- todo 05-07
                     # Начисляем баллы за успешное ДЗ старого типа
                     course_title = await get_course_title(course_id)
@@ -8641,9 +8640,9 @@ async def handle_homework_result(
                     # --- КОНЕЦ ИНТЕГРАЦИИ ---
                 else:
                     message_to_user_main_part = f"❌ Ваше домашнее задание по курсу *{escape_md(course_id)}*, урок *{lesson_num}* отклонено"
+                    # Отправляем ПОЛНЫЙ текст ИИ студенту (причина отклонения)
                     if feedback_text:
-                        feedback_short = feedback_text[:240] + "..." if len(feedback_text) > 240 else feedback_text
-                        message_to_user_main_part += f"\n\n*Причина:*\n{escape_md(feedback_short)}"
+                        message_to_user_main_part += f"\n\n*Причина:*\n{escape_md(feedback_text)}"
 
                 await bot.send_message(user_id, message_to_user_main_part, parse_mode=None)
                 await send_main_menu(user_id, course_id, lesson_num, version_id, homework_pending=(not is_approved),
@@ -8671,8 +8670,12 @@ async def handle_homework_result(
                     final_admin_notification += f"\n\n*Комментарий:*\n_{escape_md(feedback_text)}_"
 
                 if message_id_to_process:
+                    # Сначала пробуем убрать кнопки
                     try:
-                        await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID, message_id=message_id_to_process)
+                        await bot.edit_message_reply_markup(chat_id=ADMIN_GROUP_ID, message_id=message_id_to_process, reply_markup=None)
+                        logger.info("Кнопки удалены")
+                    except: pass
+                    try:
                         await bot.send_message(ADMIN_GROUP_ID, final_admin_notification,
                                                reply_to_message_id=message_id_to_process, parse_mode=None)
                         logger.info(f"{log_prefix} Единое уведомление в админ-чат отправлено.")
