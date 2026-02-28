@@ -1993,14 +1993,16 @@ async def process_expert_question(message: types.Message, state: FSMContext):
 @require_n8n_secret
 async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
     """Получает от ИИ результат проверки ДЗ. да/нет и подробная причина."""
-    logger.info('Зашли в handle_n8n_hw_approval')
+    logger.info('=== Зашли в handle_n8n_hw_approval ===')
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (HW Approval): {data}")
+        logger.info(f"status={data.get('status')}, is_approved={data.get('is_approved')}")
 
         # --- ПРОВЕРКА СТАТУСА PROCESSING (ИИ НАЧАЛ ПРОВЕРКУ) ---
         # ПРОВЕРЯЕМ В САМОМ НАЧАЛЕ, ДО ОБРАБОТКИ ДАННЫХ!
         if data.get("status") == "processing":
+            logger.info("🔹 Статус processing - игнорируем обработку ДЗ")
             admin_message_id = data.get("admin_message_id") or data.get("original_admin_message_id")
             if admin_message_id:
                 try:
@@ -2011,12 +2013,14 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
                         reply_to_message_id=admin_message_id,
                         parse_mode=None
                     )
-                    logger.info(f"Отправлено уведомление о начале проверки ИИ для ДЗ #{admin_message_id}")
+                    logger.info(f"✅ Отправлено уведомление о начале проверки ИИ для ДЗ #{admin_message_id}")
                 except Exception as e_notify:
-                    logger.error(f"Не удалось отправить уведомление о начале проверки: {e_notify}")
+                    logger.error(f"❌ Не удалось отправить уведомление о начале проверки: {e_notify}")
             return web.Response(text="OK: Processing status received", status=200)
         # --- КОНЕЦ ОБРАБОТКИ PROCESSING ---
 
+        logger.info("🔹 Статус NOT processing - обрабатываем результат")
+        
         # --- НАДЕЖНАЯ ОЧИСТКА И ПРЕОБРАЗОВАНИЕ ДАННЫХ ---
         student_user_id = int(str(data.get("student_user_id", "0")).strip())
         course_numeric_id = int(str(data.get("course_numeric_id", "0")).strip())
@@ -2026,8 +2030,8 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
         is_approved_raw = data.get("is_approved", "false")  # Получаем как есть
         is_approved = str(is_approved_raw).strip().lower() == 'true'
 
-        logger.info(
-            f"Данные после очистки: user={student_user_id}, course={course_numeric_id}, lesson={lesson_num}, approved={is_approved}")
+        logger.info(f"🔹 Данные после очистки: user={student_user_id}, course={course_numeric_id}, lesson={lesson_num}, approved={is_approved}")
+        logger.info(f"🔹 feedback_text (len={len(feedback_text)}): {feedback_text[:100]}...")
 
         # ===== НОВАЯ ЛОГИКА: ПРОВЕРКА ЗАМКА И ОТПРАВКА СОВЕТА ===== todo 29-06
         # ===== ПРОВЕРКА БЛОКИРОВКИ =====
