@@ -1288,7 +1288,8 @@ async def check_pending_homework_timeout():
                             feedback_text="Принято.",  # Коротко для клиента
                             is_approved=True,
                             callback_query=None,
-                            original_admin_message_id_to_delete=admin_msg_id
+                            original_admin_message_id_to_delete=admin_msg_id,
+                            homework_file_id=""  # Авто-одобрение, file_id не нужен
                         )
                         
                         # Добавим примечание админам, что это авто-аппрув по таймауту
@@ -2037,6 +2038,24 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
         logger.info(f"🔹 Данные после очистки: user={student_user_id}, course={course_numeric_id}, lesson={lesson_num}, approved={is_approved}")
         logger.info(f"🔹 feedback_text (len={len(feedback_text)}): {feedback_text[:100]}...")
 
+        # ===== ДОСТАЁМ homework_file_id ИЗ БД =====
+        homework_file_id = ""
+        try:
+            async with aiosqlite.connect(DB_FILE) as conn:
+                cursor = await conn.execute(
+                    "SELECT homework_file_id FROM pending_admin_homework WHERE admin_message_id = ?",
+                    (original_admin_message_id,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    homework_file_id = row[0]
+                    logger.info(f"🔹 homework_file_id из БД: {homework_file_id[:20]}...")
+                else:
+                    logger.info(f"🔹 homework_file_id не найден в БД (текстовое ДЗ)")
+        except Exception as e_db:
+            logger.error(f"❌ Ошибка при получении homework_file_id из БД: {e_db}")
+        # ==========================================
+
         # ===== НОВАЯ ЛОГИКА: ПРОВЕРКА ЗАМКА И ОТПРАВКА СОВЕТА ===== todo 29-06
         # ===== ПРОВЕРКА БЛОКИРОВКИ =====
         if original_admin_message_id in HOMEWORK_BEING_PROCESSED:
@@ -2091,7 +2110,8 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
             is_approved=is_approved,
             #bot=bot, # Передаем bot
             callback_query=None,
-            original_admin_message_id_to_delete=original_admin_message_id
+            original_admin_message_id_to_delete=original_admin_message_id,
+            homework_file_id=homework_file_id  # Передаём file_id из БД
         )
         return web.Response(text="OK", status=200)
 
@@ -8538,11 +8558,13 @@ async def cb_get_daily_tasks(query: types.CallbackQuery):
 async def handle_homework_result(
         user_id: int, course_id: str, course_numeric_id: int, lesson_num: int,
         admin_id: int, feedback_text: str, is_approved: bool,
-        callback_query: types.CallbackQuery = None, original_admin_message_id_to_delete: int = None
+        callback_query: types.CallbackQuery = None,
+        original_admin_message_id_to_delete: int = None,
+        homework_file_id: str = ""
 ):
     log_prefix = f"handle_homework_result(user={user_id}, lesson={lesson_num}):"
     logger.info(
-        f"{log_prefix} Запуск. approved={is_approved}, admin_id={admin_id}, admin_msg_id={original_admin_message_id_to_delete}")
+        f"{log_prefix} Запуск. approved={is_approved}, admin_id={admin_id}, admin_msg_id={original_admin_message_id_to_delete}, file_id={'есть' if homework_file_id else 'нет'}")
 
     # ID сообщения в админ-чате, которое нужно обработать.
     # Оно приходит либо из callback_query (если нажал админ), либо напрямую (если вызвал ИИ).
