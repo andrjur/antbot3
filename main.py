@@ -10124,3 +10124,5 @@ if __name__ == "__main__":
 # @dp.message(F.text): Обработчики текстовых сообщений (ловят любой текст).
 # @dp.callback_query(lambda c: ...): Обработчики нажатий на кнопки (inline keyboard).
 # @dp.message(lambda message: message.text.lower() in settings["activation_codes"]): Обработчик для активации курса по коду.
+
+
