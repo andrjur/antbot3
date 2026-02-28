@@ -1993,13 +1993,28 @@ async def process_expert_question(message: types.Message, state: FSMContext):
 @require_n8n_secret
 async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
     """Получает от ИИ результат проверки ДЗ. да/нет и подробная причина."""
-    # Достаем bot из request.app.
-    # Указываем тип для подсказок IDE.
-    #bot: Bot = request.app['bot']
-    logger.info('Зашли в handle_n8n_hw_approval')  # <-- НОВЫЙ ЛОГ
+    logger.info('Зашли в handle_n8n_hw_approval')
     try:
         data = await request.json()
         logger.info(f"Получен callback от n8n (HW Approval): {data}")
+
+        # --- ПРОВЕРКА СТАТУСА PROCESSING (ИИ НАЧАЛ ПРОВЕРКУ) ---
+        if data.get("status") == "processing":
+            admin_message_id = data.get("admin_message_id")
+            if admin_message_id:
+                try:
+                    # Показываем админам что ИИ начал проверку
+                    await bot.send_message(
+                        chat_id=ADMIN_GROUP_ID,
+                        text=f"✅ ИИ начал проверку ДЗ (сообщение выше). Ожидайте результат...",
+                        reply_to_message_id=admin_message_id,
+                        parse_mode=None
+                    )
+                    logger.info(f"Отправлено уведомление о начале проверки ИИ для ДЗ #{admin_message_id}")
+                except Exception as e_notify:
+                    logger.error(f"Не удалось отправить уведомление о начале проверки: {e_notify}")
+            return web.Response(text="OK: Processing status received", status=200)
+        # --- КОНЕЦ ОБРАБОТКИ PROCESSING ---
 
         # --- НАДЕЖНАЯ ОЧИСТКА И ПРЕОБРАЗОВАНИЕ ДАННЫХ ---
         student_user_id = int(str(data.get("student_user_id", "0")).strip())
@@ -6003,7 +6018,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
             status_emoji = "▶️"  # Текущий урок, до которого дошел пользователь
 
         lessons_text_list_for_message.append(
-            f"{status_emoji} {l_num}. {lesson_title_safe}")  # Добавляем в текстовый список для сообщения
+            f"{status_emoji} {l_num}. {lesson_title_safe}")  # Д��бавляем в текстовый список для сообщения
 
         lessons_buttons_builder.button(
             text=f"{l_num}. {lesson_title_clean[:25]}" + ("…" if len(lesson_title_clean) > 25 else ""),
@@ -9363,7 +9378,7 @@ async def handle_homework(message: types.Message):
         )
 
     except Exception as e4826:
-        logger.error(f"Ошибка отправки домашки админам: {e4826}", exc_info=True)
+        logger.error(f"Ошибка отправки домашки ��дминам: {e4826}", exc_info=True)
         await message.answer(escape_md("Произошла ошибка при отправке вашего ДЗ. Попробуйте позже."),
                              parse_mode=None)
 

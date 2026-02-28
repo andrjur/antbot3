@@ -88,7 +88,43 @@ return {
 };
 ```
 
-#### Узел 8: HTTP Request (ОТПРАВКА РЕЗУЛЬТАТА БОТУ) ⭐️
+#### Узел 8: HTTP Request1 (СТАТУС PROCESSING) ⭐️
+
+**Этот узел отправляет статус "ИИ начал проверку"**
+
+**URL (Expression):**
+```
+{{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}
+```
+
+**Authentication:**
+- Generic Auth Type: `Header Auth`
+- Header Auth: `N8N_WEBHOOK_SECRE`
+
+**Headers:**
+```json
+{
+  "X-CALLBACK-SIGNATURE": "500"
+}
+```
+
+**Body (JSON):**
+```json
+{
+  "status": "processing",
+  "admin_message_id": "{{ $('Webhook-homework').item.json.body.original_admin_message_id || $('Webhook-homework').item.json.body.admin_message_id }}"
+}
+```
+
+**Важно:** Этот узел **НЕ обязательный**. Бот сам управляет таймером. Но если хотите показывать админам уведомление "ИИ начал проверку" — оставьте его.
+
+**Настройка:**
+- Run Once for All Items: `true`
+- Error Handling: `Continue On Fail` (чтобы ошибка не ломала основной workflow)
+
+---
+
+#### Узел 9: HTTP Request (ОТПРАВКА РЕЗУЛЬТАТА БОТУ) ⭐️
 
 **КРИТИЧЕСКИ ВАЖНО:**
 
