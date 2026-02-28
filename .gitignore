@@ -72,4 +72,8 @@ grafana-data/
 prometheus-data/
 alertmanager-data/
 CLAUDE.md
-GOALS.md
+
+
+
+*.png
+!ask_parol.jpg
