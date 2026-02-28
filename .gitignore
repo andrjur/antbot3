@@ -18,6 +18,13 @@ logs/
 *.log
 *.log.*
 
+# Temporary files
+PATCH_*.md
+apply_*.sh
+размышления.md
+*.tmp
+*.bak
+
 # Python
 __pycache__/
 *.py[cod]
