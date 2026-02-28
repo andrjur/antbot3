@@ -128,7 +128,28 @@ n8n **не должен** иметь жёстко прописанный URL д�
 URL: {{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}
 ```
 
-### 8. Функция get_next_lesson_time() — НЕ async
+### 9. n8n callback через BOT_INTERNAL_URL
+
+**Проблема:** При использовании `BOT_INTERNAL_URL=http://bot:8080` и режиме `WEBHOOK_MODE=false` (polling), n8n получал ошибку `404 Not Found`.
+
+**Решение (28.02.2026):**
+- В функции `main()` в блоке polling добавлены маршруты для n8n callback
+- `callback_base` формируется с `secret_path`: `http://bot:8080/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL`
+- n8n отправляет на внутренний URL, бот слушает этот путь
+
+**Важно:** В n8n HTTP Request узле URL должен быть:
+```
+{{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}
+```
+
+**НЕ правильно:**
+- `https://bot.indikov.ru/webhook/n8n_hw_result` ❌
+- `http://bot:8080/n8n_hw_result` ❌
+
+**Правильно:**
+- `{{ $('Webhook-homework').item.json.body.callback_webhook_url_result }}` ✅
+
+### 10. Таймер ДЗ — обратный и прямой отсчёт
 
 **Проблема:** Функция `get_next_lesson_time()` была вызвана с `await`, что вызывало ошибку:
 ```
