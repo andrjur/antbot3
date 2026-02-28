@@ -1250,7 +1250,7 @@ async def check_pending_homework_timeout():
                 cursor = await conn.execute('''
                     SELECT admin_message_id, admin_chat_id, student_user_id,
                            course_numeric_id, lesson_num, student_message_id, created_at,
-                           homework_text
+                           homework_text, homework_file_id
                     FROM pending_admin_homework
                 ''')
                 pending_rows = await cursor.fetchall()
@@ -1258,7 +1258,7 @@ async def check_pending_homework_timeout():
                 logger.debug(f"check_pending_homework_timeout: найдено {len(pending_rows)} pending ДЗ")
 
                 for row in pending_rows:
-                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at_str, homework_text = row
+                    admin_msg_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_msg_id, created_at_str, homework_text, homework_file_id = row
 
                     # Считаем возраст ДЗ в секундах
                     created_at = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=pytz.utc)
@@ -1353,6 +1353,9 @@ async def check_pending_homework_timeout():
                             callback_base = f"{host}/{secret_path}" if secret_path else f"{host}/bot/"
                         callback_url = f"{callback_base}/n8n_hw_result"
 
+                        # Определяем тип контента для n8n
+                        content_type = "photo" if homework_file_id else "text"
+
                         payload = {
                             "action": "check_homework",
                             "student_user_id": student_user_id,
@@ -1363,7 +1366,8 @@ async def check_pending_homework_timeout():
                             "lesson_num": lesson_num,
                             "lesson_assignment_description": lesson_description,
                             "homework_text": homework_text or "",
-                            "homework_content_type": "text",
+                            "homework_file_id": homework_file_id or "",  # Передаём ID файла
+                            "homework_content_type": content_type,  # "photo" или "text"
                             "expected_homework_type": expected_hw_type,
                             "original_admin_message_id": admin_msg_id,
                             "admin_group_id": ADMIN_GROUP_ID,
@@ -2311,7 +2315,7 @@ async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, rep
             f"💥 Ошибка Telegram API в send_lesson_to_user для user {user_id}, курс {course_id}, урок {lesson_num}: {e1221}",
             exc_info=True)
         await bot.send_message(user_id,
-                               escape_md("📛 Произошла ошибка при отправке урока (Telegram API). Мы уже разбираемся!"),
+                               escape_md("📛 Произо��ла ошибка при отправке урока (Telegram API). Мы уже разбираемся!"),
                                parse_mode=None)
     except Exception as e1456:
         logger.error(
@@ -4842,7 +4846,7 @@ async def show_lessons_list(user_id: int, chat_id: int, message_id: int = None):
         if message_id:
             await bot.edit_message_text(f"❌ Ошибка: {e}", chat_id=chat_id, message_id=message_id)
         else:
-            await bot.send_message(chat_id, f"❌ Ошибка: {e}")
+            await bot.send_message(chat_id, f"�� Ошибка: {e}")
 
 
 @dp.callback_query(BackToListCallback.filter())
@@ -9323,8 +9327,8 @@ async def handle_homework(message: types.Message):
                 async with aiosqlite.connect(DB_FILE) as conn:
                     await conn.execute("""
                         INSERT INTO pending_admin_homework
-                        (admin_message_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_message_id, homework_text)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (admin_message_id, admin_chat_id, student_user_id, course_numeric_id, lesson_num, student_message_id, homework_text, homework_file_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         sent_admin_message.message_id,
                         ADMIN_GROUP_ID,
@@ -9332,7 +9336,8 @@ async def handle_homework(message: types.Message):
                         course_numeric_id,
                         current_lesson,
                         message.message_id,
-                        text or ""
+                        text or "",
+                        file_id or ""  # Добавляем file_id (пустая строка если текст)
                     ))
                     await conn.commit()
                     logger.info(
@@ -9818,6 +9823,17 @@ async def on_startup():
             )
             await conn.commit()
             logger.info("Миграция: колонка homework_text добавлена в pending_admin_homework")
+    except Exception:
+        pass  # Колонка уже существует — игнорируем
+
+    # Миграция БД: добавить homework_file_id в pending_admin_homework
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            await conn.execute(
+                "ALTER TABLE pending_admin_homework ADD COLUMN homework_file_id TEXT"
+            )
+            await conn.commit()
+            logger.info("Миграция: колонка homework_file_id добавлена в pending_admin_homework")
     except Exception:
         pass  # Колонка уже существует — игнорируем
 
