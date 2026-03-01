@@ -1357,6 +1357,10 @@ async def check_pending_homework_timeout():
                         # Определяем тип контента для n8n
                         content_type = "photo" if homework_file_id else "text"
 
+                        logger.info(f"📤 Формируем payload для n8n: content_type={content_type}, homework_file_id={'есть' if homework_file_id else 'нет'}")
+                        if homework_file_id:
+                            logger.info(f"📸 Photo file_id: {homework_file_id[:50]}...")
+
                         payload = {
                             "action": "check_homework",
                             "student_user_id": student_user_id,
@@ -1378,6 +1382,8 @@ async def check_pending_homework_timeout():
                             "telegram_bot_token": BOT_TOKEN,
                             "timeout_seconds": HW_TIMEOUT_SECONDS
                         }
+
+                        logger.info(f"📤 Payload для n8n: action={payload['action']}, file_id={payload['homework_file_id'][:30] if payload['homework_file_id'] else 'нет'}...")
 
                         # Отправляем в n8n (не блокируя цикл)
                         logger.info(f"📤 ДЗ #{admin_msg_id} отправлено на n8n (возраст: {age_seconds:.0f} сек)")
@@ -2037,6 +2043,8 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
 
         logger.info(f"🔹 Данные после очистки: user={student_user_id}, course={course_numeric_id}, lesson={lesson_num}, approved={is_approved}")
         logger.info(f"🔹 feedback_text (len={len(feedback_text)}): {feedback_text[:100]}...")
+        logger.info(f"🔹 n8n вернул: is_approved={is_approved}, feedback_text_len={len(feedback_text)}")
+        logger.info(f"🔹 n8n НЕ вернул homework_file_id (это нормально - бот сам достаёт из БД)")
 
         # ===== ДОСТАЁМ homework_file_id ИЗ БД =====
         homework_file_id = ""
@@ -3434,7 +3442,7 @@ async def import_db(message: types.Message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     
-    # Разрешаем суперадминам из лички или любому в админ-группе
+    # Разрешаем суперадми��ам из лички или любому в админ-группе
     if not (user_id in ADMIN_IDS_CONF or chat_id == ADMIN_GROUP_ID):
         await message.answer("❌ Только для суперадминов или в админ-группе.")
         return
@@ -7162,7 +7170,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
                 (user_id, course_id_for_review, review_text_raw)
             )
             await conn.commit()
-        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хотите пройти!"),
+        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хотите пройт��!"),
                             parse_mode=None)
 
         if ADMIN_GROUP_ID:
