@@ -2049,11 +2049,12 @@ async def handle_n8n_hw_approval(request: web.Request) -> web.Response:
                 row = await cursor.fetchone()
                 if row and row[0]:
                     homework_file_id = row[0]
-                    logger.info(f"🔹 homework_file_id из БД: {homework_file_id[:20]}...")
+                    logger.info(f"🔹 homework_file_id из БД: {homework_file_id[:50]}...")
                 else:
                     logger.info(f"🔹 homework_file_id не найден в БД (текстовое ДЗ)")
+                logger.info(f"🔹 original_admin_message_id={original_admin_message_id}, row={row}")
         except Exception as e_db:
-            logger.error(f"❌ Ошибка при получении homework_file_id из БД: {e_db}")
+            logger.error(f"❌ Ошибка при получении homework_file_id из БД: {e_db}", exc_info=True)
         # ==========================================
 
         # ===== НОВАЯ ЛОГИКА: ПРОВЕРКА ЗАМКА И ОТПРАВКА СОВЕТА ===== todo 29-06
