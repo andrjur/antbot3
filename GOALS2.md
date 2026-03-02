@@ -332,6 +332,204 @@ if expected_hw_type == "text":
 
 ---
 
+### Fix 8: n8n 2.8+ сломал синтаксис — items[0] → $input.first() (03.03.2026)
+
+**Проблема:**
+В n8n версии 2.8+ изменился API для Code нод. Старый синтаксис `items[0]` больше не работает.
+
+**Симптомы:**
+```
+Error in node 'Process Photo'
+Cannot find name 'items'
+```
+
+**Причина:**
+n8n 2.8+ ввёл новый API:
+- ❌ `items[0]` → больше не работает
+- ✅ `$input.first()` → новый способ получить первый item
+- ✅ `$input.all()` → вернуть все items
+- ✅ `$input.item.json` → работа с текущим item
+
+**Что сломалось в воркфлоу:**
+
+1. **Process Photo:**
+```javascript
+// ❌ БЫЛО:
+const binaryData = items[0].binary?.data;
+items[0].json.base64_image = binaryData.data;
+return items;
+
+// ✅ СТАЛО:
+const binaryData = $input.first().binary?.data;
+$input.first().json.base64_image = binaryData.data;
+return $input.all();
+```
+
+2. **Process Audio:**
+```javascript
+// ❌ БЫЛО:
+items[0].json.audio_data = binaryData.data;
+return items;
+
+// ✅ СТАЛО:
+$input.first().json.audio_data = binaryData.data;
+return $input.all();
+```
+
+3. **Process Video:**
+```javascript
+// ❌ БЫЛО:
+items[0].json.audio_data = binaryData.data;
+return items;
+
+// ✅ СТАЛО:
+$input.first().json.audio_data = binaryData.data;
+return $input.all();
+```
+
+**Решение (пошагово):**
+
+### Шаг 1: Обнови все Code ноды в n8n_flow.json
+
+Замени в каждой Code ноде:
+
+| Было | Стало |
+|------|-------|
+| `items[0].binary` | `$input.first().binary` |
+| `items[0].json` | `$input.first().json` |
+| `return items` | `return $input.all()` |
+
+**Ноды которые нужно исправить:**
+- Process Photo
+- Process Audio
+- Process Video
+
+### Шаг 2: Проверь остальные Code ноды
+
+Остальные ноды используют `$input.item.json` — это **правильно**, их менять не нужно!
+
+**Проверь:**
+- Prepare Text Messages ✅ (использует `$input.item.json`)
+- Route File Type ✅ (использует `$input.item.json`)
+- Prepare AI Messages ✅ (использует `$input.item.json`)
+- Prepare OpenRouter JSON ✅ (использует `$input.item.json`)
+- Parse JSON Response ✅ (использует `$input.item.json`)
+
+### Шаг 3: Отправь на сервер и обнови воркфлоу
+
+```bash
+# На сервере:
+cd ~/antbot4
+git pull origin main
+
+# В n8n:
+# 1. Открой воркфлоу
+# 2. Import From File → выбери n8n_flow.json
+# 3. Сохрани (Ctrl+S)
+# 4. Активируй воркфлоу
+```
+
+### Шаг 4: Протестируй
+
+1. Отправь ДЗ с фото
+2. Проверь что **Process Photo** выполняется без ошибок
+3. Проверь что **binary data** передаётся дальше
+
+**Ожидаемый результат:**
+```
+📸 Фото: 67327 байт, MIME: image/jpeg
+```
+
+---
+
+## 🧪 Гипотезы и отладка
+
+### Гипотеза 1: binary data теряется в Route File Type
+
+**Проблема:** Process Photo не получает binary data.
+
+**Причина:** Route File Type создаёт новый json объект, но не передаёт binary.
+
+**Решение:**
+```javascript
+// В Route File Type:
+return [{
+  json: {
+    ...$input.item.json,
+    file_type: fileType,
+    mime_type: mimeType,
+    route_output: output
+  },
+  binary: $input.item.json.binary  // ← Сохраняем binary!
+}];
+```
+
+### Гипотеза 2: Get a file не скачивает файл
+
+**Проблема:** Get a file возвращает только метаданные, без binary.
+
+**Проверка:**
+1. Открой ноду **Get a file**
+2. Проверь параметр **Download** → должен быть `true` (зелёный)
+
+**Решение:**
+```json
+{
+  "resource": "file",
+  "fileId": "={{ $('Edit Fields').item.json.hw_file_id }}",
+  "download": true,  // ← Обязательно!
+  "additionalFields": {}
+}
+```
+
+### Гипотеза 3: Неверное выражение File ID
+
+**Проблема:** Get a file получает `undefined` вместо file_id.
+
+**Причина:** Используется `$json.homework_file_id`, но поле называется `hw_file_id` и создаётся в Edit Fields.
+
+**Решение:**
+```javascript
+// ❌ НЕПРАВИЛЬНО:
+{{ $json.homework_file_id }}
+
+// ✅ ПРАВИЛЬНО:
+{{ $('Edit Fields').item.json.hw_file_id }}
+```
+
+### Гипотеза 4: Ошибка "Cannot find name 'items'"
+
+**Проблема:** n8n 2.8+ не знает `items`.
+
+**Решение:** Заменить все `items[0]` на `$input.first()` (см. выше).
+
+---
+
+## 📋 Чек-лист отладки binary data
+
+Если Process Photo/Audio/Video не получает binary data:
+
+1. ✅ **Get a file** → `download: true`
+2. ✅ **Get a file** → File ID: `{{ $('Edit Fields').item.json.hw_file_id }}`
+3. ✅ **Route File Type** → передаёт `binary: $input.item.json.binary`
+4. ✅ **Process Photo/Audio/Video** → использует `$input.first().binary`
+5. ✅ **Process Photo/Audio/Video** → возвращает `$input.all()`
+
+---
+
+## 🎯 Итоговая таблица изменений n8n 2.8+
+
+| Конструкция | До 2.8 | 2.8+ |
+|-------------|--------|------|
+| Первый item | `items[0]` | `$input.first()` |
+| Все items | `items` | `$input.all()` |
+| Текущий item | N/A | `$input.item` |
+| JSON item | `items[0].json` | `$input.first().json` |
+| Binary data | `items[0].binary` | `$input.first().binary` |
+| Return items | `return items` | `return $input.all()` |
+
+---
+
 ## 🏗️ Инфраструктура и Архитектура
 
 ### 1. Маршрутизация и Порты (Docker + Cloudflare)
