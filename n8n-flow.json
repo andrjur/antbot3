@@ -212,21 +212,27 @@
     },
     {
       "parameters": {
+        "jsCode": "// Подготовка messages content для OpenRouter AI\nconst hwText = $input.item.json.hw_text || $('Edit Fields').item.json.hw_text || '[Текст отсутствует]';\nconst audioWarning = $input.item.json.audio_warning || '';\nconst fileWarning = $input.item.json.file_warning || '';\nconst base64Image = $input.item.json.base64_image || null;\nconst mimeType = $input.item.json.mime_type || '';\nconst fileType = $input.item.json.file_type || '';\nconst audioData = $input.item.json.audio_data || null;\n\n// Формируем text content\nlet textContent = `РАБОТА СТУДЕНТА:\\n${hwText}`;\nif (audioWarning) textContent += `\\n\\n⚠️ ${audioWarning}`;\nif (fileWarning) textContent += `\\n\\n⚠️ ${fileWarning}`;\n\n// Формируем messages content array\nconst messagesContent = [\n  {\n    type: \"text\",\n    text: textContent\n  }\n];\n\n// Добавляем image если есть\nif (base64Image && mimeType) {\n  messagesContent.push({\n    type: \"image_url\",\n    image_url: {\n      url: `data:${mimeType};base64,${base64Image}`\n    }\n  });\n}\n\n// Добавляем audio если есть (для audio и video)\nif (audioData && (fileType === 'audio' || fileType === 'video')) {\n  const audioFormat = mimeType.includes('ogg') ? 'ogg' : 'wav';\n  messagesContent.push({\n    type: \"input_audio\",\n    input_audio: {\n      data: audioData,\n      format: audioFormat\n    }\n  });\n}\n\nconsole.log('📝 Messages content prepared:', JSON.stringify(messagesContent).substring(0, 200));\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    messages_content: messagesContent\n  }\n}];",
+        "notes": "Формирует messages content для OpenRouter API"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        480
+      ],
+      "id": "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+      "name": "Prepare AI Messages"
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "authentication": "predefinedCredentialType",
+        "genericAuthType": "openRouterApi",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "Authorization",
-              "value": "Bearer {{$credentials.openRouterApi.apiKey}}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
             {
               "name": "HTTP-Referer",
               "value": "https://n8n.indikov.ru"
@@ -238,25 +244,10 @@
           ]
         },
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "model",
-              "value": "google/gemini-2.5-flash"
-            },
-            {
-              "name": "response_format.type",
-              "value": "json_object"
-            },
-            {
-              "name": "messages",
-              "value": "=[\n  {\n    \"role\": \"system\",\n    \"content\": \"Ты мудрый наставник на онлайн-курсе. Имя студента: {{ $('Edit Fields').item.json.student_name }}.\\n\\nКонтекст задания:\\n{{ $('Edit Fields').item.json.lesson_desc }}\\n\\nТВОИ ПРАВИЛА:\\n1. Оцени работу. Если есть фото — посмотри, соответствует ли оно заданию.\\n2. Если есть аудио/видео — ИИ может напрямую воспринимать аудио.\\n3. Если работа осмысленная — ставь \\\"is_approved\\\": true. Бессмысленная — false.\\n4. Твой \\\"feedback_text\\\" должен быть личным, ободряющим, с правильными окончаниями.\\n5. Если студент прислал фото — упомяни конкретные детали.\\n\\nОтвет СТРОГО в формате JSON: {\\\"is_approved\\\": boolean, \\\"feedback_text\\\": \\\"string\\\"}\"\n  },\n  {\n    \"role\": \"user\",\n    \"content\": [\n      {\n        \"type\": \"text\",\n        \"text\": \"РАБОТА СТУДЕНТА:\\n{{ $json.hw_text || $('Edit Fields').item.json.hw_text }}{{ $json.audio_warning ? '\\n\\n⚠️ ' + $json.audio_warning : '' }}{{ $json.file_warning ? '\\n\\n⚠️ ' + $json.file_warning : '' }}\"\n      },\n      {{ $json.base64_image ? '{\"type\": \"image_url\", \"image_url\": {\"url\": \"data:' + $json.mime_type + ';base64,' + $json.base64_image + '\"}}' : 'null' }}\n      {{ $json.file_type === 'audio' || $json.file_type === 'video' ? ', {\"type\": \"input_audio\", \"input_audio\": {\"data\": \"' + ($json.audio_data || '') + '\", \"format\": \"' + ($json.mime_type.includes('ogg') ? 'ogg' : 'wav') + '\"}}' : '' }}\n    ]\n  }\n]"
-            }
-          ]
-        },
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"google/gemini-2.5-flash\",\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Ты мудрый наставник на онлайн-курсе. Имя студента: {{ $('Edit Fields').item.json.student_name }}.\\n\\nКонтекст задания:\\n{{ $('Edit Fields').item.json.lesson_desc }}\\n\\nТВОИ ПРАВИЛА:\\n1. Оцени работу. Если есть фото — посмотри, соответствует ли оно заданию.\\n2. Если есть аудио/видео — ИИ может напрямую воспринимать аудио.\\n3. Если работа осмысленная — ставь \\\"is_approved\\\": true. Бессмысленная — false.\\n4. Твой \\\"feedback_text\\\" должен быть личным, ободряющим, с правильными окончаниями.\\n5. Если студент прислал фото — упомяни конкретные детали.\\n\\nОтвет СТРОГО в формате JSON: {\\\"is_approved\\\": boolean, \\\"feedback_text\\\": \\\"string\\\"}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify($json.messages_content) }}\n    }\n  ]\n}",
         "options": {
           "timeout": 60000,
-          "allowUnauthorizedCerts": false,
           "retry": {
             "count": 3,
             "delay": 1000,
@@ -274,7 +265,7 @@
       "id": "d4e5f6a7-b8c9-0123-def0-234567890123",
       "name": "OpenRouter AI",
       "credentials": {
-        "httpHeaderAuth": {
+        "openRouterApi": {
           "id": "BT6u6hYxUcBltOkv",
           "name": "OpenRouter account"
         }
@@ -549,7 +540,7 @@
       "main": [
         [
           {
-            "node": "OpenRouter AI",
+            "node": "Prepare AI Messages",
             "type": "main",
             "index": 0
           }
@@ -560,7 +551,7 @@
       "main": [
         [
           {
-            "node": "OpenRouter AI",
+            "node": "Prepare AI Messages",
             "type": "main",
             "index": 0
           }
@@ -568,6 +559,17 @@
       ]
     },
     "Process Video": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Messages": {
       "main": [
         [
           {
