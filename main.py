@@ -3438,7 +3438,7 @@ async def export_db(message: types.Message):
 @dp.message(Command("import_db"))
 @db_exception_handler
 async def import_db(message: types.Message):
-    """Импорт данных из JSON-файла в базу данных. Для суперадминов или в админ-группе."""
+    """Импо������т данных из JSON-файла в базу данных. Для суперадминов или в админ-группе."""
     user_id = message.from_user.id
     chat_id = message.chat.id
     
@@ -7170,7 +7170,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
                 (user_id, course_id_for_review, review_text_raw)
             )
             await conn.commit()
-        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хотите пройт��!"),
+        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хотите пройт���!"),
                             parse_mode=None)
 
         if ADMIN_GROUP_ID:
@@ -9167,28 +9167,96 @@ async def handle_homework(message: types.Message):
                 f"Не найден ожидаемый тип ДЗ (hw_type) для урока {current_lesson} курса {course_id}. Разрешаю любой тип.")
             expected_hw_type = "any"  # Если тип не указан в базе, считаем, что подходит любой
 
-    # Определяем тип присланного ДЗ
-    submitted_content_type = message.content_type.lower()  # 'text', 'photo', 'document', etc.
-
-    # Проверка типа ДЗ - поддерживаем множественные типы через "|" (например: "text|photo")
+    # === ГИБКАЯ ПРОВЕРКА ТИПА ДЗ ===
+    # Логика: "более крутое" задание заменяет "более простое"
+    # text < photo, document, voice, audio, video, animation
+    # photo < video (видео может содержать фото)
+    
+    submitted_content_type = message.content_type.lower()
+    
+    # Проверка размера видео (макс 10 МБ)
+    if submitted_content_type == "video":
+        video_size = message.video.file_size if message.video else 0
+        MAX_VIDEO_SIZE = 10 * 1024 * 1024  # 10 МБ
+        if video_size > MAX_VIDEO_SIZE:
+            await message.reply(
+                f"⚠️ Видео слишком большое ({video_size / 1024 / 1024:.1f} МБ).\n"
+                f"Максимальный размер: 10 МБ.\n\n"
+                f"Пожалуйста, сожмите видео или отправьте ДЗ другим способом (фото, текст, аудио).",
+                parse_mode=None
+            )
+            return
+    
+    # Определяем, является ли тип "продвинутым" (медиа)
+    MEDIA_TYPES = {"photo", "document", "voice", "audio", "video", "animation"}
+    
+    # Проверка типа ДЗ
     is_type_allowed = False
     
     if expected_hw_type == "any":
         is_type_allowed = True
+    
     elif "|" in expected_hw_type:
         # Множественные типы: "text|photo|document"
         allowed_types = [t.strip().lower() for t in expected_hw_type.split("|")]
         is_type_allowed = submitted_content_type in allowed_types
-    else:
-        # Один тип - прямое совпадение
-        is_type_allowed = submitted_content_type == expected_hw_type
-
-    # Специальные случаи
-    if not is_type_allowed:
-        # Если ожидается текст, но прислали медиа с подписью - это может быть ок
-        if expected_hw_type == "text" and submitted_content_type in ["photo", "video", "document", "animation"] and message.caption:
-            is_type_allowed = True  # Медиа с подписью считаем как текст
+        # Если ожидается любой из типов, медиа всегда ок
+        if not is_type_allowed and submitted_content_type in MEDIA_TYPES:
+            is_type_allowed = True
     
+    elif expected_hw_type == "text":
+        # Текст — самый гибкий тип. Можно сдать:
+        # - текст
+        # - фото с описанием
+        # - документ с описанием
+        # - голосовое с описанием
+        # - аудио с описанием
+        # - видео с описанием
+        # - анимацию с описанием
+        if submitted_content_type == "text":
+            is_type_allowed = True
+        elif submitted_content_type in MEDIA_TYPES:
+            # Медиа с caption или без — всё ок!
+            is_type_allowed = True
+            logger.info(f"📚 ДЗ текстовое, но студент прислал {submitted_content_type} — это даже лучше!")
+    
+    elif expected_hw_type == "photo":
+        # Фото — можно сдать фото или видео (видео "круче")
+        if submitted_content_type == "photo":
+            is_type_allowed = True
+        elif submitted_content_type == "video":
+            is_type_allowed = True
+            logger.info(f"📸 ДЗ фото, но студент прислал видео — отлично!")
+        elif submitted_content_type == "document" and message.document.mime_type.startswith("image/"):
+            # Документ с изображением (например, TIFF)
+            is_type_allowed = True
+    
+    elif expected_hw_type == "audio":
+        # Аудио — можно сдать audio, voice, video (кружочки)
+        if submitted_content_type in ["audio", "voice", "video"]:
+            is_type_allowed = True
+            logger.info(f"🎵 ДЗ аудио, студент прислал {submitted_content_type} — ок!")
+    
+    elif expected_hw_type == "video":
+        # Видео — только видео (но с проверкой размера уже было выше)
+        if submitted_content_type == "video":
+            is_type_allowed = True
+    
+    elif expected_hw_type == "document":
+        # Документ — можно document или photo (скан)
+        if submitted_content_type in ["document", "photo"]:
+            is_type_allowed = True
+    
+    elif expected_hw_type == "voice":
+        # Голосовое — можно voice, audio, video (кружочек)
+        if submitted_content_type in ["voice", "audio", "video"]:
+            is_type_allowed = True
+    
+    else:
+        # Неизвестный тип — разрешаем всё
+        is_type_allowed = True
+        logger.warning(f"❓ Неизвестный ожидаемый тип ДЗ '{expected_hw_type}', разрешаю всё")
+
     if not is_type_allowed:
         logger.warning(f"Несоответствие типа ДЗ для урока {current_lesson} курса {course_id}. "
                        f"Ожидался: '{expected_hw_type}', получен: '{submitted_content_type}'.")
@@ -9235,8 +9303,18 @@ async def handle_homework(message: types.Message):
         text = message.caption or ""  # Получаем подпись к документу (если есть)
         file_id = message.document.file_id
         admin_message_content = f"📎 Документ: {file_id}\n✏️ Описание: {md.quote(text)}"
+    elif message.voice:
+        homework_type = "Голосовое сообщение"
+        text = message.caption or ""  # Получаем подпись к голосовому (если есть)
+        file_id = message.voice.file_id  # Голосовое сообщение
+        admin_message_content = f"🎤 Голосовое: {file_id}\n✏️ Описание: {md.quote(text)}"
+    elif message.audio:
+        homework_type = "Аудио"
+        text = message.caption or ""  # Получаем подпись к аудио (если есть)
+        file_id = message.audio.file_id  # Аудиофайл
+        admin_message_content = f"🎵 Аудио: {file_id}\n✏️ Описание: {md.quote(text)}"
     else:
-        await message.answer("Неподдерживаемый тип контента.")
+        await message.answer("Неподдерживаемый тип контента. Пожалуйста, отправьте текст, фото, документ, голосовое или аудио.")
         return
     logger.info(f"admin_message_content: {admin_message_content} {file_id=}")
     

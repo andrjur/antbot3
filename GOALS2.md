@@ -6,6 +6,332 @@
 
 ---
 
+## 🤖 n8n Workflow — Исправление ошибок мультимодальной проверки ДЗ (01.03.2026)
+
+### Fix 1: Ошибка «Нет бинарных данных» в Process Photo
+
+**Проблема:**
+Нода **Process Photo** падала с ошибкой:
+```
+Нет бинарных данных [line 5]
+```
+
+**Диагностика:**
+В INPUT ноды **Get a file** видны только метаданные файла:
+- `file_id`: AgACAgIA...
+- `file_size`: 75569
+- `file_path`: photos/file-1.jpg
+
+Но **binary data** отсутствует!
+
+**Причина:**
+В ноде **Get a file** не была включена опция **Download**. Без этой опции Telegram Node возвращает только метаданные файла, но не загружает само бинарное содержимое.
+
+**Решение (вручную в n8n):**
+
+1. Открыть ноду **Get a file** в воркфлоу
+2. Включить переключатель **Download** (должен стать зелёным)
+3. Исправить выражение в поле **File ID**:
+   - ❌ Было: `{{ $json.homework_file_id }}`
+   - ✅ Стало: `{{ $('Edit Fields').item.json.hw_file_id }}`
+4. Сохранить ноду
+
+**Почему `$('Edit Fields').item.json.hw_file_id`:**
+- Нода **Edit Fields** создаёт поле `hw_file_id` из `$json.body.homework_file_id`
+- В потоке данных после **Edit Fields** нужно обращаться к созданному полю
+- Синтаксис `$('NodeName').item.json.fieldName` берёт данные напрямую из указанной ноды
+
+**Результат:**
+После включения **Download** нода **Get a file** начинает загружать файл из Telegram и помещает его в `binary.data`. Нода **Process Photo** успешно конвертирует в Base64.
+
+---
+
+### Fix 2: Ошибка «JSON parameter needs to be valid JSON» в OpenRouter AI
+
+**Проблема:**
+Нода **OpenRouter AI** показывала ошибку валидации JSON.
+
+**Причина:**
+Попытка вставить сложный объект (`messages_content` array) напрямую в JSON Body через `{{ $json.messages_content }}` приводила к `[object Object]`.
+
+**Решение:**
+Добавлена промежуточная Code нода **Prepare OpenRouter JSON** которая готовит полный объект запроса:
+
+```javascript
+// Code нода: Prepare OpenRouter JSON
+const studentName = $('Edit Fields').item.json.student_name || 'Студент';
+const lessonDesc = $('Edit Fields').item.json.lesson_desc || 'Оценить ДЗ';
+const messagesContent = $input.item.json.messages_content || [];
+
+return [{
+  json: {
+    openrouter_request: {
+      model: 'google/gemini-2.5-flash',
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: `Ты мудрый наставник... ${studentName}... ${lessonDesc}`
+        },
+        {
+          role: 'user',
+          content: messagesContent
+        }
+      ]
+    }
+  }
+}];
+```
+
+В ноде **OpenRouter AI** используется простое выражение:
+```javascript
+={{ $json.openrouter_request }}
+```
+
+**Схема:**
+```
+Prepare AI Messages → Prepare OpenRouter JSON → OpenRouter AI
+                        (Code нода)           (={{ $json.openrouter_request }})
+```
+
+---
+
+### Fix 3: Credential Type не выбран в OpenRouter AI
+
+**Проблема:**
+В ноде **OpenRouter AI** не выбирался Credential Type в выпадающем списке.
+
+**Причина:**
+В параметрах ноды использовалось `genericAuthType: "openRouterApi"` вместо `nodeCredentialType: "openRouterApi"`.
+
+**Решение:**
+Изменено с `genericAuthType` на `nodeCredentialType`:
+
+```json
+"authentication": "predefinedCredentialType",
+"nodeCredentialType": "openRouterApi",
+"credentials": {
+  "openRouterApi": {
+    "id": "BT6u6hYxUcBltOkv",
+    "name": "OpenRouter account"
+  }
+}
+```
+
+**Важно:**
+- `genericAuthType` — для простых типов (httpHeaderAuth, httpBasicAuth)
+- `nodeCredentialType` — для специальных типов (openRouterApi, oAuth2Api, OAuth)
+
+---
+
+### Fix 4: Prepare Text Messages шёл напрямую в OpenRouter AI
+
+**Проблема:**
+Нода **Prepare Text Messages** была подключена напрямую к **OpenRouter AI**, минуя **Prepare OpenRouter JSON**. Это приводило к ошибке потому что **Prepare Text Messages** создаёт `messages_content`, но не создаёт полный объект запроса `openrouter_request`.
+
+**Решение:**
+Переключить connection:
+- ❌ Было: **Prepare Text Messages** → **OpenRouter AI**
+- ✅ Стало: **Prepare Text Messages** → **Prepare OpenRouter JSON** → **OpenRouter AI**
+
+Аналогично для ветки с файлами:
+**Prepare AI Messages** → **Prepare OpenRouter JSON** → **OpenRouter AI**
+
+---
+
+### Fix 5: Добавлена поддержка голосовых сообщений (voice) и аудио (02.03.2026)
+
+**Проблема:**
+Студенты не могли отправить голосовое сообщение (voice) или аудиофайл как домашнее задание. Бот отвечал "Неподдерживаемый тип контента".
+
+**Причина:**
+В функции `handle_homework()` не было обработки `message.voice` и `message.audio`.
+
+**Решение (в main.py):**
+
+1. **Добавлена обработка voice/audio в определении типа контента:**
+```python
+elif message.voice:
+    homework_type = "Голосовое сообщение"
+    text = message.caption or ""
+    file_id = message.voice.file_id
+    admin_message_content = f"🎤 Голосовое: {file_id}\n✏️ Описание: {md.quote(text)}"
+elif message.audio:
+    homework_type = "Аудио"
+    text = message.caption or ""
+    file_id = message.audio.file_id
+    admin_message_content = f"🎵 Аудио: {file_id}\n✏️ Описание: {md.quote(text)}"
+```
+
+2. **Добавлена отправка voice/audio в ADMIN_GROUP_ID:**
+```python
+elif message.voice:
+    sent_admin_message = await bot.send_voice(
+        chat_id=ADMIN_GROUP_ID,
+        voice=message.voice.file_id,
+        caption=caption_with_description,
+        reply_markup=admin_keyboard,
+        parse_mode=None
+    )
+elif message.audio:
+    sent_admin_message = await bot.send_audio(
+        chat_id=ADMIN_GROUP_ID,
+        audio=message.audio.file_id,
+        caption=caption_with_description,
+        reply_markup=admin_keyboard,
+        parse_mode=None
+    )
+```
+
+3. **Добавлена проверка типа ДЗ:**
+```python
+# Если ожидается текст, но прислали медиа с подписью — это ок
+if expected_hw_type == "text" and submitted_content_type in ["photo", "video", "document", "animation", "voice", "audio"] and message.caption:
+    is_type_allowed = True
+
+# Если ожидается audio, то voice тоже подходит (и наоборот)
+if expected_hw_type in ["audio", "voice"] and submitted_content_type in ["audio", "voice"]:
+    is_type_allowed = True
+```
+
+**Результат:**
+- Студенты могут отправлять голосовые сообщения (🎤 voice) как ДЗ
+- Студенты могут отправлять аудиофайлы (🎵 audio) как ДЗ
+- Голосовые/аудио отправляются в ADMIN_GROUP_ID с кнопками "Принять/Отклонить"
+- n8n получает `homework_file_id` и может обработать через OpenRouter AI (Gemini поддерживает audio)
+
+**Важно:**
+- Голосовые сообщения приходят в формате `voice` (ogg/opus)
+- Аудиофайлы приходят в формате `audio` (mp3, m4a, и т.д.)
+- Оба типа поддерживают `caption` (текстовое описание)
+- Для голосовых caption не отображается в Telegram клиентах, но API его принимает
+
+---
+
+### Fix 6: Исправление ошибок в логах n8n (02.03.2026)
+
+**Проблема:**
+В логах n8n наблюдались ошибки:
+
+```bash
+ValidationError: The 'X-Forwarded-For' header is set but the Express 'trust proxy' setting is false
+Error fetching feature flags Error [PostHogFetchHttpError]: HTTP error while fetching PostHog: 504
+Failed to start Python task runner in internal mode. because Python 3 is missing
+```
+
+**Диагностика:**
+
+1. **X-Forwarded-For / trust proxy:**
+   - Cloudflare передаёт заголовок `X-Forwarded-For` с IP клиента
+   - n8n по умолчанию не доверяет прокси (`trust proxy = false`)
+   - express-rate-limit не может корректно идентифицировать пользователей
+
+2. **PostHog 504:**
+   - n8n пытается отправить телеметрию в PostHog (аналитика использования)
+   - Сервер недоступен или таймаут
+   - Это только "шум" в логах, на работу не влияет
+
+3. **Python runner:**
+   - n8n пытается запустить Python task runner в internal mode
+   - В контейнере нет Python 3
+   - Это warning, на работу не влияет (если не используешь Python код)
+
+**Решение:**
+
+Добавлены переменные окружения в `docker-compose.yml`:
+
+```yaml
+environment:
+  - N8N_TRUST_PROXY=true              # Уже было ✅
+  - N8N_DIAGNOSTICS_ENABLED=false     # Отключает диагностику
+  - N8N_TELEMETRY_ENABLED=false       # Отключает телеметрию PostHog
+  - N8N_VERSION_NOTIFICATIONS_ENABLED=false  # Отключает проверку версий
+```
+
+**Результат:**
+- ✅ n8n доверяет Cloudflare (правильный rate limiting)
+- ✅ Нет ошибок PostHog 504 в логах
+- ✅ Чище логи, меньше шума
+
+**Важно:**
+- `N8N_TRUST_PROXY=true` — критично для правильной работы за Cloudflare
+- Остальные переменные — опциональны, для чистоты логов
+- Python runner warning можно игнорировать (если не используешь Python код в n8n)
+
+---
+
+### Fix 7: Гибкая проверка типов ДЗ (02.03.2026)
+
+**Проблема:**
+Студенты не могли сдать ДЗ "более крутым" способом. Например:
+- Ожидается текст → нельзя сдать фото с решением
+- Ожидается фото → нельзя сдать видео
+- Ожидается аудио → нельзя сдать голосовое
+
+**Причина:**
+Жёсткая проверка типа: `submitted_content_type == expected_hw_type`
+
+**Решение:**
+
+Введена **иерархия "крутости"** типов контента:
+
+```
+text < photo, document, voice, audio, video, animation
+photo < video (видео "круче" фото)
+audio ≈ voice ≈ video (кружочек)
+```
+
+**Новая логика:**
+
+| Ожидается | Можно сдать |
+|-----------|--------------|
+| `text` | текст, фото, документ, голосовое, аудио, видео, анимация |
+| `photo` | фото, видео (видео "круче") |
+| `audio` | аудио, голосовое, видео (кружочек) |
+| `voice` | голосовое, аудио, видео (кружочек) |
+| `video` | видео (с проверкой размера) |
+| `document` | документ, фото (скан) |
+
+**Проверка размера видео:**
+- Максимум: **10 МБ**
+- Если больше → предупреждение с указанием размера
+
+**Код:**
+```python
+# Проверка размера видео
+if submitted_content_type == "video":
+    video_size = message.video.file_size
+    MAX_VIDEO_SIZE = 10 * 1024 * 1024  # 10 МБ
+    if video_size > MAX_VIDEO_SIZE:
+        await message.reply(
+            f"⚠️ Видео слишком большое ({video_size / 1024 / 1024:.1f} МБ).\n"
+            f"Максимальный размер: 10 МБ."
+        )
+        return
+
+# Гибкая проверка
+if expected_hw_type == "text":
+    # Текст — самый гибкий, медиа "круче"
+    if submitted_content_type in MEDIA_TYPES:
+        logger.info(f"📚 ДЗ текстовое, но студент прислал {submitted_content_type} — это даже лучше!")
+```
+
+**Результат:**
+- ✅ Студенты могут сдавать ДЗ "более крутым" способом
+- ✅ Фото рукописного решения → ок для текстового ДЗ
+- ✅ Голосовое с размышлениями → ок для текстового ДЗ
+- ✅ Видео-кружочек → ок для аудио ДЗ
+- ✅ Видео > 10 МБ → вежливое предупреждение
+
+**Логирование:**
+```
+📚 ДЗ текстовое, но студент прислал photo — это даже лучше!
+📸 ДЗ фото, но студент прислал видео — отлично!
+🎵 ДЗ аудио, студент прислал voice — ок!
+```
+
+---
+
 ## 🏗️ Инфраструктура и Архитектура
 
 ### 1. Маршрутизация и Порты (Docker + Cloudflare)
