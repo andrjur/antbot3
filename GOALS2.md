@@ -425,7 +425,260 @@ curl -X POST https://bot.indikov.ru/hwX9kLmPqR7tUvW2yZ5aBcDeFgHiJkL/n8n_hw_resul
 
 ---
 
-## 🔄 Мультимодальная проверка ДЗ — Update 01.03.2026 (v2)
+## 🔄 Мультимодальная проверка ДЗ — Update 01.03.2026 (v3)
+
+### Критичные исправления воркфлоу (после импорта в n8n):
+
+#### 5. Credential ошибка — httpHeaderAuth → openRouterApi
+**Проблема:**
+```
+Credential with ID "BT6u6hYxUcBltOkv" does not exist for type "httpHeaderAuth".
+```
+
+**Причина:** Использовался `httpHeaderAuth` для OpenRouter, но нужен специальный `openRouterApi`.
+
+**Решение:**
+```json
+"authentication": "predefinedCredentialType",
+"genericAuthType": "openRouterApi",
+"credentials": {
+  "openRouterApi": {
+    "id": "BT6u6hYxUcBltOkv",
+    "name": "OpenRouter account"
+  }
+}
+```
+
+**Важно:** n8n имеет встроенный тип credentials для OpenRouter — нужно использовать его.
+
+---
+
+#### 6. Красный Expression в JSON Body — добавлена Prepare AI Messages нода
+**Проблема:**
+```json
+"messages": "=[\n  {\n    \"role\": \"user\",\n    \"content\": [\n      {{ $json.base64_image ? ', {...}' : '' }}\n    ]\n  }\n]"
+```
+**Симптом:** Красное подчёркивание, ошибка синтаксиса.
+
+**Причина:** Слишком сложная формула с условными выражениями внутри JSON строки.
+
+**Решение:** Добавлена Code нода **Prepare AI Messages** (позиция 200, 480):
+
+```javascript
+// Подготовка messages content для OpenRouter AI
+const hwText = $input.item.json.hw_text || $('Edit Fields').item.json.hw_text;
+const audioWarning = $input.item.json.audio_warning || '';
+const fileWarning = $input.item.json.file_warning || '';
+const base64Image = $input.item.json.base64_image || null;
+const mimeType = $input.item.json.mime_type || '';
+const fileType = $input.item.json.file_type || '';
+const audioData = $input.item.json.audio_data || null;
+
+// Формируем text content
+let textContent = `РАБОТА СТУДЕНТА:\n${hwText}`;
+if (audioWarning) textContent += `\n\n⚠️ ${audioWarning}`;
+if (fileWarning) textContent += `\n\n⚠️ ${fileWarning}`;
+
+// Формируем messages content array
+const messagesContent = [
+  { type: "text", text: textContent }
+];
+
+// Добавляем image если есть
+if (base64Image && mimeType) {
+  messagesContent.push({
+    type: "image_url",
+    image_url: { url: `data:${mimeType};base64,${base64Image}` }
+  });
+}
+
+// Добавляем audio если есть
+if (audioData && (fileType === 'audio' || fileType === 'video')) {
+  const audioFormat = mimeType.includes('ogg') ? 'ogg' : 'wav';
+  messagesContent.push({
+    type: "input_audio",
+    input_audio: { data: audioData, format: audioFormat }
+  });
+}
+
+return [{
+  json: {
+    ...$input.item.json,
+    messages_content: messagesContent
+  }
+}];
+```
+
+**Схема:**
+```
+Process Photo ─┐
+Process Audio ─┼→ Prepare AI Messages → OpenRouter AI
+Process Video ─┘
+```
+
+---
+
+#### 7. Нет messages_content в текстовой ветке — добавлена Prepare Text Messages
+**Проблема:**
+```
+If (нет файла) → OpenRouter AI
+                 ↓
+            $json.messages_content = undefined ❌
+```
+
+**Симптом:** Ошибка при отправке текстового ДЗ — `messages_content` не определён.
+
+**Решение:** Добавлена Code нода **Prepare Text Messages** (позиция -336, 640):
+
+```javascript
+// Текстовое ДЗ (без файлов) - подготовка messages content
+const hwText = $input.item.json.hw_text || $('Edit Fields').item.json.hw_text;
+
+const messagesContent = [
+  { type: "text", text: `РАБОТА СТУДЕНТА:\n${hwText}` }
+];
+
+return [{
+  json: {
+    ...$input.item.json,
+    messages_content: messagesContent
+  }
+}];
+```
+
+**Схема:**
+```
+If (нет файла) → Prepare Text Messages → OpenRouter AI
+```
+
+---
+
+#### 8. JSON parameter needs to be valid JSON — правильный JavaScript-объект
+**Проблема:**
+```javascript
+={
+  "messages": [
+    { "content": "{{ $json.messages_content }}" }  // ❌
+  ]
+}
+```
+
+**Симптом:** 
+- Красное подчёркивание в JSON Body
+- Ошибка: `JSON parameter needs to be valid JSON`
+- Кавычки в hw_text ломают структуру JSON
+
+**Причина:** 
+- `={{ ... }}` с вложенными `{{ ... }}` создаёт конфликт парсинга
+- Строковая конкатенация не экранирует спецсимволы
+
+**Решение:** Использовать JavaScript-объект с интерполяцией:
+
+```javascript
+={{
+  {
+    "model": "google/gemini-2.5-flash",
+    "response_format": { "type": "json_object" },
+    "messages": [
+      {
+        "role": "system",
+        "content": `Ты мудрый наставник на онлайн-курсе. Имя студента: ${$('Edit Fields').item.json.student_name}.\n\nКонтекст задания:\n${$('Edit Fields').item.json.lesson_desc}\n\nТВОИ ПРАВИЛА:\n1. Оцени работу...\n\nОтвет СТРОГО в формате JSON: {"is_approved": boolean, "feedback_text": "string"}`
+      },
+      {
+        "role": "user",
+        "content": $json.messages_content
+      }
+    ]
+  }
+}}
+```
+
+**Ключевые изменения:**
+| Было | Стало |
+|------|-------|
+| `={ ... }` | `={{ { ... } }}` |
+| `"{{ $json.value }}"` | `${$('Node').item.json.value}` |
+| `{{ JSON.stringify(...) }}` | `$json.messages_content` (напрямую) |
+| Строковая конкатенация | JavaScript интерполяция в `` ` `` |
+
+**Важно:** 
+- `={{ ... }}` — n8n парсит как JavaScript-объект
+- `${...}` — безопасная интерполяция (экранирует кавычки)
+- `$json.messages_content` — передаётся как объект (не строка)
+
+---
+
+### Архитектура (актуальная v3):
+
+```
+Webhook-homework → Edit Fields → If (hw_file_id не пуст?)
+                                     ├─ ДА → Get a file → Route File Type
+                                     │                    ├─ image → Process Photo ─┐
+                                     │                    ├─ audio → Process Audio ─┤
+                                     │                    └─ video → Process Video ─┤
+                                     │                                              ↓
+                                     │                              Prepare AI Messages
+                                     │                              (messages_content)
+                                     │                                              ↓
+                                     └─ НЕТ → Prepare Text Messages ───────────────┴
+                                              (messages_content)                    ↓
+                                                                           OpenRouter AI
+                                                                           (Gemini 2.5 Flash)
+                                                                                    ↓
+                                                                           Parse JSON Response
+                                                                           (fallback на ошибку)
+                                                                                    ↓
+                                                                           HTTP Request → Боту
+```
+
+**Ключевые ноды:**
+1. **Prepare Text Messages** — текстовое ДЗ → `messages_content`
+2. **Prepare AI Messages** — фото/аудио/видео → `messages_content`
+3. **OpenRouter AI** — `={{ { "messages": [...] } }}` (JavaScript-объект)
+
+---
+
+### Тесты (результаты):
+
+#### ✅ Тест 1: Текст + фото (ДЗ #1041)
+```
+14:46:57 - 📤 ДЗ #1041 отправлено на n8n
+14:47:50 - ✅ Получен callback от n8n
+14:47:50 - 🔹 is_approved=False, feedback_text="Andrew, привет!..."
+14:47:51 - ✅ ДЗ отклонено, студент получил вердикт
+```
+
+**Результат:** ✅ Работает! ИИ увидел фото, дал вердикт.
+
+#### ❌ Тест 2: Фото (ДЗ #1043) — таймаут
+```
+15:17:04 - 📤 ДЗ #1043 отправлено на n8n
+15:18:05 - ⚠️ ДЗ #1043 висит 104 сек → авто-одобрение
+```
+
+**Причина:** n8n не вернул callback.
+
+**Возможные причины:**
+1. OpenRouter API не ответил (баланс = 0?)
+2. Ошибка парсинга JSON от Gemini
+3. Process Photo не сохранил Base64
+
+**Диагностика:**
+```bash
+docker compose logs n8n | grep -E "📸|❌|Error"
+```
+
+---
+
+### Следующие шаги:
+
+1. **Проверить баланс OpenRouter** — если 0, пополнить
+2. **Проверить логи n8n** — есть ли ошибка от OpenRouter
+3. **Тест с аудио** — проверить Process Audio ноду
+4. **Тест с видео** — проверить Process Video ноду
+5. **Тест текстового ДЗ** — после исправления #7
+
+---
 
 ### Исправления (после первых тестов):
 
