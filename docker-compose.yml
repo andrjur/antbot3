@@ -87,6 +87,7 @@ services:
       - N8N_HOST=n8n.indikov.ru
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
+      - N8N_TRUST_PROXY=true
       - NODE_ENV=production
       - WEBHOOK_URL=https://n8n.indikov.ru/
       - GENERIC_TIMEZONE=Europe/Moscow

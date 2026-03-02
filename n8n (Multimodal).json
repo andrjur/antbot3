@@ -1,5 +1,5 @@
 {
-  "name": "good2AI Agent in n8n (Multimodal)",
+  "name": "n8n (Multimodal)",
   "nodes": [
     {
       "parameters": {
@@ -11,10 +11,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        -976,
-        288
+        0,
+        0
       ],
-      "id": "6b18db91-9dc6-4974-8b78-7b8249ef2988",
+      "id": "a08ce305-0782-4929-b170-3646dafde0e2",
       "name": "Webhook-homework",
       "webhookId": "aa46a723-619e-42e9-8e51-49ba51813718",
       "credentials": {
@@ -90,10 +90,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        -720,
-        288
+        256,
+        0
       ],
-      "id": "0a69ffd5-8c95-4d51-81e4-927c7a5c1048",
+      "id": "7085f99f-6641-4f35-a7a0-3ba4686e6907",
       "name": "Edit Fields",
       "alwaysOutputData": true
     },
@@ -125,10 +125,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        -496,
-        640
+        480,
+        352
       ],
-      "id": "931a2758-9023-4b38-a7fa-921481ad78d8",
+      "id": "bd1ac011-daa1-4bb3-8491-f6a858f4f5db",
       "name": "If"
     },
     {
@@ -140,10 +140,10 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        -336,
-        480
+        640,
+        192
       ],
-      "id": "08842b94-8efb-4963-aca8-a3699ea9e9ac",
+      "id": "d729903c-4be4-496e-adbe-7913d053e2cf",
       "name": "Get a file",
       "webhookId": "f2d472aa-3e48-4cd4-9321-2685e94ffe4c",
       "alwaysOutputData": false,
@@ -165,10 +165,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -160,
-        480
+        816,
+        192
       ],
-      "id": "c8f3a9e2-7d4b-4c1e-9f8a-2b5e6d3c4a7f",
+      "id": "547a10fd-0290-487d-90c7-3683735a4811",
       "name": "Route File Type"
     },
     {
@@ -178,10 +178,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        32,
-        320
+        1008,
+        32
       ],
-      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "id": "bddf6b0e-ecdb-4be3-86bd-2042b97aa86e",
       "name": "Process Photo"
     },
     {
@@ -191,10 +191,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        32,
-        480
+        1008,
+        192
       ],
-      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "id": "14336ce2-0c6e-400d-b48b-7d4904b7da01",
       "name": "Process Audio"
     },
     {
@@ -204,10 +204,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        32,
-        640
+        1008,
+        352
       ],
-      "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+      "id": "0f38ff7c-34ce-442b-8a61-5d227e649e13",
       "name": "Process Video"
     },
     {
@@ -219,10 +219,6 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "Authorization",
-              "value": "Bearer {{$credentials.openRouterApi.apiKey}}"
-            },
             {
               "name": "Content-Type",
               "value": "application/json"
@@ -238,51 +234,31 @@
           ]
         },
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "model",
-              "value": "google/gemini-2.5-flash"
-            },
-            {
-              "name": "response_format.type",
-              "value": "json_object"
-            },
-            {
-              "name": "messages",
-              "value": "=[\n  {\n    \"role\": \"system\",\n    \"content\": \"Ты мудрый наставник на онлайн-курсе. Имя студента: {{ $('Edit Fields').item.json.student_name }}.\\n\\nКонтекст задания:\\n{{ $('Edit Fields').item.json.lesson_desc }}\\n\\nТВОИ ПРАВИЛА:\\n1. Оцени работу. Если есть фото — посмотри, соответствует ли оно заданию.\\n2. Если есть аудио/видео — ИИ может напрямую воспринимать аудио.\\n3. Если работа осмысленная — ставь \\\"is_approved\\\": true. Бессмысленная — false.\\n4. Твой \\\"feedback_text\\\" должен быть личным, ободряющим, с правильными окончаниями.\\n5. Если студент прислал фото — упомяни конкретные детали.\\n\\nОтвет СТРОГО в формате JSON: {\\\"is_approved\\\": boolean, \\\"feedback_text\\\": \\\"string\\\"}\"\n  },\n  {\n    \"role\": \"user\",\n    \"content\": [\n      {\n        \"type\": \"text\",\n        \"text\": \"РАБОТА СТУДЕНТА:\\n{{ $json.hw_text || $('Edit Fields').item.json.hw_text }}{{ $json.audio_warning ? '\\n\\n⚠️ ' + $json.audio_warning : '' }}{{ $json.file_warning ? '\\n\\n⚠️ ' + $json.file_warning : '' }}\"\n      }{{ $json.base64_image ? ', {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:' + $json.mime_type + ';base64,' + $json.base64_image + '\"}}' : '' }}{{ $json.file_type === 'audio' || $json.file_type === 'video' ? ', {\"type\": \"input_audio\", \"input_audio\": {\"data\": \"' + ($json.audio_data || '') + '\", \"format\": \"' + ($json.mime_type.includes('ogg') ? 'ogg' : 'wav') + '\"}}' : '' }}\n    ]\n  }\n]"
-            }
-          ]
-        },
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"google/gemini-2.5-flash\",\n  \"response_format\": {\n    \"type\": \"json_object\"\n  },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Ты мудрый наставник на онлайн-курсе. Имя студента: {{ $('Edit Fields').item.json.student_name }}.\\n\\nКонтекст задания:\\n{{ $('Edit Fields').item.json.lesson_desc }}\\n\\nТВОИ ПРАВИЛА:\\n1. Оцени работу. Если есть фото — посмотри, соответствует ли оно заданию.\\n2. Если есть аудио/видео — ИИ может напрямую воспринимать аудио.\\n3. Если работа осмысленная — ставь \\\"is_approved\\\": true. Бессмысленная — false.\\n4. Твой \\\"feedback_text\\\" должен быть личным, ободряющим, с правильными окончаниями.\\n5. Если студент прислал фото — упомяни конкретные детали.\\n\\nОтвет СТРОГО в формате JSON: {\\\"is_approved\\\": boolean, \\\"feedback_text\\\": \\\"string\\\"}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"РАБОТА СТУДЕНТА:\\n{{ $json.hw_text || $('Edit Fields').item.json.hw_text }}{{ $json.audio_warning ? '\\n\\n⚠️ ' + $json.audio_warning : '' }}{{ $json.file_warning ? '\\n\\n⚠️ ' + $json.file_warning : '' }}\"\n        }{{ $json.base64_image ? ', {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:' + $json.mime_type + ';base64,' + $json.base64_image + '\"}}' : '' }}{{ $json.file_type === 'audio' || $json.file_type === 'video' ? ', {\"type\": \"input_audio\", \"input_audio\": {\"data\": \"' + ($json.audio_data || '') + '\", \"format\": \"' + ($json.mime_type.includes('ogg') ? 'ogg' : 'wav') + '\"}}' : '' }}\n      ]\n    }\n  ]\n}",
         "options": {
-          "timeout": 60000,
           "allowUnauthorizedCerts": false,
-          "retry": {
-            "count": 3,
-            "delay": 1000,
-            "factor": 2,
-            "maxTimeout": 10000
-          }
+          "timeout": 60000
         }
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        320,
-        480
+        1296,
+        192
       ],
-      "id": "d4e5f6a7-b8c9-0123-def0-234567890123",
+      "id": "83106141-6406-47df-80e6-3f584b045f17",
       "name": "OpenRouter AI",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
       "credentials": {
         "httpHeaderAuth": {
           "id": "BT6u6hYxUcBltOkv",
           "name": "OpenRouter account"
         }
       },
-      "onError": "continueErrorOutput",
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 2000
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -291,10 +267,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        576,
-        480
+        1552,
+        192
       ],
-      "id": "e5f6a7b8-c9d0-1234-ef01-345678901234",
+      "id": "c24adadd-74d9-4d89-b7e8-929af460fd12",
       "name": "Parse JSON Response",
       "onError": "continueErrorOutput"
     },
@@ -347,21 +323,16 @@
           ]
         },
         "options": {
-          "timeout": 30000,
-          "retry": {
-            "count": 2,
-            "delay": 1000,
-            "factor": 2
-          }
+          "timeout": 30000
         }
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        832,
-        480
+        1808,
+        192
       ],
-      "id": "9b9f511b-e63b-4e68-be9d-f492029149a4",
+      "id": "03fed04b-c1a7-47b4-b1b9-4c18839b9198",
       "name": "HTTP Request",
       "credentials": {
         "httpHeaderAuth": {
@@ -428,10 +399,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        832,
-        640
+        1808,
+        352
       ],
-      "id": "7f936b8d-dfe5-4a16-a5f1-f496b1961371",
+      "id": "1ce3518b-fe55-45a0-9bf2-4532a52a61bc",
       "name": "HTTP Request (Error Fallback)",
       "credentials": {
         "httpHeaderAuth": {
@@ -449,10 +420,10 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        832,
-        800
+        1808,
+        512
       ],
-      "id": "f6a7b8c9-d0e1-2345-f012-456789012345",
+      "id": "bc452b5d-4b87-4081-baee-02e98eac5f1b",
       "name": "Sticky Note"
     },
     {
@@ -464,10 +435,10 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -160,
-        800
+        816,
+        512
       ],
-      "id": "a7b8c9d0-e1f2-3456-0123-567890123456",
+      "id": "b8fb97c8-b987-45b8-88d0-6d596cb4f4a3",
       "name": "Sticky Note1"
     }
   ],
@@ -615,27 +586,16 @@
       ]
     }
   },
-  "active": true,
+  "active": false,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
-    "availableInMCP": false,
-    "logLevel": "verbose"
+    "availableInMCP": false
   },
-  "versionId": "multimodal-v3-2026-03-01",
+  "versionId": "43fba09e-72ca-4079-a4d6-0cb292d92a61",
   "meta": {
     "instanceId": "14556ca7589cf14a5bd79ba5c472bcf1b451007380d01a7e3b562e771321d9e0"
   },
-  "id": "2VqyCrDCshzIrBot",
-  "tags": [
-    {
-      "name": "homework",
-      "id": "1"
-    },
-    {
-      "name": "multimodal",
-      "id": "2"
-    }
-  ],
-  "notes": "Мультимодальная проверка ДЗ: фото + аудио + видео + текст. Использует Gemini 2.5 Flash через OpenRouter API."
+  "id": "JQ7L1YNp8QpdXfMG",
+  "tags": []
 }
