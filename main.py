@@ -3438,7 +3438,7 @@ async def export_db(message: types.Message):
 @dp.message(Command("import_db"))
 @db_exception_handler
 async def import_db(message: types.Message):
-    """Импо��������т данных из JSON-файла в базу данных. Для суперадминов или в админ-группе."""
+    """Импо����������т данных из JSON-файла в базу данных. Для суперадминов или в админ-группе."""
     user_id = message.from_user.id
     chat_id = message.chat.id
     
@@ -7170,7 +7170,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
                 (user_id, course_id_for_review, review_text_raw)
             )
             await conn.commit()
-        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который хоти��е пройт���!"),
+        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который х��ти��е пройт���!"),
                             parse_mode=None)
 
         if ADMIN_GROUP_ID:
@@ -9166,8 +9166,9 @@ async def handle_homework(message: types.Message):
             logger.warning(
                 f"Не найден ожидаемый тип ДЗ (hw_type) для урока {current_lesson} курса {course_id}. Разрешаю любой тип.")
             expected_hw_type = "any"  # Если тип не указан в базе, считаем, что подходит любой
-    else:
-        # Нормализуем тип к lowercase
+
+    # Нормализуем тип к lowercase (если не "any")
+    if expected_hw_type != "any":
         expected_hw_type = expected_hw_type.strip().lower()
 
     # === ГИБКАЯ ПРОВЕРКА ТИПА ДЗ ===
