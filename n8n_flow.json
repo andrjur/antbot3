@@ -174,7 +174,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Проверка типа файла и маршрутизация\nconst mimeType = $input.item.json.mimeType || $input.item.json.binary?.data?.mimeType || '';\nconst fileType = mimeType.split('/')[0];\n\nlet output = 0; // 0 = text/no file, 1 = image, 2 = audio, 3 = video\n\nif (mimeType.startsWith('image')) {\n  output = 1;\n} else if (mimeType.startsWith('audio')) {\n  output = 2;\n} else if (mimeType.startsWith('video')) {\n  output = 3;\n}\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    file_type: fileType,\n    mime_type: mimeType,\n    route_output: output\n  }\n}];"
+        "jsCode": "// Проверка типа файла и маршрутизация\nconst binaryData = $input.item.json.binary?.data;\nconst mimeType = binaryData?.mimeType || $input.item.json.mimeType || '';\nconst fileType = mimeType.split('/')[0];\n\nlet output = 0; // 0 = text/no file, 1 = image, 2 = audio, 3 = video\n\nif (mimeType.startsWith('image')) {\n  output = 1;\n} else if (mimeType.startsWith('audio')) {\n  output = 2;\n} else if (mimeType.startsWith('video')) {\n  output = 3;\n}\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    file_type: fileType,\n    mime_type: mimeType,\n    route_output: output\n  },\n  binary: $input.item.json.binary  // ← Сохраняем binary!\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
