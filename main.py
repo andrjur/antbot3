@@ -3816,17 +3816,33 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
     code1 = data['code1']
     code2 = data['code2']
     code3 = data['code3']
+    
+    # === ЛОГИРОВАНИЕ ===
+    logger.info(f"🔧 process_course_confirmation: Получены данные из FSM:")
+    logger.info(f"   group_id: {group_id!r}")
+    logger.info(f"   course_id: {course_id!r}")
+    logger.info(f"   code1 (v1): {code1!r}")
+    logger.info(f"   code2 (v2): {code2!r}")
+    logger.info(f"   code3 (v3): {code3!r}")
+    logger.info(f"   description: {description!r}")
 
     # Проверка дубликатов - если курс существует, добавляем цифру
     existing_courses = set(settings.get("groups", {}).values())
     original_course_id = course_id
     course_id = get_unique_course_id(course_id, existing_courses)
-    
+
     if course_id != original_course_id:
         await callback.message.edit_text(
             f"⚠️ Курс `{original_course_id}` уже существует. Используем `{course_id}`.",
             parse_mode=None
         )
+
+    # === ЛОГИРОВАНИЕ ПЕРЕД ЗАПИСЬЮ ===
+    logger.info(f"🔧 process_course_confirmation: Обновляем settings:")
+    logger.info(f"   groups[{group_id!r}] = {course_id!r}")
+    logger.info(f"   activation_codes[{code1!r}] = {{course: {course_id!r}, version: 'v1', price: 0}}")
+    logger.info(f"   activation_codes[{code2!r}] = {{course: {course_id!r}, version: 'v2', price: 0}}")
+    logger.info(f"   activation_codes[{code3!r}] = {{course: {course_id!r}, version: 'v3', price: 0}}")
 
     # Обновляем глобальные настройки
     settings["groups"][group_id] = course_id
@@ -3841,15 +3857,35 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
         "title": f"{course_id} basic",
         "description": description or ""
     }
+    
+    # === ЛОГИРОВАНИЕ ПОСЛЕ ЗАПИСИ В settings ===
+    logger.info(f"🔧 process_course_confirmation: settings['activation_codes'] после записи:")
+    for code, info in settings['activation_codes'].items():
+        if info.get('course') == course_id:
+            logger.info(f"   {code!r} → {info}")
 
     # Сохраняем в БД
     try:
         await process_add_course_to_db(course_id, group_id, code1, code2, code3, description)
 
+        # === ЛОГИРОВАНИЕ ПЕРЕД СОХРАНЕНИЕМ settings.json ===
+        logger.info(f"💾 process_course_confirmation: Сохраняем settings.json...")
+        logger.info(f"   activation_codes keys: {list(settings['activation_codes'].keys())}")
+        
         # Явно сохраняем settings.json СРАЗУ после изменения activation_codes
         with open("settings.json", "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=4)
         logger.info(f"✅ settings.json сохранён с кодами активации: {code1}, {code2}, {code3}")
+        
+        # Проверка что записалось
+        with open("settings.json", "r", encoding="utf-8") as f_check:
+            check_settings = json.load(f_check)
+            logger.info(f"🔍 Проверка settings.json после записи:")
+            logger.info(f"   groups: {check_settings.get('groups')}")
+            logger.info(f"   activation_codes для {course_id}:")
+            for code, info in check_settings.get('activation_codes', {}).items():
+                if info.get('course') == course_id:
+                    logger.info(f"      {code!r} → {info}")
 
         # Добавляем в список разрешенных групп
         try:
@@ -3867,7 +3903,7 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
         logger.info(f"Админ создал курс {course_id} через FSM с подтверждением")
 
     except Exception as e:
-        logger.error(f"Ошибка при создании курса: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка при создании курса: {e}", exc_info=True)
         await callback.message.edit_text(f"❌ Ошибка при создании курса: {e}")
 
     finally:
