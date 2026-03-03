@@ -6005,7 +6005,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
         if user_info_row:
             current_user_level, user_current_lesson_on_course = user_info_row
         else:  # Если нет записи в user_courses, возможно, это просмотр описания еще не начатого курса
-            # В этом случае берем просто 1-й уровень для отображения контен������а
+            # В этом случае берем просто 1-й уровень для отображения контен��������а
             logger.warning(
                 f"Нет записи в user_courses для {user_id} и курса {course_id_str} при просмотре содержания. Показываю уровень 1.")
 
@@ -8260,7 +8260,7 @@ async def send_message_to_user(user_id: int, text: str, reply_markup: InlineKeyb
 
 
 def format_time_duration(seconds: int) -> str:
-    """Форматирует секунды в читаемый вид (секунды, ��инут�� или ча��ы)."""
+    """Форматирует секунды в читаемый вид (сек��нды, ��инут�� или ча��ы)."""
     if seconds < 60:
         return f"{seconds} сек"
     elif seconds < 3600:
@@ -8955,7 +8955,8 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 
 
 # ----------------- новый обработчик и текстовой домашки и фото -------- от пользователя ------------
-@dp.message(F.content_type.in_({'photo', 'document', 'text', 'voice', 'audio'}), F.chat.type == "private", (F.text & ~F.text.startswith('/')) | ~F.text)
+@dp.message(F.content_type.in_({'photo', 'document', 'voice', 'audio'}), F.chat.type == "private")
+@dp.message(F.text & ~F.text.startswith('/'), F.chat.type == "private")
 @db_exception_handler
 async def handle_homework(message: types.Message):
     """Обрабатывает отправку домашних заданий (фото/документы/текст/аудио/голосовые)"""
