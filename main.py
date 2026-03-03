@@ -6005,7 +6005,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
         if user_info_row:
             current_user_level, user_current_lesson_on_course = user_info_row
         else:  # Если нет записи в user_courses, возможно, это просмотр описания еще не начатого курса
-            # В этом случае берем просто 1-й уровень для отображения контен��а
+            # В этом случае берем просто 1-й уровень для отображения контен������а
             logger.warning(
                 f"Нет записи в user_courses для {user_id} и курса {course_id_str} при просмотре содержания. Показываю уровень 1.")
 
@@ -7170,7 +7170,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
                 (user_id, course_id_for_review, review_text_raw)
             )
             await conn.commit()
-        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса котор��й хотите пройти!"),
+        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса ��от��р��й хотите пройти!"),
                             parse_mode=None)
 
         if ADMIN_GROUP_ID:
@@ -8260,7 +8260,7 @@ async def send_message_to_user(user_id: int, text: str, reply_markup: InlineKeyb
 
 
 def format_time_duration(seconds: int) -> str:
-    """Форматирует секунды в читаемый вид (секунды, минуты или ча��ы)."""
+    """Форматирует секунды в читаемый вид (секунды, ��инут�� или ча��ы)."""
     if seconds < 60:
         return f"{seconds} сек"
     elif seconds < 3600:
@@ -8955,12 +8955,25 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 
 
 # ----------------- новый обработчик и текстовой домашки и фото -------- от пользователя ------------
-@dp.message(F.content_type.in_({'photo', 'document', 'text', 'voice', 'audio'}), F.chat.type == "private", ~F.text.startswith('/'))
+@dp.message(F.content_type.in_({'photo', 'document', 'text', 'voice', 'audio'}), F.chat.type == "private", (F.text & ~F.text.startswith('/')) | ~F.text)
 @db_exception_handler
 async def handle_homework(message: types.Message):
-    """Обрабатывает отправку домашних заданий (фото/документы/текст)"""
+    """Обрабатывает отправку домашних заданий (фото/документы/текст/аудио/голосовые)"""
     user_id = message.from_user.id
-    logger.info(f"handle_homework: user_id={user_id}, text={message.text!r:.80}")
+    content_type = message.content_type
+    logger.info(f"📝 handle_homework START: user_id={user_id}, content_type={content_type}, text={message.text!r:.80}")
+    
+    # Логи для аудио/голосовых
+    if content_type == 'voice':
+        logger.info(f"🎤 Голосовое сообщение: duration={message.voice.duration}, file_id={message.voice.file_id!r:.50}")
+    elif content_type == 'audio':
+        logger.info(f"🎵 Аудио: duration={message.audio.duration}, file_name={message.audio.file_name!r:.50}, file_id={message.audio.file_id!r:.50}")
+    elif content_type == 'photo':
+        logger.info(f"📸 Фото: file_id={message.photo[-1].file_id!r:.50}")
+    elif content_type == 'document':
+        logger.info(f"📎 Документ: file_name={message.document.file_name!r:.50}, file_id={message.document.file_id!r:.50}")
+    elif content_type == 'text':
+        logger.info(f"✏️ Текст: {message.text!r:.100}")
 
     user_course_data = await get_user_course_data(user_id)
     logger.info(f"handle_homework: user_course_data={user_course_data}")
