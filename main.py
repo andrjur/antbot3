@@ -3590,13 +3590,31 @@ async def process_course_group_id(message: types.Message, state: FSMContext):
     """Обработка ID группы"""
     raw_group_id = message.text.strip()
     
-    # Очистка ID группы
+    # Очистка от кавычек, двоеточий и другого мусора
+    raw_group_id = raw_group_id.replace('"', '').replace("'", '').replace(':', '').replace('`', '').strip()
+    
+    # Если ID начинается с "--", заменяем на "-"
     if raw_group_id.startswith("--"):
         raw_group_id = "-" + raw_group_id.lstrip("-")
+    # Если ID не начинается с "-", добавляем (для ID групп Telegram)
+    elif not raw_group_id.startswith("-") and raw_group_id.isdigit():
+        raw_group_id = "-" + raw_group_id
     
+    # Проверка что это валидный ID (число с минусом)
+    try:
+        int(raw_group_id)
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат ID группы!\n\n"
+            "ID должен быть числом (может начинаться с -100)\n"
+            "Пример: `-1001234567890`\n\n"
+            "Попробуйте ещё раз:"
+        )
+        return
+
     await state.update_data(group_id=raw_group_id)
     await state.set_state(AddCourseFSM.waiting_course_id)
-    
+
     await message.answer(
         "Шаг 2/7: Введите ID курса\n"
         "Примеры: `python_base`, `design_pro`, `sprint2`\n\n"
@@ -3642,7 +3660,9 @@ async def process_course_description(message: types.Message, state: FSMContext):
 async def process_course_code1(message: types.Message, state: FSMContext):
     """Обработка кода 1 с проверкой уникальности"""
     code1 = message.text.strip()
-    
+    # Очистка от кавычек и мусора
+    code1 = code1.replace('"', '').replace("'", '').replace('`', '').strip()
+
     # Проверка на дубликат
     if code1 in settings.get("activation_codes", {}):
         await message.answer(
@@ -3650,10 +3670,10 @@ async def process_course_code1(message: types.Message, state: FSMContext):
             f"Введите другой код для тарифа v1:"
         )
         return
-    
+
     await state.update_data(code1=code1)
     await state.set_state(AddCourseFSM.waiting_code2)
-    
+
     await message.answer(
         "Шаг 5/7: Введите код активации для тарифа v2 (с проверкой)\n"
         "Пример: `pro2024`, `base_v2`\n\n"
@@ -3665,9 +3685,12 @@ async def process_course_code1(message: types.Message, state: FSMContext):
 async def process_course_code2(message: types.Message, state: FSMContext):
     """Обработка кода 2 с проверкой уникальности"""
     code2 = message.text.strip()
+    # Очистка от кавычек и мусора
+    code2 = code2.replace('"', '').replace("'", '').replace('`', '').strip()
+    
     data = await state.get_data()
     code1 = data.get('code1', '')
-    
+
     # Проверка на дубликат
     if code2 in settings.get("activation_codes", {}):
         await message.answer(
@@ -3675,7 +3698,7 @@ async def process_course_code2(message: types.Message, state: FSMContext):
             f"Введите другой код для тарифа v2:"
         )
         return
-    
+
     # Проверка что code2 != code1
     if code2 == code1:
         await message.answer(
@@ -3683,10 +3706,10 @@ async def process_course_code2(message: types.Message, state: FSMContext):
             f"Введите уникальный код для тарифа v2:"
         )
         return
-    
+
     await state.update_data(code2=code2)
     await state.set_state(AddCourseFSM.waiting_code3)
-    
+
     await message.answer(
         "Шаг 6/7: Введите код активации для тарифа v3 (Премиум)\n"
         "Пример: `vip2024`, `base_v3`\n\n"
@@ -3698,10 +3721,13 @@ async def process_course_code2(message: types.Message, state: FSMContext):
 async def process_course_code3(message: types.Message, state: FSMContext):
     """Обработка кода 3 и показ сводки для подтверждения"""
     code3 = message.text.strip()
+    # Очистка от кавычек и мусора
+    code3 = code3.replace('"', '').replace("'", '').replace('`', '').strip()
+    
     data = await state.get_data()
     code1 = data.get('code1', '')
     code2 = data.get('code2', '')
-    
+
     # Проверка на дубликаты и уникальность
     if code3 in settings.get("activation_codes", {}):
         await message.answer(
@@ -3709,14 +3735,14 @@ async def process_course_code3(message: types.Message, state: FSMContext):
             f"Введите другой код для тарифа v3:"
         )
         return
-    
+
     if code3 == code1 or code3 == code2:
         await message.answer(
             f"❌ Код `{code3}` уже используется для другого тарифа!\n"
             f"Введите уникальный код для тарифа v3:"
         )
         return
-    
+
     await state.update_data(code3=code3)
     
     # Получаем все данные для сводки
@@ -5989,7 +6015,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
     user_id = query.from_user.id
     course_numeric_id = callback_data.course_numeric_id
     course_id_str = await get_course_id_str(course_numeric_id)
-    await query.answer("Загружаю содержание курса")
+    await query.answer("Загружаю содержание к��рса")
 
     if not course_id_str or course_id_str == "Неизвестный курс":
         await query.message.edit_text(escape_md("Ошибка: курс не найден."), parse_mode=None)
@@ -8229,7 +8255,7 @@ def create_admin_keyboard(user_id: int, course_id: int, lesson_num: int, message
                 )],
             [
                 InlineKeyboardButton(
-                    text="✅ Принять и отправить сообщение",
+                    text="✅ Принять и ��тправить сообщение",
                     callback_data=AdminHomeworkCallback(
                         action="approve_reason",
                         user_id=user_id,
