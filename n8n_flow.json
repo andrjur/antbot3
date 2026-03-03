@@ -5,8 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "aa46a723-619e-42e9-8e51-49ba51813718",
-        "authentication": "headerAuth",
-        "options": null
+        "authentication": "headerAuth"
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -100,16 +99,10 @@
     {
       "parameters": {
         "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 2
-          },
           "conditions": [
             {
               "id": "5b1189a6-6cee-49af-ad61-c91de051a0ea",
-              "leftValue": "={{ $('Edit Fields').item.json.hw_file_id }}",
+              "leftValue": "={{ $('Edit Fields').first().json.hw_file_id }}",
               "rightValue": "",
               "operator": {
                 "type": "string",
@@ -119,8 +112,7 @@
             }
           ],
           "combinator": "and"
-        },
-        "options": null
+        }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
