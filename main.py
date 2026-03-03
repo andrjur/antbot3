@@ -3805,6 +3805,12 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
     # Получаем все данные
     data = await state.get_data()
     group_id = data['group_id']
+    
+    # Повторная очистка group_id на всякий случай
+    group_id = group_id.replace('"', '').replace("'", '').replace(':', '').replace('`', '').strip()
+    if not group_id.startswith("-") and group_id.isdigit():
+        group_id = "-" + group_id
+    
     course_id = data['course_id']
     description = data.get('description', '')
     code1 = data['code1']
