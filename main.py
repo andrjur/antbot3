@@ -3806,8 +3806,10 @@ async def process_course_confirmation(callback: CallbackQuery, callback_data: Co
     try:
         await process_add_course_to_db(course_id, group_id, code1, code2, code3, description)
 
-        # Явно сохраняем settings.json
-        await update_settings_file()
+        # Явно сохраняем settings.json СРАЗУ после изменения activation_codes
+        with open("settings.json", "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=4)
+        logger.info(f"✅ settings.json сохранён с кодами активации: {code1}, {code2}, {code3}")
 
         # Добавляем в список разрешенных групп
         try:
@@ -9346,7 +9348,7 @@ async def handle_homework(message: types.Message):
     )
 
     try:
-        # Сохраняем информацию о ДЗ в базе данных (для последующей обработки админами)
+        # Сохраняем информацию о ��З в базе данных (для последующей обработки админами)
         async with aiosqlite.connect(DB_FILE) as conn:
             await conn.execute("""
                 INSERT OR REPLACE INTO admin_context (user_id, course_id, lesson_num, text)
