@@ -969,6 +969,71 @@ operation: "startsWith"
 
 ---
 
+### Fix 16: Коды активации не сохранялись в settings.json (03.03.2026)
+
+**Проблема:**
+При создании курса через `/add_course` коды активации (`code1`, `code2`, `code3`) не записывались в `settings.json`.
+
+**Симптомы:**
+```json
+// settings.json после создания курса spring3:
+{
+    "groups": {
+        "-1003820533058": "spring3"  // ← Курс добавлен ✅
+    },
+    "activation_codes": {
+        // ← Коды s1, spro, vipspring НЕ добавлены ❌
+    }
+}
+```
+
+**Причина:**
+Функция `update_settings_file()` читала `activation_codes` из файла, но НЕ добавляла новые коды — только копировала старые.
+
+**Что было:**
+```python
+# process_course_confirmation:
+settings["activation_codes"][code1] = {...}  # ← Добавили в memory
+await update_settings_file()  # ← Но в файл не записалось!
+```
+
+**Решение:**
+Явное сохранение settings.json СРАЗУ после изменения `activation_codes`:
+
+```python
+# process_course_confirmation (ИСПРАВЛЕНО):
+settings["activation_codes"][code1] = {"course": course_id, "version": "v1", "price": 0}
+settings["activation_codes"][code2] = {"course": course_id, "version": "v2", "price": 0}
+settings["activation_codes"][code3] = {"course": course_id, "version": "v3", "price": 0}
+
+# Явно сохраняем settings.json СРАЗУ
+with open("settings.json", "w", encoding="utf-8") as f:
+    json.dump(settings, f, ensure_ascii=False, indent=4)
+logger.info(f"✅ settings.json сохранён с кодами активации: {code1}, {code2}, {code3}")
+```
+
+**Результат:**
+```json
+// settings.json после создания курса spring3:
+{
+    "groups": {
+        "-1003820533058": "spring3"
+    },
+    "activation_codes": {
+        "s1": {"course": "spring3", "version": "v1", "price": 0},  // ← Добавлен ✅
+        "spro": {"course": "spring3", "version": "v2", "price": 0},  // ← Добавлен ✅
+        "vipspring": {"course": "spring3", "version": "v3", "price": 0}  // ← Добавлен ✅
+    }
+}
+```
+
+**Важно:**
+- Коды записываются СРАЗУ после изменения в memory
+- `update_settings_file()` больше не нужен для этого
+- Логирование: `✅ settings.json сохранён с кодами активации: s1, spro, vipspring`
+
+---
+
 ## 🏗️ Инфраструктура и Архитектура
 
 ### 1. Маршрутизация и Порты (Docker + Cloudflare)
