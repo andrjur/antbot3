@@ -3440,7 +3440,7 @@ async def export_db(message: types.Message):
 
         logger.info("База данных успешно экспортирована.")
     except Exception as e2218:
-        logger.error(f"Ошибка при экспорте базы данных: {e2218}")
+        logger.error(f"Ошибка при экспорте базы данны����: {e2218}")
         await message.answer("❌ Произошла ошибка при экспорте базы данных", parse_mode=None)
 
 @dp.message(Command("import_db"))
@@ -4081,6 +4081,9 @@ async def process_course(message: types.Message, state: FSMContext):
     existing_lessons_info = ""
     has_description = False
     try:
+        # Пауза 10 мс для избежания database is locked
+        await asyncio.sleep(0.01)
+        
         async with aiosqlite.connect(DB_FILE) as conn:
             # Проверяем есть ли описание (урок 0)
             cursor_desc = await conn.execute('''
@@ -4090,6 +4093,19 @@ async def process_course(message: types.Message, state: FSMContext):
             desc_count = (await cursor_desc.fetchone())[0]
             has_description = desc_count > 0
             
+            logger.info(f"process_course: проверка описания для {course_id}: desc_count={desc_count}, has_description={has_description}")
+
+            # Получаем подробную информацию об уроке 0
+            cursor_lesson0 = await conn.execute('''
+                SELECT id, content_type, length(text) as text_len, text 
+                FROM group_messages
+                WHERE course_id = ? AND lesson_num = 0
+                ORDER BY id ASC
+            ''', (course_id,))
+            lesson0_rows = await cursor_lesson0.fetchall()
+            for row in lesson0_rows:
+                logger.debug(f"process_course: урок 0 для {course_id}: id={row[0]}, content_type={row[1]}, text_len={row[2]}, text_preview={row[3][:50] if row[3] else 'NULL'}...")
+
             # Получаем уроки (lesson_num > 0)
             cursor = await conn.execute('''
                 SELECT lesson_num, COUNT(*) as parts_count
@@ -4195,11 +4211,18 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
 async def process_content(message: types.Message, state: FSMContext):
     """Обработка контента урока"""
     import re
-    
+
     data = await state.get_data()
     course_id = data['course_id']
     lesson_num = data['lesson_num']
-    
+
+    # Логи для отладки загрузки урока 0
+    logger.info(f"process_content: ЗАГРУЗКА УРОКА lesson_num={lesson_num}, course_id={course_id}, content_type={message.content_type}")
+    if message.text:
+        logger.info(f"process_content: текст сообщения ({len(message.text)} симв.): {message.text[:200]}...")
+    else:
+        logger.info(f"process_content: текст сообщения = NULL (caption={message.caption})")
+
     content_type = message.content_type
     text = message.caption or message.text or ""
     file_id = None
@@ -4240,11 +4263,14 @@ async def process_content(message: types.Message, state: FSMContext):
         file_id = message.video.file_id
     elif content_type == 'document':
         file_id = message.document.file_id
-    
+
+    # Пауза 10 мс для избежания database is locked
+    await asyncio.sleep(0.01)
+
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             await conn.execute('''
-                INSERT INTO group_messages 
+                INSERT INTO group_messages
                 (group_id, lesson_num, course_id, content_type, is_homework, hw_type, text, file_id, level, message_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
@@ -4260,7 +4286,9 @@ async def process_content(message: types.Message, state: FSMContext):
                 message.message_id
             ))
             await conn.commit()
-        
+
+        logger.info(f"process_content: УРОК {lesson_num} для {course_id} УСПЕШНО СОХРАНЁН в БД (text_len={len(text)}, content_type={content_type}, is_homework={is_homework})")
+
         hw_status = "✅ Да" if is_homework else "❌ Нет"
         level_info = f"🎯 Уровень: {level}\n" if level > 1 else ""
         
@@ -6026,7 +6054,7 @@ async def process_homework_command(
 
                     # Если из команды не пришел фидбэк, и это reject, ставим дефолтный
                     if not feedback_text_hw and not is_approval:
-                        feedback_text_hw = "Домашнее задание требует доработки"
+                        feedback_text_hw = "До��ашнее задание требует доработки"
 
                     logger.info(
                         f"Найдено последнее ДЗ в pending_admin_homework для ({'/approve' if is_approval else '/reject'}): "
@@ -6968,6 +6996,9 @@ async def send_course_description(user_id: int, course_id_str: str):
     description_to_send = None
 
     try:
+        # Пауза 10 мс для избежания database is locked
+        await asyncio.sleep(0.01)
+        
         async with aiosqlite.connect(DB_FILE) as conn:
             # 1. Описание из courses.description
             cursor_courses_desc = await conn.execute(
@@ -6975,43 +7006,63 @@ async def send_course_description(user_id: int, course_id_str: str):
                 (course_id_str,)
             )
             row_courses_desc = await cursor_courses_desc.fetchone()
+            logger.debug(f"send_course_description: courses.description для '{course_id_str}': row={row_courses_desc}")
             if row_courses_desc and row_courses_desc[0] and row_courses_desc[0].strip():
                 description_to_send = row_courses_desc[0].strip()
-                logger.debug(f"send_course_description: найдено в courses.description для '{course_id_str}'")
+                logger.info(f"send_course_description: найдено в courses.description для '{course_id_str}' ({len(description_to_send)} симв.)")
             else:
                 # 2. lesson_num = 0 в group_messages
                 cursor_gm_lesson0 = await conn.execute(
-                    "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num = 0 ORDER BY id ASC LIMIT 1",
+                    "SELECT id, content_type, text, length(text) as text_len FROM group_messages WHERE course_id = ? AND lesson_num = 0 ORDER BY id ASC",
                     (course_id_str,)
                 )
-                row_gm_lesson0 = await cursor_gm_lesson0.fetchone()
-                if row_gm_lesson0 and row_gm_lesson0[0] and row_gm_lesson0[0].strip():
-                    description_to_send = row_gm_lesson0[0].strip()
-                    logger.debug(f"send_course_description: найдено в group_messages lesson_num=0 для '{course_id_str}'")
-                else:
+                rows_gm_lesson0 = await cursor_gm_lesson0.fetchall()
+                logger.debug(f"send_course_description: group_messages lesson_num=0 для '{course_id_str}': найдено записей={len(rows_gm_lesson0)}")
+                for row in rows_gm_lesson0:
+                    logger.debug(f"  -> id={row[0]}, content_type={row[1]}, text_len={row[3]}, text_preview={row[2][:50] if row[2] else 'NULL'}...")
+                
+                if rows_gm_lesson0:
+                    # Ищем первую запись с непустым текстом
+                    for row_gm_lesson0 in rows_gm_lesson0:
+                        if row_gm_lesson0[2] and row_gm_lesson0[2].strip():
+                            description_to_send = row_gm_lesson0[2].strip()
+                            logger.info(f"send_course_description: найдено в group_messages lesson_num=0 для '{course_id_str}' (id={row_gm_lesson0[0]}, {len(description_to_send)} симв.)")
+                            break
+                    if not description_to_send:
+                        logger.warning(f"send_course_description: все записи lesson_num=0 для '{course_id_str}' имеют пустой текст")
+                
+                if not description_to_send:
                     # 3. lesson_num IS NULL
                     cursor_gm_null = await conn.execute(
-                        "SELECT text FROM group_messages WHERE course_id = ? AND lesson_num IS NULL ORDER BY id ASC LIMIT 1",
+                        "SELECT id, content_type, text, length(text) as text_len FROM group_messages WHERE course_id = ? AND lesson_num IS NULL ORDER BY id ASC",
                         (course_id_str,)
                     )
-                    row_gm_null = await cursor_gm_null.fetchone()
-                    if row_gm_null and row_gm_null[0] and row_gm_null[0].strip():
-                        description_to_send = row_gm_null[0].strip()
-                        logger.debug(f"send_course_description: найдено в group_messages lesson_num=NULL для '{course_id_str}'")
+                    rows_gm_null = await cursor_gm_null.fetchall()
+                    logger.debug(f"send_course_description: group_messages lesson_num=NULL для '{course_id_str}': найдено записей={len(rows_gm_null)}")
+                    for row in rows_gm_null:
+                        logger.debug(f"  -> id={row[0]}, content_type={row[1]}, text_len={row[3]}, text_preview={row[2][:50] if row[2] else 'NULL'}...")
+                    
+                    if rows_gm_null:
+                        for row_gm_null in rows_gm_null:
+                            if row_gm_null[2] and row_gm_null[2].strip():
+                                description_to_send = row_gm_null[2].strip()
+                                logger.info(f"send_course_description: найдено в group_messages lesson_num=NULL для '{course_id_str}' (id={row_gm_null[0]}, {len(description_to_send)} симв.)")
+                                break
 
             # 4. Первый текст урока 1
             if not description_to_send:
                 cursor_lesson1 = await conn.execute(
-                    """SELECT text FROM group_messages
+                    """SELECT id, text FROM group_messages
                        WHERE course_id = ? AND lesson_num = 1 AND content_type = 'text'
                          AND text IS NOT NULL AND TRIM(text) != ''
                        ORDER BY id ASC LIMIT 1""",
                     (course_id_str,)
                 )
                 row_lesson1 = await cursor_lesson1.fetchone()
-                if row_lesson1 and row_lesson1[0]:
-                    description_to_send = "Из первого урока:\n" + row_lesson1[0].strip()
-                    logger.debug(f"send_course_description: взят текст урока 1 для '{course_id_str}'")
+                logger.debug(f"send_course_description: lesson_num=1 text для '{course_id_str}': row={row_lesson1}")
+                if row_lesson1 and row_lesson1[1]:
+                    description_to_send = "Из первого урока:\n" + row_lesson1[1].strip()
+                    logger.info(f"send_course_description: взят текст урока 1 для '{course_id_str}' ({len(description_to_send)} симв.)")
 
         if description_to_send:
             max_len = 4000
@@ -7115,7 +7166,7 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
             """, (user_id,))
             completed_courses = await cursor.fetchall()
 
-            # Получаем существующие вообще
+            # Получаем существующие во��бще
             cursor = await conn.execute("""
                 SELECT COUNT(*) AS total_courses FROM courses;
             """, )
@@ -8205,7 +8256,7 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
 
     payment_needed = False
     if price_difference > 0:
-        text_parts.append(f"Сумма к доплате: *{price_difference} руб*.")  # Экранируем точку
+        text_parts.append(f"Сум��а к доплате: *{price_difference} руб*.")  # Экранируем точку
         payment_instructions_from_env = PAYMENT_INSTRUCTIONS_TEMPLATE
 
         payment_instructions_formatted = payment_instructions_from_env.format(
@@ -8219,10 +8270,10 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
         payment_needed = True
     elif price_difference < 0:
         text_parts.append(
-            f"Новый тариф дешевле вашего текущего. Переход будет без доплаты.")  # Экранируем точки и скобки
+            f"Новый тариф дешевле ваш��го текущего. Переход будет без доплаты.")  # Экранируем точки и скобки
     else:
         text_parts.append(
-            f"Цена нового тарифа такая же, как у вашего текущего. Переход будет без доплаты.")  # Экранируем точку
+            f"Цена нов��го тарифа такая же, как у вашего текущего. Переход будет без доплаты.")  # Экранируем точку
 
     text_parts.append(
         f"\nПосле смены тарифа ваш прогресс по текущему уровню курса будет сброшен, и вы начнете его заново с новым тарифом.")  # Экранируем точку
