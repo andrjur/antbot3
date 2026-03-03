@@ -1433,6 +1433,14 @@ def save_settings(settings_s):
 @db_exception_handler
 async def process_add_course_to_db(course_id, group_id, code1, code2, code3, description=""):
     """Добавляет информацию о курсе и кодах активации в базу данных."""
+    
+    # Очистка group_id от кавычек, двоеточий и мусора
+    group_id = group_id.replace('"', '').replace("'", '').replace(':', '').replace('`', '').strip()
+    
+    # Авто-добавление минуса если ID без него и это число
+    if not group_id.startswith("-") and group_id.isdigit():
+        group_id = "-" + group_id
+    
     logger.info(f"3338883333 process_add_course_to_db: course_id={course_id}, description={description[:50] if description else 'None'}")
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
@@ -4756,6 +4764,39 @@ async def cmd_cleanup_orphaned(message: types.Message):
     logger.info(f"cmd_cleanup_orphaned выполнен суперадмином {user_id}: удалено {deleted_count} записей {removed_courses}")
 
 
+@dp.message(Command("cleanup_courses"), F.from_user.id.in_(ADMIN_IDS_CONF))
+async def cmd_cleanup_courses(message: types.Message):
+    """Очистка базы данных от курсов с некорректным group_id (с кавычками или без минуса)"""
+    await message.answer("🧹 Очистка базы данных от некорректных курсов...", parse_mode=None)
+    
+    try:
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # Находим все курсы с некорректным group_id
+            cursor = await conn.execute("SELECT course_id, group_id FROM courses")
+            courses = await cursor.fetchall()
+            
+            deleted_count = 0
+            for course_id, group_id in courses:
+                # Проверяем на некорректность (кавычки, двоеточия, отсутствие минуса)
+                if '"' in group_id or "'" in group_id or ':' in group_id or \
+                   (not group_id.startswith("-") and group_id.isdigit()):
+                    # Удаляем курс
+                    await conn.execute("DELETE FROM courses WHERE course_id = ?", (course_id,))
+                    logger.info(f"🗑️ Удалён курс {course_id} с некорректным group_id: {group_id}")
+                    deleted_count += 1
+            
+            await conn.commit()
+            
+            await message.answer(
+                f"✅ Очистка завершена!\n\n"
+                f"🗑️ Удалено курсов: {deleted_count}",
+                parse_mode=None
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при очистке: {e}")
+        await message.answer(f"❌ Ошибка: {e}", parse_mode=None)
+
+
 @dp.message(Command("set_hw_timeout"))
 async def cmd_set_hw_timeout(message: types.Message):
     """Установить таймаут AI-проверки ДЗ (только админы)"""
@@ -4780,7 +4821,7 @@ async def cmd_set_hw_timeout(message: types.Message):
         try:
             new_timeout = int(args[1])
             if new_timeout < 10 or new_timeout > 600:
-                await message.answer("❌ Таймаут должен быть от 10 до 600 секунд (от 10 сек до 10 мин)")
+                await message.answer("❌ Таймаут должен ��ыть от 10 до 600 секунд (от 10 сек до 10 мин)")
                 return
 
             old_timeout = HW_TIMEOUT_SECONDS
@@ -9346,7 +9387,7 @@ async def handle_homework(message: types.Message):
         admin_message_content = f"📸 Фото: {file_id}\n✏️ Описание: {md.quote(text)}"
     elif message.document:
         homework_type = "Домашка с документом"
-        text = message.caption or ""  # Получаем подпись к документу (если есть)
+        text = message.caption or ""  # Получаем подпись к доку��енту (если есть)
         file_id = message.document.file_id
         admin_message_content = f"📎 Документ: {file_id}\n✏️ Описание: {md.quote(text)}"
     elif message.voice:
