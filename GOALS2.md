@@ -530,6 +530,130 @@ return [{
 
 ---
 
+### Fix 9: Правильная маршрутизация через Switch ноду (03.03.2026)
+
+**Проблема:**
+Все 3 ноды (Process Photo, Audio, Video) запускались одновременно, даже когда студент отправлял только фото.
+
+**Причина:**
+Code нода **Route File Type** не разделяет потоки физически. Если от одной ноды отходят 3 связи к другим нодам, n8n запускает **все три одновременно**, передавая им одни и те же данные.
+
+**Что происходило:**
+1. Студент отправляет фото
+2. **Route File Type** получает данные
+3. n8n запускает одновременно:
+   - **Process Photo** → ✅ срабатывает
+   - **Process Audio** → ❌ падает с ошибкой (нет audio data)
+   - **Process Video** → ❌ падает с ошибкой (нет video data)
+
+**Решение:**
+Использовать специальную ноду-**Switch** которая направляет поток **только по одной** ветке.
+
+---
+
+## 🔧 Как работает Switch маршрутизация
+
+### Схема:
+
+```
+Get a file → Switch → (выход 0: image) → Process Photo
+                      (выход 1: audio) → Process Audio
+                      (выход 2: video) → Process Video
+```
+
+### Настройка Switch:
+
+**Параметры:**
+- **Data Type:** `String`
+- **Value:** `={{ $json.mimeType }}`
+
+**Routing Rules:**
+1. Rule 1: `Starts with` → `image` (выход 0)
+2. Rule 2: `Starts with` → `audio` (выход 1)
+3. Rule 3: `Starts with` → `video` (выход 2)
+
+---
+
+## 📝 Изменения в Process Photo/Audio/Video
+
+### Было (с Route File Type):
+```javascript
+// Process Photo
+const fileType = $input.first().json.file_type;
+if (fileType !== 'image') return [];  // ← Проверка внутри ноды
+
+const binaryData = $input.first().binary?.data;
+// ...
+```
+
+### Стало (со Switch):
+```javascript
+// Process Photo
+const binaryData = $input.first().binary?.data;  // ← Без проверки fileType!
+// ...
+```
+
+**Почему:**
+Switch уже отфильтровал по типу файла — в Process Photo попадут **только image**!
+
+---
+
+## ✅ Результат:
+
+**Теперь:**
+- ✅ Прилетает фото → Switch видит `mimeType: image/jpeg` → запускает **ТОЛЬКО** Process Photo
+- ✅ Прилетает аудио → Switch видит `mimeType: audio/ogg` → запускает **ТОЛЬКО** Process Audio
+- ✅ Прилетает видео → Switch видит `mimeType: video/ogg` → запускает **ТОЛЬКО** Process Video
+
+**Преимущества:**
+- ❌ Нет лишних ошибок в логах
+- ❌ Нет необходимости в "Continue On Fail"
+- ✅ Чистая и понятная маршрутизация
+- ✅ Работает надёжно
+
+---
+
+## 📋 Чек-лист настройки Switch:
+
+1. ✅ **Switch** стоит после **Get a file**
+2. ✅ **Value 1:** `={{ $json.mimeType }}`
+3. ✅ **Rule 1:** `Starts with` → `image` (выход 0 → Process Photo)
+4. ✅ **Rule 2:** `Starts with` → `audio` (выход 1 → Process Audio)
+5. ✅ **Rule 3:** `Starts with` → `video` (выход 2 → Process Video)
+6. ✅ В **Process Photo/Audio/Video** нет проверки `fileType` (не нужна!)
+
+---
+
+## 🧪 Тестирование:
+
+**Отправь ДЗ с фото:**
+1. ✅ **Get a file** → green check
+2. ✅ **Switch** → green check (output 0)
+3. ✅ **Process Photo** → green check
+4. ⚪ **Process Audio** → не запускается (серая)
+5. ⚪ **Process Video** → не запускается (серая)
+
+**Отправь ДЗ с голосовым:**
+1. ✅ **Get a file** → green check
+2. ✅ **Switch** → green check (output 1)
+3. ⚪ **Process Photo** → не запускается (серая)
+4. ✅ **Process Audio** → green check
+5. ⚪ **Process Video** → не запускается (серая)
+
+---
+
+## 📊 Сравнение подходов:
+
+| Подход | Code нода | Switch нода |
+|--------|-----------|-------------|
+| Маршрутизация | ❌ Все 3 запускаются | ✅ Только одна |
+| Ошибки | ❌ 2 из 3 падают | ✅ Нет ошибок |
+| Continue On Fail | ⚠️ Нужно | ❌ Не нужно |
+| Логи | ❌ Грязные | ✅ Чистые |
+| Сложность | ⚠️ Средняя | ✅ Простая |
+
+---
+
 ## 🏗️ Инфраструктура и Архитектура
 
 ### 1. Маршрутизация и Порты (Docker + Cloudflare)
