@@ -6005,7 +6005,7 @@ async def cb_select_lesson_for_repeat_start(query: types.CallbackQuery, callback
         if user_info_row:
             current_user_level, user_current_lesson_on_course = user_info_row
         else:  # Если нет записи в user_courses, возможно, это просмотр описания еще не начатого курса
-            # В этом случае берем просто 1-й уровень для отображения контента
+            # В этом случае берем просто 1-й уровень для отображения контен��а
             logger.warning(
                 f"Нет записи в user_courses для {user_id} и курса {course_id_str} при просмотре содержания. Показываю уровень 1.")
 
@@ -7170,7 +7170,7 @@ async def process_course_review_text(message: types.Message, state: FSMContext):
                 (user_id, course_id_for_review, review_text_raw)
             )
             await conn.commit()
-        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса который х��ти��е пройт���!"),
+        await message.reply(escape_md("Спасибо за ваш отзыв! Мы ценим ваше мнение. 🎉  Введите код следующего курса котор��й хотите пройти!"),
                             parse_mode=None)
 
         if ADMIN_GROUP_ID:
@@ -8955,7 +8955,7 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 
 
 # ----------------- новый обработчик и текстовой домашки и фото -------- от пользователя ------------
-@dp.message(F.content_type.in_({'photo', 'document', 'text'}), F.chat.type == "private", ~F.text.startswith('/'))
+@dp.message(F.content_type.in_({'photo', 'document', 'text', 'voice', 'audio'}), F.chat.type == "private", ~F.text.startswith('/'))
 @db_exception_handler
 async def handle_homework(message: types.Message):
     """Обрабатывает отправку домашних заданий (фото/документы/текст)"""
@@ -9349,7 +9349,7 @@ async def handle_homework(message: types.Message):
         base_caption_for_media = admin_message_text
 
         # Добавляем описание из ДЗ к caption, если оно есть
-        # text здесь - это message.caption из входящего сообщения с ДЗ
+        # text здесь - это message.caption из входяще��о сообщения с ДЗ
         description_from_homework = text if text else ""  # text = message.caption or ""
         if description_from_homework:
             caption_with_description = base_caption_for_media + f"\n✏️ Описание: {escape_md(description_from_homework)}"
