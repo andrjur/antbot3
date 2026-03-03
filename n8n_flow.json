@@ -6,7 +6,7 @@
         "httpMethod": "POST",
         "path": "aa46a723-619e-42e9-8e51-49ba51813718",
         "authentication": "headerAuth",
-        "options": {}
+        "options": null
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -85,7 +85,7 @@
           ]
         },
         "includeOtherFields": true,
-        "options": {}
+        "options": null
       },
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
@@ -120,7 +120,7 @@
           ],
           "combinator": "and"
         },
-        "options": {}
+        "options": null
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -452,7 +452,7 @@
             }
           ]
         },
-        "options": {}
+        "options": null
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
