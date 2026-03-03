@@ -1501,25 +1501,48 @@ async def backup_settings_file():
         logger.error(f"Ошибка при создании бэкапа файла settings.json: {e904}")
 
 
-async def backup_settings_file_multiple(count=3):
-    """Создаёт несколько бэкапов settings.json (по умолчанию 3)."""
-    for i in range(count):
-        await backup_settings_file()
-        if i < count - 1:
-            await asyncio.sleep(0.1)  # Пауза 100мс между бэкапами
+async def backup_settings_file_rotate():
+    """
+    Ротирует бэкапы settings.json:
+    settings.json → settings.json1 → settings.json2
+    
+    settings.json2 — позапрошлая версия (самая старая из 3)
+    settings.json1 — предыдущая версия
+    settings.json — текущая
+    """
+    try:
+        if not os.path.isfile("settings.json"):
+            logger.warning("⚠️ settings.json не существует или является директорией, пропускаю бэкап")
+            return
+        
+        # Если есть settings.json1, перемещаем в settings.json2
+        if os.path.isfile("settings.json1"):
+            if os.path.isfile("settings.json2"):
+                os.remove("settings.json2")  # Удаляем старый settings.json2
+            os.rename("settings.json1", "settings.json2")
+            logger.info("backup_settings_file_rotate: settings.json1 → settings.json2")
+        
+        # Копируем текущий settings.json в settings.json1
+        shutil.copy("settings.json", "settings.json1")
+        logger.info("backup_settings_file_rotate: settings.json → settings.json1")
+        
+        logger.info("backup_settings_file_rotate: бэкапы ротированы (settings.json2 — позапрошлая версия)")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при ротации бэкапов settings.json: {e}", exc_info=True)
 
 
 async def clean_settings_json_course(course_id):
     """
     Очищает settings.json от всех данных, связанных с указанным курсом.
-    Создаёт 3 бэкапа перед изменением.
+    Создаёт ротацию бэкапов перед изменением (settings.json → settings.json1 → settings.json2).
     """
     logger.info(f"clean_settings_json_course: начало очистки курса '{course_id}' из settings.json")
     
     try:
-        # Создаём 3 бэкапа перед изменением
-        await backup_settings_file_multiple(3)
-        logger.info(f"clean_settings_json_course: создано 3 бэкапа settings.json")
+        # Создаём ротацию бэкапов перед изменением
+        await backup_settings_file_rotate()
+        logger.info(f"clean_settings_json_course: бэкапы ротированы")
         
         # Загружаем текущие настройки
         with open("settings.json", "r", encoding="utf-8") as f:
@@ -3416,7 +3439,7 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
     # Проверяем, был ли только что создан settings.json
     settings_status = ""
     if not os.path.exists(SETTINGS_FILE):
-        settings_status = "\n⚠️ Файл settings.json не найден и будет создан при первом добавлении курса\n"
+        settings_status = "\n⚠️ Файл settings.json не найден и будет создан пр���� первом добавлении курса\n"
     elif len(settings.get("groups", {})) == 0:
         settings_status = "\n💡 Settings.json загружен, но курсы ещё не добавлены\n"
     
@@ -5249,10 +5272,10 @@ async def callback_delete_course_execute(callback: CallbackQuery):
 
             logger.info(f"callback_delete_course_execute: удалено {count} уроков курса {course_id}")
 
-        # Очищаем settings.json от данных курса (с созданием 3 бэкапов)
+        # Очищаем settings.json от данных курса (с ротацией бэкапов)
         await clean_settings_json_course(course_id)
 
-        await callback.message.edit_text(f"✅ Удалено {count} записей курса '{course_id}'.\nsettings.json обновлён (создано 3 бэкапа).")
+        await callback.message.edit_text(f"✅ Удалено {count} записей курса '{course_id}'.\nsettings.json обновлён (бэкапы: settings.json1, settings.json2).")
 
     except Exception as e:
         logger.error(f"Ошибка при удалении курса: {e}")
@@ -8243,7 +8266,7 @@ async def cb_change_tariff_prompt(query: types.CallbackQuery, callback_data: Cha
             )
 
     if not found_current_in_list and current_user_version_id:
-        # Если текущий тариф пользователя почему-то не нашелся в общем списке тарифов курса
+        # Если текущий тариф пользователя почему-то не нашелся в о��щем спи��ке тарифов курса
         current_tariff_name_obj = settings.get("tariff_names", {}).get(current_user_version_id,
                                                                        f"Тариф {current_user_version_id}")
         current_tariff_name_safe = escape_md(str(current_tariff_name_obj))
