@@ -11,10 +11,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        688,
-        960
+        1152,
+        2608
       ],
-      "id": "c99f4e4d-8f7c-44e5-a066-0d7052247e85",
+      "id": "ebd296da-55f2-4b39-92de-3e94f4e16492",
       "name": "Webhook-homework",
       "webhookId": "aa46a723-619e-42e9-8e51-49ba51813718",
       "credentials": {
@@ -90,10 +90,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        896,
-        960
+        1360,
+        2608
       ],
-      "id": "5e90780f-7ead-42f0-a920-48d0c27d760b",
+      "id": "c767a3f4-e2de-4779-8610-00135d69a0f1",
       "name": "Edit Fields",
       "alwaysOutputData": true
     },
@@ -125,10 +125,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1104,
-        960
+        1568,
+        2608
       ],
-      "id": "fc9e4e42-94e5-417f-b764-084502e4d983",
+      "id": "c48fe72c-4461-4a12-ae13-500c5a36f35b",
       "name": "If"
     },
     {
@@ -138,26 +138,25 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1360,
-        1184
+        1824,
+        2832
       ],
-      "id": "db8fa270-6c2c-4053-ba46-419a6890c552",
+      "id": "e776610f-81b2-4f2b-8c3a-88491135a214",
       "name": "Prepare Text Messages"
     },
     {
       "parameters": {
         "resource": "file",
         "fileId": "={{ $('Edit Fields').item.json.hw_file_id }}",
-        "download": true,
         "additionalFields": {}
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        1296,
-        944
+        1760,
+        2672
       ],
-      "id": "ee907f71-a51f-49ee-83bb-2469ea1e7651",
+      "id": "07b29f88-8d31-44a5-815f-ae83489c04dc",
       "name": "Get a file",
       "webhookId": "f2d472aa-3e48-4cd4-9321-2685e94ffe4c",
       "alwaysOutputData": false,
@@ -174,67 +173,91 @@
     },
     {
       "parameters": {
-        "jsCode": "// Проверка типа файла и маршрутизация\nconst binaryData = $input.item.json.binary?.data;\nconst mimeType = binaryData?.mimeType || $input.item.json.mimeType || '';\nconst fileType = mimeType.split('/')[0];\n\nlet output = 0; // 0 = text/no file, 1 = image, 2 = audio, 3 = video\n\nif (mimeType.startsWith('image')) {\n  output = 1;\n} else if (mimeType.startsWith('audio')) {\n  output = 2;\n} else if (mimeType.startsWith('video')) {\n  output = 3;\n}\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    file_type: fileType,\n    mime_type: mimeType,\n    route_output: output\n  },\n  binary: $input.item.json.binary  // ← Сохраняем binary!\n}];"
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{ $json.mimeType }}",
+              "value2": "image",
+              "operation": "startsWith"
+            },
+            {
+              "value1": "={{ $json.mimeType }}",
+              "value2": "audio",
+              "operation": "startsWith"
+            },
+            {
+              "value1": "={{ $json.mimeType }}",
+              "value2": "video",
+              "operation": "startsWith"
+            }
+          ]
+        },
+        "dataType": "string",
+        "outputKey": "rule"
       },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
       "position": [
-        1488,
-        928
+        1936,
+        2592
       ],
-      "id": "c1859512-d3f2-46bc-875d-d9709f8e4c22",
-      "name": "Route File Type"
+      "id": "226aae54-49b5-4509-b77f-4abc043bbdfc",
+      "name": "Switch",
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Ветка ФОТО: конвертация в Base64\nconst binaryData = $input.first().binary?.data;\n\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'image/jpeg';\nconst fileSize = binaryData.data?.length || 0;\n\nconsole.log(`📸 Фото: ${fileSize} байт, MIME: ${mimeType}`);\n\n$input.first().json.base64_image = binaryData.data;\n$input.first().json.mime_type = mimeType;\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'image';\n\nreturn $input.all();"
+        "jsCode": "// Ветка ФОТО: конвертация в Base64\nconst binaryData = $input.first().binary?.data;\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'image/jpeg';\nconst fileSize = binaryData.data?.length || 0;\n\nconsole.log(`📸 Фото: ${fileSize} байт, MIME: ${mimeType}`);\n\n$input.first().json.base64_image = binaryData.data;\n$input.first().json.mime_type = mimeType;\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'image';\n\nreturn $input.all();"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1680,
-        768
+        2144,
+        2416
       ],
-      "id": "646b4992-8d89-4aad-85f9-db9d8509753e",
-      "name": "Process Photo"
+      "id": "0d6e7e33-bff3-4e95-8311-a84905f31ad5",
+      "name": "Process Photo",
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Ветка АУДИО: проверка размера + сохранение данных\nconst binaryData = $input.first().binary?.data;\n\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'audio/ogg';\nconst fileSize = binaryData.data?.length || 0;\nconst MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎧 Аудио: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_AUDIO_SIZE) {\n  console.log(`⚠️ Аудио больше 10 МБ!`);\n  $input.first().json.audio_truncated = true;\n  $input.first().json.audio_warning = `Аудио слишком большое (${(fileSize / 1024 / 1024).toFixed(2)} МБ). ИИ обработает только часть.`;\n} else {\n  $input.first().json.audio_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\n$input.first().json.audio_data = binaryData.data;\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'audio';\n$input.first().json.mime_type = mimeType;\n\nreturn $input.all();"
+        "jsCode": "// Ветка АУДИО: проверка размера + сохранение данных\nconst binaryData = $input.first().binary?.data;\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'audio/ogg';\nconst fileSize = binaryData.data?.length || 0;\nconst MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎧 Аудио: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_AUDIO_SIZE) {\n  console.log(`⚠️ Аудио больше 10 МБ!`);\n  $input.first().json.audio_truncated = true;\n  $input.first().json.audio_warning = `Аудио слишком большое (${(fileSize / 1024 / 1024).toFixed(2)} МБ). ИИ обработает только часть.`;\n} else {\n  $input.first().json.audio_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\n$input.first().json.audio_data = binaryData.data;\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'audio';\n$input.first().json.mime_type = mimeType;\n\nreturn $input.all();"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1680,
-        928
+        2144,
+        2576
       ],
-      "id": "f9701ae0-84ee-452e-b674-feca53f772c3",
-      "name": "Process Audio"
+      "id": "8941124f-dc96-4391-9d4b-da824f8671e1",
+      "name": "Process Audio",
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Ветка ВИДЕО (кружочки/голосовые video/ogg): проверка + сохранение данных\nconst binaryData = $input.first().binary?.data;\n\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'video/ogg';\nconst fileSize = binaryData.data?.length || 0;\nconst MAX_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎥 Видео/кружочек: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_SIZE) {\n  console.log(`⚠️ Видео больше 10 МБ!`);\n  $input.first().json.file_truncated = true;\n  $input.first().json.file_warning = `Файл слишком большой (${(fileSize / 1024 / 1024).toFixed(2)} МБ).`;\n} else {\n  $input.first().json.file_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\n$input.first().json.audio_data = binaryData.data; // Gemini принимает аудио из видео как audio_data\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'video';\n$input.first().json.mime_type = mimeType;\n\nreturn $input.all();"
+        "jsCode": "// Ветка ВИДЕО (кружочки/голосовые video/ogg): проверка + сохранение данных\nconst binaryData = $input.first().binary?.data; // Исправлено: было $input.first()[0]\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'video/ogg';\nconst fileSize = binaryData.data?.length || 0;\nconst MAX_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎥 Видео/кружочек: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_SIZE) {\n  console.log(`⚠️ Видео больше 10 МБ!`);\n  $input.first().json.file_truncated = true;\n  $input.first().json.file_warning = `Файл слишком большой (${(fileSize / 1024 / 1024).toFixed(2)} МБ).`;\n} else {\n  $input.first().json.file_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\n$input.first().json.audio_data = binaryData.data; // Gemini принимает аудио из видео как audio_data\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'video';\n$input.first().json.mime_type = mimeType;\n\nreturn $input.all();"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1680,
-        1088
+        2144,
+        2736
       ],
-      "id": "870ac92f-fa6d-42cb-a2a9-9eb253c822de",
-      "name": "Process Video"
+      "id": "c57cc78c-1e4f-4c4d-ac26-0868e115625a",
+      "name": "Process Video",
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Подготовка messages content для OpenRouter AI\nconst hwText = $input.item.json.hw_text || $('Edit Fields').item.json.hw_text || '[Текст отсутствует]';\nconst audioWarning = $input.item.json.audio_warning || '';\nconst fileWarning = $input.item.json.file_warning || '';\nconst base64Image = $input.item.json.base64_image || null;\nconst mimeType = $input.item.json.mime_type || '';\nconst fileType = $input.item.json.file_type || '';\nconst audioData = $input.item.json.audio_data || null;\n\n// Формируем text content\nlet textContent = `РАБОТА СТУДЕНТА:\\n${hwText}`;\nif (audioWarning) textContent += `\\n\\n⚠️ ${audioWarning}`;\nif (fileWarning) textContent += `\\n\\n⚠️ ${fileWarning}`;\n\n// Формируем messages content array\nconst messagesContent = [\n  {\n    type: \"text\",\n    text: textContent\n  }\n];\n\n// Добавляем image если есть\nif (base64Image && mimeType) {\n  messagesContent.push({\n    type: \"image_url\",\n    image_url: {\n      url: `data:${mimeType};base64,${base64Image}`\n    }\n  });\n}\n\n// Добавляем audio если есть (для audio и video)\nif (audioData && (fileType === 'audio' || fileType === 'video')) {\n  const audioFormat = mimeType.includes('ogg') ? 'ogg' : 'wav';\n  messagesContent.push({\n    type: \"input_audio\",\n    input_audio: {\n      data: audioData,\n      format: audioFormat\n    }\n  });\n}\n\nconsole.log('📝 Messages content prepared:', JSON.stringify(messagesContent).substring(0, 200));\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    messages_content: messagesContent\n  }\n}];"
+        "jsCode": "// Подготовка messages content для OpenRouter AI\nconst hwText = $input.first().json.hw_text || $('Edit Fields').first().json.hw_text || '[Текст отсутствует]';\nconst audioWarning = $input.first().json.audio_warning || '';\nconst fileWarning = $input.first().json.file_warning || '';\nconst base64Image = $input.first().json.base64_image || null;\nconst mimeType = $input.first().json.mime_type || '';\nconst fileType = $input.first().json.file_type || '';\nconst audioData = $input.first().json.audio_data || null;\n\n// Формируем text content\nlet textContent = `РАБОТА СТУДЕНТА:\\n${hwText}`;\nif (audioWarning) textContent += `\\n\\n⚠️ ${audioWarning}`;\nif (fileWarning) textContent += `\\n\\n⚠️ ${fileWarning}`;\n\n// Формируем messages content array\nconst messagesContent = [\n  {\n    type: \"text\",\n    text: textContent\n  }\n];\n\n// Добавляем image если есть\nif (base64Image && mimeType) {\n  messagesContent.push({\n    type: \"image_url\",\n    image_url: {\n      url: `data:${mimeType};base64,${base64Image}`\n    }\n  });\n}\n\n// Добавляем audio если есть (для audio и video)\nif (audioData && (fileType === 'audio' || fileType === 'video')) {\n  const audioFormat = mimeType.includes('ogg') ? 'ogg' : 'wav';\n  messagesContent.push({\n    type: \"input_audio\",\n    input_audio: {\n      data: audioData,\n      format: audioFormat\n    }\n  });\n}\n\nconsole.log('📝 Messages content prepared:', JSON.stringify(messagesContent).substring(0, 200));\n\n// 🔍 DEBUG для отладки\nconsole.log('🔍 Prepare AI Messages DEBUG:');\nconsole.log('  base64Image:', base64Image ? 'ЕСТЬ' : 'НЕТ');\nconsole.log('  mimeType:', mimeType || 'НЕТ');\nconsole.log('  fileType:', fileType || 'НЕТ');\nconsole.log('  audioData:', audioData ? 'ЕСТЬ' : 'НЕТ');\nconsole.log('  messages_content:', JSON.stringify(messagesContent));\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    messages_content: messagesContent\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1920,
-        928
+        2384,
+        2576
       ],
-      "id": "d6ee30a7-fdcf-43dd-ba0c-f409610bed03",
+      "id": "db5f5380-ea46-45ac-b282-30db18893bc3",
       "name": "Prepare AI Messages"
     },
     {
@@ -244,10 +267,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2128,
-        1104
+        2592,
+        2752
       ],
-      "id": "61288c47-8205-4a02-bb33-b9be1463b572",
+      "id": "1165e267-a2b5-4717-9951-9ca201224f8e",
       "name": "Prepare OpenRouter JSON"
     },
     {
@@ -279,10 +302,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2368,
-        1280
+        2832,
+        2928
       ],
-      "id": "a9086ae4-f10f-4b62-8dae-56eb77a67ab3",
+      "id": "4ce25cfe-d0cb-49d6-ad32-a3d22b878606",
       "name": "OpenRouter AI",
       "retryOnFail": true,
       "maxTries": 3,
@@ -302,10 +325,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2560,
-        1088
+        3024,
+        2736
       ],
-      "id": "cf9e90bc-443b-41bf-bf28-b05ebdf08fd0",
+      "id": "8ca20969-e9de-4c9a-bd33-2a2d603f1e32",
       "name": "Parse JSON Response",
       "onError": "continueErrorOutput"
     },
@@ -364,10 +387,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2816,
-        1088
+        3280,
+        2736
       ],
-      "id": "cb1c729a-634b-4cd2-ae11-ed87293dcbf3",
+      "id": "ac33c562-7b47-4385-a7a3-a0b5345702bf",
       "name": "HTTP Request",
       "credentials": {
         "httpHeaderAuth": {
@@ -434,10 +457,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2816,
-        1248
+        3280,
+        2896
       ],
-      "id": "b07bd967-d9cd-4c76-b4cc-c2555b3c769c",
+      "id": "9bd98a8b-a8f4-491f-9583-09e932e72923",
       "name": "HTTP Request (Error Fallback)",
       "credentials": {
         "httpHeaderAuth": {
@@ -455,10 +478,10 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2816,
-        1408
+        3280,
+        3056
       ],
-      "id": "d78f8d0e-597a-4209-8301-32bde8469226",
+      "id": "734c7220-819c-4fdf-8c99-ad0ff4eaa39d",
       "name": "Sticky Note"
     },
     {
@@ -470,10 +493,10 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        1488,
-        1280
+        1952,
+        2928
       ],
-      "id": "f6c479b0-9f96-4736-bf2f-0ba3e72cd5ea",
+      "id": "9e66bd83-36e4-454a-83d1-e3adc90ccd6f",
       "name": "Sticky Note1"
     }
   ],
@@ -534,26 +557,30 @@
       "main": [
         [
           {
-            "node": "Route File Type",
+            "node": "Switch",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Route File Type": {
+    "Switch": {
       "main": [
         [
           {
             "node": "Process Photo",
             "type": "main",
             "index": 0
-          },
+          }
+        ],
+        [
           {
             "node": "Process Audio",
             "type": "main",
             "index": 0
-          },
+          }
+        ],
+        [
           {
             "node": "Process Video",
             "type": "main",
@@ -654,13 +681,13 @@
       ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "e776f1ec-eaf8-436f-8f89-4a80238c0993",
+  "versionId": "5a9eaff6-6d73-4ec4-99e5-bde7fcc3943d",
   "meta": {
     "instanceId": "14556ca7589cf14a5bd79ba5c472bcf1b451007380d01a7e3b562e771321d9e0"
   },
