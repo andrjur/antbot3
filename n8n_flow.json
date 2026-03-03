@@ -206,7 +206,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first();\nif (!item || !item.binary || !item.binary.data) {\n  return[]; \n}\n\nconst binaryData = item.binary.data;\n// ФИКС: Если Телеграм прислал кривой octet-stream, жестко ставим image/jpeg\nlet mimeType = item.binary.mimeType;\nif (!mimeType || mimeType.includes('octet-stream')) {\n  mimeType = item.binary.fileExtension === 'png' ? 'image/png' : 'image/jpeg';\n}\n\nconst fileSize = binaryData.length || 0;\n\nconsole.log(`📸 Фото: ${fileSize} байт, MIME: ${mimeType}`);\n\nitem.json.base64_image = binaryData;\nitem.json.mime_type = mimeType;\nitem.json.file_size = fileSize;\nitem.json.file_type = 'image';\n\nreturn [item];"
+        "jsCode": "const item = $input.first();\nif (!item || !item.binary || !item.binary.data) return[];\n\n// Читаем РЕАЛЬНЫЙ файл с диска n8n и переводим в Base64\nconst binaryBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst actualBase64String = binaryBuffer.toString('base64');\n\n// Чиним кривой тип от Телеграма\nlet mimeType = item.binary.data.mimeType;\nif (!mimeType || mimeType.includes('octet-stream')) {\n  mimeType = item.binary.data.fileExtension === 'png' ? 'image/png' : 'image/jpeg';\n}\n\nitem.json.base64_image = actualBase64String; \nitem.json.mime_type = mimeType;\nitem.json.file_type = 'image';\n\nreturn [item];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -219,7 +219,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Ветка АУДИО: проверка размера + сохранение данных\n\nconst item = $input.first();\nif (!item || !item.binary || !item.binary.data) return // Если файла нет, тихо останавливаем эту ветку\n\n\nconst binaryData = item.binary.data;\nconst mimeType = item.binary.mimeType || 'audio/ogg';\nconst fileSize = binaryData.length || 0;\nconst MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎧 Аудио: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_AUDIO_SIZE) {\n  console.log(`⚠️ Аудио больше 10 МБ!`);\n  item.json.audio_truncated = true;\n  item.json.audio_warning = `Аудио слишком большое (${(fileSize / 1024 / 1024).toFixed(2)} МБ). ИИ обработает только часть.`;\n} else {\n  item.json.audio_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\nitem.json.audio_data = binaryData;\nitem.json.file_size = fileSize;\nitem.json.file_type = 'audio';\nitem.json.mime_type = mimeType;\n\nreturn [item];"
+        "jsCode": "// Ветка АУДИО: проверка размера + сохранение данных\n\nconst item = $input.first();\nif (!item || !item.binary || !item.binary.data) return[];\n\n// Читаем РЕАЛЬНЫЙ файл с диска n8n и переводим в Base64\nconst binaryBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst actualBase64String = binaryBuffer.toString('base64');\n\nlet mimeType = item.binary.data.mimeType || 'audio/ogg';\nconst fileSize = item.binary.data.fileSize || 0;\n\nif (fileSize > 10 * 1024 * 1024) {\n  item.json.audio_warning = `Аудио слишком большое. ИИ обработает только часть.`;\n}\n\nitem.json.audio_data = actualBase64String;\nitem.json.file_type = 'audio';\nitem.json.mime_type = mimeType;\n\nreturn [item];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -232,7 +232,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Ветка ВИДЕО (кружочки/голосовые video/ogg): проверка + сохранение данных\nconst item = $input.first();\nif (!item || !item.binary || !item.binary.data) {\n  return []; // Если файла нет, тихо останавливаем эту ветку\n}\n\nconst binaryData = item.binary.data;\nconst mimeType = item.binary.mimeType || 'video/ogg';\nconst fileSize = binaryData.length || 0;\nconst MAX_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎥 Видео/кружочек: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_SIZE) {\n  console.log(`⚠️ Видео больше 10 МБ!`);\n  item.json.file_truncated = true;\n  item.json.file_warning = `Файл слишком большой (${(fileSize / 1024 / 1024).toFixed(2)} МБ).`;\n} else {\n  item.json.file_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\nitem.json.audio_data = binaryData; // Gemini принимает аудио из видео как audio_data\nitem.json.file_size = fileSize;\nitem.json.file_type = 'video';\nitem.json.mime_type = mimeType;\n\nreturn [item];"
+        "jsCode": "// Ветка ВИДЕО (кружочки/голосовые video/ogg): проверка + сохранение данных\nconst item = $input.first();\nif (!item || !item.binary || !item.binary.data) return[];\n\n// Читаем РЕАЛЬНЫЙ файл с диска n8n и переводим в Base64\nconst binaryBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst actualBase64String = binaryBuffer.toString('base64');\n\nlet mimeType = item.binary.data.mimeType || 'video/ogg';\nconst fileSize = item.binary.data.fileSize || 0;\n\nif (fileSize > 10 * 1024 * 1024) {\n  item.json.file_warning = `Файл слишком большой.`;\n}\n\nitem.json.audio_data = actualBase64String;\nitem.json.file_type = 'video';\nitem.json.mime_type = mimeType;\n\nreturn [item];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -683,7 +683,7 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "eede7353-6f04-40b5-9982-ad199a5e41de",
+  "versionId": "c3d33d06-a79b-4675-80f1-30b453df6a63",
   "meta": {
     "instanceId": "14556ca7589cf14a5bd79ba5c472bcf1b451007380d01a7e3b562e771321d9e0"
   },
