@@ -1090,7 +1090,75 @@ code = code.replace('"', '').replace("'", '').replace('`', '').strip()
 
 ---
 
-## 🏗️ Инфраструктура и Архитектура
+## 💾 Сохранение данных при рестарте
+
+### Настройка volumes (docker-compose.yml):
+
+```yaml
+services:
+  bot:
+    volumes:
+      - ./bot.db:/app/bot.db              # База данных
+      - ./logs:/app/logs                  # Логи
+      - ./settings.json:/app/settings.json  # Настройки
+      - ./VERSION:/app/VERSION            # Версия бота
+```
+
+### Что сохраняется:
+
+| Файл | На сервере | В контейнере | При рестарте |
+|------|------------|--------------|--------------|
+| bot.db | `/home/antbot4/bot.db` | `/app/bot.db` | ✅ Да |
+| settings.json | `/home/antbot4/settings.json` | `/app/settings.json` | ✅ Да |
+| logs/ | `/home/antbot4/logs/` | `/app/logs/` | ✅ Да |
+| VERSION | `/home/antbot4/VERSION` | `/app/VERSION` | ✅ Да |
+
+### Проверка:
+
+```bash
+# 1. Проверить файлы на сервере:
+cd ~/antbot4
+ls -lh bot.db settings.json
+
+# 2. Проверить volumes:
+docker inspect antbot | grep -A 20 "Mounts"
+
+# 3. Рестарт (данные сохраняются):
+docker compose restart bot
+
+# 4. Проверить данные:
+sqlite3 bot.db "SELECT COUNT(*) FROM users;"
+cat settings.json | head -20
+```
+
+### Бэкап:
+
+```bash
+# Ручной бэкап:
+cp bot.db bot.db.backup
+cp settings.json settings.json.backup
+
+# Автоматический бэкап (cron):
+0 3 * * * /home/antbot4/backup.sh
+```
+
+### ⚠️ Важно:
+
+**НЕЛЬЗЯ:**
+```bash
+rm bot.db settings.json  # ← Данные пропадут!
+```
+
+**МОЖНО:**
+```bash
+docker compose restart bot      # ✅
+docker compose up -d --build    # ✅
+docker compose down && up -d    # ✅
+```
+
+---
+
+## 📋 Итоговый чек-лист для импорта:
 
 ### 1. Маршрутизация и Порты (Docker + Cloudflare)
 **Проблема:** Бот и n8n находятся на одном сервере. n8n по умолчанию занимает порты 80 и 443. Телеграм отправляет вебхуки только на ограниченный список портов (443, 80, 8443, 88). Бот не мог получать обновления, так как порт 443 перехватывал n8n.
