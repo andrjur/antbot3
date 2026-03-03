@@ -716,6 +716,50 @@ Switch уже отфильтровал по типу файла — в Process P
 
 ---
 
+### Fix 11: Ошибка импорта "Could not find property option" (03.03.2026)
+
+**Проблема:**
+При импорте воркфлоу в n8n ошибка:
+```
+Problem importing workflow
+Could not find property option
+```
+
+**Причина:**
+В JSON файле были пустые `"options": {}` в параметрах нод. n8n не может распарсить пустой объект options в некоторых версиях нод.
+
+**Где было:**
+```json
+"parameters": {
+  "authentication": "headerAuth",
+  "options": {}  // ← ПУСТОЙ OBJECT ЛОМАЛ ИМПОРТ!
+}
+```
+
+**Решение:**
+Удалить все пустые `"options": {}` из JSON файла.
+
+**Что удалено:**
+- `Webhook-homework` → `"options": {}`
+- `Edit Fields` → `"options": {}`
+- `If` → `"options": {}`
+- `Switch` → `"options": {}`
+- `Code` ноды → `"options": {}`
+- `HTTP Request` → `"options": {}`
+
+**Результат:**
+```json
+"parameters": {
+  "authentication": "headerAuth"
+  // ← options удалён
+}
+```
+
+**Как сделано:**
+Python скрипт удалил все вхождения `, "options": {}` из JSON файла.
+
+---
+
 ## 🏗️ Инфраструктура и Архитектура
 
 ### 1. Маршрутизация и Порты (Docker + Cloudflare)
@@ -1390,7 +1434,7 @@ docker compose logs n8n | grep -E "📸|❌|Error"
 
 ---
 
-### Исправления (после первых тестов):
+### Исправле��ия (после первых тестов):
 
 #### 1. specifyBody: "useJson" → bodyParameters
 **Проблема:** `useJson` ломал экспорт воркфлоу — n8n не сохранял JSON Body.
