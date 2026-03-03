@@ -133,7 +133,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Текстовое ДЗ (без файлов) - подготовка messages content\nconst hwText = $input.item.json.hw_text || $('Edit Fields').item.json.hw_text || '[Текст отсутствует]';\nconst studentName = $('Edit Fields').item.json.student_name || 'Студент';\nconst lessonDesc = $('Edit Fields').item.json.lesson_desc || 'Оценить ДЗ';\n\nconsole.log(`📝 Текстовое ДЗ от ${studentName}`);\n\n// Формируем messages content только с текстом\nconst messagesContent = [\n  {\n    type: \"text\",\n    text: `РАБОТА СТУДЕНТА:\\n${hwText}`\n  }\n];\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    messages_content: messagesContent\n  }\n}];"
+        "jsCode": "// Текстовое ДЗ (без файлов) - подготовка messages content\nconst hwText = $input.first().json.hw_text || $('Edit Fields').first().json.hw_text || '[Текст отсутствует]';\nconst studentName = $('Edit Fields').first().json.student_name || 'Студент';\nconst lessonDesc = $('Edit Fields').first().json.lesson_desc || 'Оценить ДЗ';\n\nconsole.log(`📝 Текстовое ДЗ от ${studentName}`);\n\n// Формируем messages content только с текстом\nconst messagesContent = [\n  {\n    type: \"text\",\n    text: `РАБОТА СТУДЕНТА:\\n${hwText}`\n  }\n];\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    messages_content: messagesContent\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
