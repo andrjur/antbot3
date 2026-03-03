@@ -9030,7 +9030,7 @@ async def safe_db_execute(conn, query, params=None, retries=MAX_DB_RETRIES, dela
 
 
 # ----------------- новый обработчик и текстовой домашки и фото -------- от пользователя ------------
-@dp.message(F.content_type.in_({'photo', 'document', 'voice', 'audio'}), F.chat.type == "private")
+@dp.message(F.photo | F.video | F.document | F.voice | F.audio | F.animation, F.chat.type == "private")
 @dp.message(F.text & ~F.text.startswith('/'), F.chat.type == "private")
 @db_exception_handler
 async def handle_homework(message: types.Message):
@@ -9893,7 +9893,7 @@ async def handle_activation_code(message: types.Message): # handle_activation_co
 
 
 #  Обработчик входящего контента от пользователя
-@dp.message(F.photo | F.video | F.document | (F.text & ~F.text.startswith('/')))
+@dp.message(F.photo | F.video | F.document | F.voice | F.audio | F.animation | (F.text & ~F.text.startswith('/')))
 async def handle_user_content(message: types.Message, state: FSMContext):
     """Обработчик пользовательского контента для ДЗ"""
     # Проверяем, есть ли активное FSM состояние
@@ -9966,7 +9966,7 @@ async def handle_document(message: types.Message):
 
 @dp.message()
 async def default_handler(message: types.Message):
-    logger.warning(f"Получено необработанное сообщение: {message.text}")
+    logger.warning(f"Получено необработанное сообщение. Тип: {message.content_type}, Текст: {message.text}")
 
 @dp.callback_query()
 async def default_callback_handler(query: types.CallbackQuery):
