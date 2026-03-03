@@ -207,7 +207,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Ветка ФОТО: конвертация в Base64\nconst binaryData = $input.first().binary?.data;\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'image/jpeg';\nconst fileSize = binaryData.data?.length || 0;\n\nconsole.log(`📸 Фото: ${fileSize} байт, MIME: ${mimeType}`);\n\n$input.first().json.base64_image = binaryData.data;\n$input.first().json.mime_type = mimeType;\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'image';\n\nreturn $input.all();"
+        "jsCode": "// Ветка ФОТО: конвертация в Base64\nconst item = $input.first();\nif (!item || !item.binary || !item.binary.data) {\n  return []; // Если файла нет, тихо останавливаем эту ветку\n}\n\nconst binaryData = item.binary.data;\nconst mimeType = item.binary.mimeType || 'image/jpeg';\nconst fileSize = binaryData.length || 0;\n\nconsole.log(`📸 Фото: ${fileSize} байт, MIME: ${mimeType}`);\n\nitem.json.base64_image = binaryData;\nitem.json.mime_type = mimeType;\nitem.json.file_size = fileSize;\nitem.json.file_type = 'image';\n\nreturn [item];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -217,11 +217,11 @@
       ],
       "id": "0d6e7e33-bff3-4e95-8311-a84905f31ad5",
       "name": "Process Photo",
-      "onError": "continueErrorOutput"
+      "onError": "stopWorkflow"
     },
     {
       "parameters": {
-        "jsCode": "// Ветка АУДИО: проверка размера + сохранение данных\nconst binaryData = $input.first().binary?.data;\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'audio/ogg';\nconst fileSize = binaryData.data?.length || 0;\nconst MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎧 Аудио: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_AUDIO_SIZE) {\n  console.log(`⚠️ Аудио больше 10 МБ!`);\n  $input.first().json.audio_truncated = true;\n  $input.first().json.audio_warning = `Аудио слишком большое (${(fileSize / 1024 / 1024).toFixed(2)} МБ). ИИ обработает только часть.`;\n} else {\n  $input.first().json.audio_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\n$input.first().json.audio_data = binaryData.data;\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'audio';\n$input.first().json.mime_type = mimeType;\n\nreturn $input.all();"
+        "jsCode": "// Ветка АУДИО: проверка размера + сохранение данных\nconst item = $input.first();\nif (!item || !item.binary || !item.binary.data) {\n  return []; // Если файла нет, тихо останавливаем эту ветку\n}\n\nconst binaryData = item.binary.data;\nconst mimeType = item.binary.mimeType || 'audio/ogg';\nconst fileSize = binaryData.length || 0;\nconst MAX_AUDIO_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎧 Аудио: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_AUDIO_SIZE) {\n  console.log(`⚠️ Аудио больше 10 МБ!`);\n  item.json.audio_truncated = true;\n  item.json.audio_warning = `Аудио слишком большое (${(fileSize / 1024 / 1024).toFixed(2)} МБ). ИИ обработает только часть.`;\n} else {\n  item.json.audio_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\nitem.json.audio_data = binaryData;\nitem.json.file_size = fileSize;\nitem.json.file_type = 'audio';\nitem.json.mime_type = mimeType;\n\nreturn [item];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -231,11 +231,11 @@
       ],
       "id": "8941124f-dc96-4391-9d4b-da824f8671e1",
       "name": "Process Audio",
-      "onError": "continueErrorOutput"
+      "onError": "stopWorkflow"
     },
     {
       "parameters": {
-        "jsCode": "// Ветка ВИДЕО (кружочки/голосовые video/ogg): проверка + сохранение данных\nconst binaryData = $input.first().binary?.data; // Исправлено: было $input.first()[0]\nif (!binaryData) {\n  throw new Error('Нет бинарных данных');\n}\n\nconst mimeType = binaryData.mimeType || 'video/ogg';\nconst fileSize = binaryData.data?.length || 0;\nconst MAX_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎥 Видео/кружочек: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_SIZE) {\n  console.log(`⚠️ Видео больше 10 МБ!`);\n  $input.first().json.file_truncated = true;\n  $input.first().json.file_warning = `Файл слишком большой (${(fileSize / 1024 / 1024).toFixed(2)} МБ).`;\n} else {\n  $input.first().json.file_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\n$input.first().json.audio_data = binaryData.data; // Gemini принимает аудио из видео как audio_data\n$input.first().json.file_size = fileSize;\n$input.first().json.file_type = 'video';\n$input.first().json.mime_type = mimeType;\n\nreturn $input.all();"
+        "jsCode": "// Ветка ВИДЕО (кружочки/голосовые video/ogg): проверка + сохранение данных\nconst item = $input.first();\nif (!item || !item.binary || !item.binary.data) {\n  return []; // Если файла нет, тихо останавливаем эту ветку\n}\n\nconst binaryData = item.binary.data;\nconst mimeType = item.binary.mimeType || 'video/ogg';\nconst fileSize = binaryData.length || 0;\nconst MAX_SIZE = 10 * 1024 * 1024; // 10 МБ\n\nconsole.log(`🎥 Видео/кружочек: ${fileSize} байт (${(fileSize / 1024 / 1024).toFixed(2)} МБ), MIME: ${mimeType}`);\n\nif (fileSize > MAX_SIZE) {\n  console.log(`⚠️ Видео больше 10 МБ!`);\n  item.json.file_truncated = true;\n  item.json.file_warning = `Файл слишком большой (${(fileSize / 1024 / 1024).toFixed(2)} МБ).`;\n} else {\n  item.json.file_truncated = false;\n}\n\n// Сохраняем binary data для отправки в OpenRouter\nitem.json.audio_data = binaryData; // Gemini принимает аудио из видео как audio_data\nitem.json.file_size = fileSize;\nitem.json.file_type = 'video';\nitem.json.mime_type = mimeType;\n\nreturn [item];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -245,7 +245,7 @@
       ],
       "id": "c57cc78c-1e4f-4c4d-ac26-0868e115625a",
       "name": "Process Video",
-      "onError": "continueErrorOutput"
+      "onError": "stopWorkflow"
     },
     {
       "parameters": {
@@ -262,7 +262,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Подготовка JSON для OpenRouter AI\nconst studentName = $('Edit Fields').item.json.student_name || 'Студент';\nconst lessonDesc = $('Edit Fields').item.json.lesson_desc || 'Оценить ДЗ';\nconst messagesContent = $input.item.json.messages_content || [];\n\nconsole.log(`🤖 Подготовка запроса к ИИ для ${studentName}`);\n\nreturn [{\n  json: {\n    openrouter_request: {\n      model: 'google/gemini-2.5-flash',\n      response_format: { type: 'json_object' },\n      messages: [\n        {\n          role: 'system',\n          content: `Ты мудрый наставник на онлайн-курсе. Имя студента: ${studentName}.\\n\\nКонтекст задания:\\n${lessonDesc}\\n\\nТВОИ ПРАВИЛА:\\n1. Оцени работу. Если есть фото — посмотри, соответствует ли оно заданию.\\n2. Если есть аудио/видео — ИИ может напрямую воспринимать аудио.\\n3. Если работа осмысленная — ставь \"is_approved\": true. Бессмысленная — false.\\n4. Твой \"feedback_text\" должен быть личным, ободряющим, с правильными окончаниями.\\n5. Если студент прислал фото — упомяни конкретные детали.\\n\\nОтвет СТРОГО в формате JSON: {\"is_approved\": boolean, \"feedback_text\": \"string\"}`\n        },\n        {\n          role: 'user',\n          content: messagesContent\n        }\n      ]\n    }\n  }\n}];"
+        "jsCode": "// Подготовка JSON для OpenRouter AI\n// Берем данные студента из самого начала\nconst studentName = $('Edit Fields').first().json.student_name || 'Студент';\nconst lessonDesc = $('Edit Fields').first().json.lesson_desc || 'Оценить ДЗ';\n\n// Берем контент, который мы подготовили в предыдущих нодах (текст + фото/аудио)\nconst messagesContent = $input.first().json.messages_content || [];\n\nconsole.log(`🤖 Подготовка запроса к ИИ для ${studentName}`);\n\nreturn [{\n  json: {\n    // Собираем готовый объект для OpenRouter\n    openrouter_request: {\n      model: 'google/gemini-2.5-flash',\n      response_format: { type: 'json_object' },\n      messages: [\n        {\n          role: 'system',\n          content: `Ты мудрый наставник на онлайн-курсе. Имя студента: ${studentName}.\\n\\nКонтекст задания:\\n${lessonDesc}\\n\\nТВОИ ПРАВИЛА:\\n1. Оцени работу. Если есть фото — посмотри, соответствует ли оно заданию.\\n2. Если есть аудио/видео — ИИ может напрямую воспринимать аудио.\\n3. Если работа осмысленная — ставь \"is_approved\": true. Бессмысленная — false.\\n4. Твой \"feedback_text\" должен быть личным, ободряющим, с правильными окончаниями.\\n5. Если студент прислал фото — упомяни конкретные детали.\\n\\nОтвет СТРОГО в формате JSON: {\"is_approved\": boolean, \"feedback_text\": \"string\"}`\n        },\n        {\n          role: 'user',\n          content: messagesContent\n        }\n      ]\n    }\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
