@@ -1,0 +1,82 @@
+# ============================================
+# Docker ignore file
+# Исключает файлы из Docker-сборки
+# ============================================
+
+# --- Данные и настройки (сохраняются только в volumes) ---
+bot.db
+*.db
+settings.json
+settings_*.json
+settings.json1
+settings.json2
+
+# --- Логи ---
+logs/
+*.log
+*.log.*
+
+# --- Python кэш ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Временные файлы ---
+*.tmp
+*.bak
+*.backup
+temp/
+tmp/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Git ---
+.git/
+.gitignore
+
+# --- Docker ---
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# --- Документация (не нужна в контейнере) ---
+*.md
+!requirements.txt
+DOCKER.md
+описание.md
+adv2.md
+adv3.md
+bug1.md
+comp.md
+course_description_management.md
+codebase_summary.txt
+
+# --- Скрипты и конфиги (не нужны в рантайме) ---
+deploy.sh
+backup_db.sh
+cleanup_empty_courses.sql
+merge_spring31_to_spring3.sql
+sync_db_with_settings.sql
+
+# --- Тесты (не нужны в продакшене) ---
+tests/
+
+# --- Резервные копии БД ---
+*.db.backup
+*.db-journal
+*-journal
