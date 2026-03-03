@@ -83,8 +83,8 @@
             }
           ]
         },
-        "includeOtherFields": true,
-        "options": null
+        "includeOtherFields": true
+        
       },
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
@@ -188,7 +188,7 @@
         "outputKey": "rule"
       },
       "type": "n8n-nodes-base.switch",
-      "typeVersion": 3,
+      "typeVersion": 2,
       "position": [
         1936,
         2592
@@ -335,7 +335,7 @@
           "parameters": [
             {
               "name": "X-CALLBACK-SIGNATURE",
-              "value": "=500"
+              "value": "500"
             },
             {
               "name": "Content-Type",
@@ -403,7 +403,7 @@
           "parameters": [
             {
               "name": "X-CALLBACK-SIGNATURE",
-              "value": "=500"
+              "value": "500"
             },
             {
               "name": "Content-Type",
@@ -416,11 +416,11 @@
           "parameters": [
             {
               "name": "feedback_text",
-              "value": "=⚠️ Возникла техническая проблема при проверке ДЗ, поэтому задание одобрено автоматически. Спасибо за понимание!"
+              "value": "⚠️ Возникла техническая проблема при проверке ДЗ, поэтому задание одобрено автоматически. Спасибо за понимание!"
             },
             {
               "name": "is_approved",
-              "value": "=true"
+              "value": true
             },
             {
               "name": "original_admin_message_id",
@@ -443,8 +443,8 @@
               "value": "={{ $json.error }}"
             }
           ]
-        },
-        "options": null
+        }
+       
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
