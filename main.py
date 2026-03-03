@@ -1501,6 +1501,79 @@ async def backup_settings_file():
         logger.error(f"Ошибка при создании бэкапа файла settings.json: {e904}")
 
 
+async def backup_settings_file_multiple(count=3):
+    """Создаёт несколько бэкапов settings.json (по умолчанию 3)."""
+    for i in range(count):
+        await backup_settings_file()
+        if i < count - 1:
+            await asyncio.sleep(0.1)  # Пауза 100мс между бэкапами
+
+
+async def clean_settings_json_course(course_id):
+    """
+    Очищает settings.json от всех данных, связанных с указанным курсом.
+    Создаёт 3 бэкапа перед изменением.
+    """
+    logger.info(f"clean_settings_json_course: начало очистки курса '{course_id}' из settings.json")
+    
+    try:
+        # Создаём 3 бэкапа перед изменением
+        await backup_settings_file_multiple(3)
+        logger.info(f"clean_settings_json_course: создано 3 бэкапа settings.json")
+        
+        # Загружаем текущие настройки
+        with open("settings.json", "r", encoding="utf-8") as f:
+            settings_data = json.load(f)
+        
+        modified = False
+        
+        # 1. Очищаем groups (ключи, где значение == course_id)
+        if "groups" in settings_data:
+            groups_to_remove = [k for k, v in settings_data["groups"].items() if v == course_id]
+            for key in groups_to_remove:
+                del settings_data["groups"][key]
+                logger.info(f"clean_settings_json_course: удалён group ключ '{key}' со значением '{course_id}'")
+                modified = True
+        
+        # 2. Очищаем activation_codes (коды, где course == course_id)
+        if "activation_codes" in settings_data:
+            codes_to_remove = [k for k, v in settings_data["activation_codes"].items() 
+                               if v.get("course") == course_id]
+            for code in codes_to_remove:
+                del settings_data["activation_codes"][code]
+                logger.info(f"clean_settings_json_course: удалён код активации '{code}' для курса '{course_id}'")
+                modified = True
+        
+        # 3. Очищаем courses (ключ == course_id)
+        if "courses" in settings_data and course_id in settings_data["courses"]:
+            del settings_data["courses"][course_id]
+            logger.info(f"clean_settings_json_course: удалена запись courses['{course_id}']")
+            modified = True
+        
+        # 4. Очищаем course_descriptions (ключ == course_id)
+        if "course_descriptions" in settings_data and course_id in settings_data["course_descriptions"]:
+            del settings_data["course_descriptions"][course_id]
+            logger.info(f"clean_settings_json_course: удалена запись course_descriptions['{course_id}']")
+            modified = True
+        
+        # 5. Очищаем tariff_names (если есть привязка к курсу - маловероятно, но проверим)
+        # tariff_names обычно не привязан к курсам, пропускаем
+        
+        if modified:
+            # Сохраняем изменённый settings.json
+            with open("settings.json", "w", encoding="utf-8") as f:
+                json.dump(settings_data, f, ensure_ascii=False, indent=4)
+            logger.info(f"clean_settings_json_course: settings.json успешно обновлён (курс '{course_id}' удалён)")
+        else:
+            logger.info(f"clean_settings_json_course: курс '{course_id}' не найден в settings.json, изменений нет")
+        
+        return modified
+        
+    except Exception as e:
+        logger.error(f"clean_settings_json_course: ошибка при очистке курса '{course_id}': {e}", exc_info=True)
+        return False
+
+
 @db_exception_handler
 async def init_db():
     """Инициализирует базу данных, создавая необходимые таблицы, если они еще не существуют.
@@ -2262,7 +2335,7 @@ async def resolve_user_id(user_identifier):
 
 @db_exception_handler
 async def send_lesson_to_user(user_id: int, course_id: str, lesson_num: int, repeat: bool = False, level: int = 1):
-    """Отправляет урок или сообщение о завершении курса, обновляет статус пользователя."""
+    """Отправляет урок или сообщение о завершении курса, обновляет статус пользовател����."""
     logger.info(
         f"🚀 send_lesson_to_user: user_id={user_id}, course_id={course_id}, lesson_num={lesson_num}, "
         f"repeat={repeat}, user_course_level={level}"
@@ -3363,7 +3436,7 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
 
 
 
-# Пользовательский фильтр для проверки ID группы
+# ��ользовательский фильтр для проверки ID группы
 class IsCourseGroupFilter(BaseFilter):
     async def __call__(self, message: Message) -> bool:
         return message.chat.id in COURSE_GROUPS
@@ -3440,7 +3513,7 @@ async def export_db(message: types.Message):
 
         logger.info("База данных успешно экспортирована.")
     except Exception as e2218:
-        logger.error(f"Ошибка при экспорте базы данны����: {e2218}")
+        logger.error(f"Ошибка при экспорте базы данных: {e2218}")
         await message.answer("❌ Произошла ошибка при экспорте базы данных", parse_mode=None)
 
 @dp.message(Command("import_db"))
@@ -3525,9 +3598,6 @@ async def cmd_add_course(message: types.Message, state: FSMContext, command: Com
         "🆕 Создание нового курса (7 шагов)\n\n"
         "Шаг 1/7: Введите ID группы Telegram\n"
         "Пример: `-1001234567890`\n\n"
-        "💡 Чтобы узнать ID группы:\n"
-        "1. Добавьте бота @getidsbot в группу\n"
-        "2. Он покажет ID (начинается с -100)\n\n"
         "💡 Для отмены отправьте /cancel"
     )
 
@@ -5162,10 +5232,10 @@ async def callback_delete_course_execute(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS_CONF:
         await callback.answer("❌ Только для администраторов.", show_alert=True)
         return
-    
+
     course_id = callback.data.split(":")[1]
     await callback.answer()
-    
+
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute(
@@ -5173,14 +5243,17 @@ async def callback_delete_course_execute(callback: CallbackQuery):
                 (course_id,)
             )
             count = (await cursor.fetchone())[0]
-            
+
             await conn.execute("DELETE FROM group_messages WHERE course_id = ?", (course_id,))
             await conn.commit()
-            
+
             logger.info(f"callback_delete_course_execute: удалено {count} уроков курса {course_id}")
-        
-        await callback.message.edit_text(f"✅ Удалено {count} записей курса '{course_id}'.")
-        
+
+        # Очищаем settings.json от данных курса (с созданием 3 бэкапов)
+        await clean_settings_json_course(course_id)
+
+        await callback.message.edit_text(f"✅ Удалено {count} записей курса '{course_id}'.\nsettings.json обновлён (создано 3 бэкапа).")
+
     except Exception as e:
         logger.error(f"Ошибка при удалении курса: {e}")
         await callback.message.edit_text(f"❌ Ошибка: {e}")
@@ -6054,7 +6127,7 @@ async def process_homework_command(
 
                     # Если из команды не пришел фидбэк, и это reject, ставим дефолтный
                     if not feedback_text_hw and not is_approval:
-                        feedback_text_hw = "До��ашнее задание требует доработки"
+                        feedback_text_hw = "Домашнее задание требует доработки"
 
                     logger.info(
                         f"Найдено последнее ДЗ в pending_admin_homework для ({'/approve' if is_approval else '/reject'}): "
@@ -7088,7 +7161,7 @@ async def cmd_help(message: Message):
         "📚 *Основные команды:*\n"
         "/start - Начать работу с ботом\n"
         "/help - Показать это сообщение\n"
-        "/activate - Активировать курс по коду\n"
+        "/activate - А��тивировать курс по коду\n"
         "/mycourses - Показать мои курсы\n"
         "/lesson - Получить текущий урок\n"
         "/progress - Показать мой прогресс\n"
@@ -7166,7 +7239,7 @@ async def cmd_mycourses_callback(query: types.CallbackQuery):
             """, (user_id,))
             completed_courses = await cursor.fetchall()
 
-            # Получаем существующие во��бще
+            # Получаем существующие вообще
             cursor = await conn.execute("""
                 SELECT COUNT(*) AS total_courses FROM courses;
             """, )
@@ -8256,7 +8329,7 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
 
     payment_needed = False
     if price_difference > 0:
-        text_parts.append(f"Сум��а к доплате: *{price_difference} руб*.")  # Экранируем точку
+        text_parts.append(f"Сумма к доплате: *{price_difference} руб*.")  # Экранируем точку
         payment_instructions_from_env = PAYMENT_INSTRUCTIONS_TEMPLATE
 
         payment_instructions_formatted = payment_instructions_from_env.format(
@@ -8270,10 +8343,10 @@ async def cb_confirm_new_tariff_and_pay_diff(query: types.CallbackQuery,
         payment_needed = True
     elif price_difference < 0:
         text_parts.append(
-            f"Новый тариф дешевле ваш��го текущего. Переход будет без доплаты.")  # Экранируем точки и скобки
+            f"Новый тариф дешевле вашего текущего. Переход будет без доплаты.")  # Экранируем точки и скобки
     else:
         text_parts.append(
-            f"Цена нов��го тарифа такая же, как у вашего текущего. Переход будет без доплаты.")  # Экранируем точку
+            f"Цена нового тарифа такая же, как у вашего текущего. Переход будет без доплаты.")  # Экранируем точку
 
     text_parts.append(
         f"\nПосле смены тарифа ваш прогресс по текущему уровню курса будет сброшен, и вы начнете его заново с новым тарифом.")  # Экранируем точку
