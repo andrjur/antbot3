@@ -245,8 +245,13 @@ SETTINGS_FILE=settings.json
 ## ⚡ Быстрые команды
 
 ```bash
-# Перезапуск бота
+# Перезапуск бота (без перечитки .env)
 docker compose restart bot
+
+# Перезапуск с перечиткой .env (данные НЕ теряются!)
+docker compose stop && docker compose up -d
+# ИЛИ
+docker compose down && docker compose up -d
 
 # Логи в реальном времени
 docker compose logs -f bot
@@ -262,4 +267,31 @@ cp bot.db bot.db.backup.$(date +%Y%m%d_%H%M%S)
 
 # Проверка settings.json
 cat settings.json | python -m json.tool
+```
+
+---
+
+## 🔄 Применение изменений в .env
+
+**Важно:** `docker compose restart` **НЕ перечитывает .env**!
+
+### Чтобы применить изменения в .env:
+
+```bash
+# 1. Остановить контейнер
+docker compose down
+
+# 2. Изменить .env
+nano .env
+
+# 3. Запустить заново (перечитает .env, данные НЕ теряются)
+docker compose up -d
+```
+
+**Данные НЕ теряются**, потому что `bot.db` и `settings.json` смонтированы как volumes.
+
+### ⚠️ Опасные команды (удаляют данные):
+```bash
+docker compose down -v            # УДАЛЯЕТ volumes!
+docker volume prune               # УДАЛЯЕТ все volumes!
 ```
