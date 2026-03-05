@@ -3439,7 +3439,7 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
     # Проверяем, был ли только что создан settings.json
     settings_status = ""
     if not os.path.exists(SETTINGS_FILE):
-        settings_status = "\n⚠️ Файл settings.json не найден и будет создан пр���� первом добавлении курса\n"
+        settings_status = "\n⚠️ Файл settings.json не найден и будет создан пр������������ первом добавлении курса\n"
     elif len(settings.get("groups", {})) == 0:
         settings_status = "\n💡 Settings.json загружен, но курсы ещё не добавлены\n"
     
@@ -3495,49 +3495,79 @@ async def handle_admin_actions(callback: CallbackQuery):
 
 @dp.message(Command("export_db"))
 @db_exception_handler
-async def export_db(message: types.Message):
-    """Экспорт данных из базы данных в JSON-файл. Для суперадминов или в админ-группе."""
-    user_id = message.from_user.id
-    chat_id = message.chat.id
+async def export_db(message: types.Message, save_to_backups: bool = False):
+    """
+    Экспорт данных из базы данных в JSON-файл.
+    Для суперадминов или в админ-группе.
     
+    Args:
+        message: Сообщение или объект с методом answer_document
+        save_to_backups: Если True — сохранить в backups/ с датой, иначе отправить файл
+    """
+    # Определяем user_id и chat_id для проверки прав
+    if hasattr(message, 'from_user'):
+        user_id = message.from_user.id
+        chat_id = message.chat.id if hasattr(message, 'chat') else 0
+    else:
+        user_id = 0
+        chat_id = 0
+
     # Разрешаем суперадминам из лички или любому в админ-группе
-    if not (user_id in ADMIN_IDS_CONF or chat_id == ADMIN_GROUP_ID):
+    if not save_to_backups and not (user_id in ADMIN_IDS_CONF or chat_id == ADMIN_GROUP_ID):
         await message.answer("❌ Только для суперадминов или в админ-группе.")
         return
-    
-    logger.info(f"/export_db от user_id={user_id}")
+
+    logger.info(f"{'/export_db (backups)' if save_to_backups else '/export_db'} от user_id={user_id}")
 
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
             # Экспорт таблиц
             tables = ["users", "courses", "course_versions", "user_courses", "group_messages",
-                      "course_activation_codes", "user_actions_log", "course_reviews", # ДОБАВЛЕНО
-                "homework_gallery", "admin_context", "user_states"] # Добавил остальные из вашего init_db
+                      "course_activation_codes", "user_actions_log", "course_reviews",
+                      "homework_gallery", "admin_context", "user_states"]
             export_data = {}
 
             for table in tables:
-                cursor = await conn.execute(f"SELECT * FROM {table}")
-                rows = await cursor.fetchall()
-                columns = [column[0] for column in cursor.description]
-                export_data[table] = [dict(zip(columns, row)) for row in rows]
+                try:
+                    cursor = await conn.execute(f"SELECT * FROM {table}")
+                    rows = await cursor.fetchall()
+                    columns = [column[0] for column in cursor.description]
+                    export_data[table] = [dict(zip(columns, row)) for row in rows]
+                except Exception as e_table:
+                    logger.warning(f"Не удалось экспортировать таблицу {table}: {e_table}")
+                    export_data[table] = []
+
+        # Создаём директорию для бэкапов
+        backup_dir = "backups"
+        if save_to_backups:
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = datetime.now(pytz.utc).strftime("%Y%m%d_%H%M%S")
+            export_file = os.path.join(backup_dir, f"database_export_{timestamp}.json")
+        else:
+            export_file = "database_export.json"
 
         # Сохранение данных в файл
-        export_file = "database_export.json"
         with open(export_file, "w", encoding="utf-8") as f:
             json.dump(export_data, f, ensure_ascii=False, indent=4)
 
-        # Отправка файла администраторам
-        with open(export_file, "rb") as f:
-            await message.answer_document(
-                document=types.BufferedInputFile(f.read(), filename=export_file),
-                caption="📦 База данных успешно экспортирована в JSON",
-                parse_mode=None
-            )
-
-        logger.info("База данных успешно экспортирована.")
+        if save_to_backups:
+            logger.info(f"✅ Бэкап сохранён в {export_file} ({len(export_data)} таблиц)")
+            return export_file
+        else:
+            # Отправка файла администраторам
+            with open(export_file, "rb") as f:
+                await message.answer_document(
+                    document=types.BufferedInputFile(f.read(), filename=export_file),
+                    caption="📦 База данных успешно экспортирована в JSON",
+                    parse_mode=None
+                )
+            logger.info("База данных успешно экспортирована.")
+            
     except Exception as e2218:
-        logger.error(f"Ошибка при экспорте базы данных: {e2218}")
-        await message.answer("❌ Произошла ошибка при экспорте базы данных", parse_mode=None)
+        logger.error(f"Ошибка при экспорте базы данных: {e2218}", exc_info=True)
+        if not save_to_backups:
+            await message.answer("❌ Произошла ошибка при экспорте базы данных", parse_mode=None)
+        return None
 
 @dp.message(Command("import_db"))
 @db_exception_handler
@@ -3593,6 +3623,144 @@ async def import_db(message: types.Message):
         logger.info("База данных успешно импортирована.")
     except Exception as e:
         logger.error(f"Ошибка при импорте базы данных: {e}")
+        await message.answer("❌ Произошла ошибка при импорте базы данных.", parse_mode=None)
+
+
+@dp.message(Command("import_db_safe"))
+@db_exception_handler
+async def import_db_safe(message: types.Message):
+    """
+    Безопасный импорт данных из JSON-файла.
+    Восстанавливает курсы, уроки, тарифы, коды — но СОХРАНЯЕТ студентов и их прогресс.
+    
+    Для суперадминов или в админ-группе.
+    """
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # Разрешаем суперадминам из лички или любому в админ-группе
+    if not (user_id in ADMIN_IDS_CONF or chat_id == ADMIN_GROUP_ID):
+        await message.answer("❌ Только для суперадминов или в админ-группе.")
+        return
+
+    logger.info(f"/import_db_safe от user_id={user_id}")
+
+    if not message.document:
+        await message.answer(
+            "📥 Безопасный импорт базы данных\n\n"
+            "Отправьте JSON-файл с данными (из /export_db).\n\n"
+            "✅ Будет восстановлено:\n"
+            "  • Курсы (courses) — только отсутствующие\n"
+            "  • Тарифы (course_versions) — обновление + добавление\n"
+            "  • Уроки (group_messages) — обновление + добавление\n"
+            "  • Коды активации (course_activation_codes) — только отсутствующие\n\n"
+            "🛡️ Будет сохранено (НЕ изменится):\n"
+            "  • Студенты (users)\n"
+            "  • Прогресс студентов (user_courses)\n"
+            "  • Выполненные ДЗ (homework_gallery)\n"
+            "  • Контекст админа (admin_context)\n"
+            "  • Состояния FSM (user_states)",
+            parse_mode=None
+        )
+        return
+
+    try:
+        # Скачиваем файл
+        file = await bot.get_file(message.document.file_id)
+        file_path = file.file_path
+        downloaded_file = await bot.download_file(file_path)
+
+        # Читаем данные из файла
+        import_data = json.loads(downloaded_file.read().decode("utf-8"))
+
+        async with aiosqlite.connect(DB_FILE) as conn:
+            # 1. Импорт курсов (INSERT OR IGNORE — только отсутствующие)
+            courses = import_data.get("courses", [])
+            if courses:
+                columns = ["course_id", "id", "group_id", "title", "description", "created_at", "course_type"]
+                placeholders = ", ".join(["?"] * len(columns))
+                inserted = 0
+                for row in courses:
+                    try:
+                        values = [row.get(col) for col in columns]
+                        await conn.execute(
+                            f"INSERT OR IGNORE INTO courses ({', '.join(columns)}) VALUES ({placeholders})",
+                            values
+                        )
+                        inserted += 1
+                    except Exception as e:
+                        logger.warning(f"Не удалось импортировать курс {row.get('course_id')}: {e}")
+                logger.info(f"✅ Импортировано курсов: {inserted} из {len(courses)}")
+
+            # 2. Импорт тарифов (INSERT OR REPLACE — обновление + добавление)
+            versions = import_data.get("course_versions", [])
+            if versions:
+                columns = ["course_id", "version_id", "title", "price", "activation_code", "description"]
+                placeholders = ", ".join(["?"] * len(columns))
+                inserted = 0
+                for row in versions:
+                    try:
+                        values = [row.get(col) for col in columns]
+                        await conn.execute(
+                            f"INSERT OR REPLACE INTO course_versions ({', '.join(columns)}) VALUES ({placeholders})",
+                            values
+                        )
+                        inserted += 1
+                    except Exception as e:
+                        logger.warning(f"Не удалось импортировать тариф {row.get('version_id')}: {e}")
+                logger.info(f"✅ Импортировано тарифов: {inserted} из {len(versions)}")
+
+            # 3. Импорт уроков (INSERT OR REPLACE — обновление + добавление)
+            messages = import_data.get("group_messages", [])
+            if messages:
+                columns = ["id", "group_id", "lesson_num", "course_id", "content_type", "is_homework", 
+                           "hw_type", "text", "file_id", "level", "message_id", "is_forwarded",
+                           "forwarded_from_chat_id", "forwarded_message_id", "snippet", "is_bouns", 
+                           "open_time", "timestamp"]
+                placeholders = ", ".join(["?"] * len(columns))
+                inserted = 0
+                for row in messages:
+                    try:
+                        values = [row.get(col) for col in columns]
+                        await conn.execute(
+                            f"INSERT OR REPLACE INTO group_messages ({', '.join(columns)}) VALUES ({placeholders})",
+                            values
+                        )
+                        inserted += 1
+                    except Exception as e:
+                        logger.warning(f"Не удалось импортировать урок {row.get('id')}: {e}")
+                logger.info(f"✅ Импортировано уроков: {inserted} из {len(messages)}")
+
+            # 4. Импорт кодов активации (INSERT OR IGNORE — только отсутствующие)
+            codes = import_data.get("course_activation_codes", [])
+            if codes:
+                columns = ["code_word", "course_id", "version_id", "price_rub"]
+                placeholders = ", ".join(["?"] * len(columns))
+                inserted = 0
+                for row in codes:
+                    try:
+                        values = [row.get(col) for col in columns]
+                        await conn.execute(
+                            f"INSERT OR IGNORE INTO course_activation_codes ({', '.join(columns)}) VALUES ({placeholders})",
+                            values
+                        )
+                        inserted += 1
+                    except Exception as e:
+                        logger.warning(f"Не удалось импортировать код {row.get('code_word')}: {e}")
+                logger.info(f"✅ Импортировано кодов: {inserted} из {len(codes)}")
+
+            await conn.commit()
+
+        await message.answer(
+            "✅ Безопасный импорт завершён!\n\n"
+            "Курсы, тарифы, уроки и коды восстановлены.\n"
+            "Студенты и их прогресс сохранены.",
+            parse_mode=None
+        )
+        logger.info("✅ Безопасный импорт завершён успешно.")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при безопасном импорте базы данных: {e}", exc_info=True)
         await message.answer("❌ Произошла ошибка при импорте базы данных.", parse_mode=None)
 
 
@@ -4693,6 +4861,105 @@ async def cmd_list_admins(message: types.Message):
         
     except Exception as e:
         logger.error(f"Ошибка при показе админов: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.message(Command("view_homework"))
+@db_exception_handler
+async def cmd_view_homework(message: types.Message):
+    """
+    Просмотр выполненных домашних заданий.
+    Доступно всем админам (суперадмины + админ-группа).
+    """
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # Разрешаем суперадминам из лички или любому в админ-группе
+    if not (user_id in ADMIN_IDS_CONF or chat_id == ADMIN_GROUP_ID):
+        await message.answer("❌ Только для администраторов.")
+        return
+
+    logger.info(f"cmd_view_homework START: user_id={user_id}")
+
+    try:
+        args = message.text.split()
+        
+        # Если есть аргумент — фильтр по course_id
+        course_filter = args[1] if len(args) > 1 else None
+        
+        async with aiosqlite.connect(DB_FILE) as conn:
+            if course_filter:
+                # Просмотр ДЗ конкретного курса
+                cursor = await conn.execute('''
+                    SELECT hg.user_id, hg.course_id, hg.lesson_num, hg.file_id, hg.text, 
+                           hg.submitted_at, u.username, u.first_name
+                    FROM homework_gallery hg
+                    LEFT JOIN users u ON hg.user_id = u.user_id
+                    WHERE hg.course_id = ?
+                    ORDER BY hg.submitted_at DESC
+                    LIMIT 50
+                ''', (course_filter,))
+            else:
+                # Просмотр всех ДЗ (последние 50)
+                cursor = await conn.execute('''
+                    SELECT hg.user_id, hg.course_id, hg.lesson_num, hg.file_id, hg.text, 
+                           hg.submitted_at, u.username, u.first_name
+                    FROM homework_gallery hg
+                    LEFT JOIN users u ON hg.user_id = u.user_id
+                    ORDER BY hg.submitted_at DESC
+                    LIMIT 50
+                ''')
+            
+            rows = await cursor.fetchall()
+
+        if not rows:
+            if course_filter:
+                await message.answer(f"❌ Нет выполненных ДЗ для курса '{course_filter}'.")
+            else:
+                await message.answer("❌ Нет выполненных домашних заданий.")
+            return
+
+        # Формируем отчёт
+        result = f"📚 Выполненные ДЗ"
+        if course_filter:
+            result += f" (курс: {course_filter})"
+        result += f":\n\nВсего: {len(rows)} шт.\n\n"
+
+        # Группируем по курсам
+        courses_stats = {}
+        for row in rows:
+            course_id = row[1]
+            if course_id not in courses_stats:
+                courses_stats[course_id] = 0
+            courses_stats[course_id] += 1
+
+        for course_id, count in courses_stats.items():
+            result += f"  • {course_id}: {count} ДЗ\n"
+
+        result += "\n📋 Последние 50:\n\n"
+        
+        for i, row in enumerate(rows, 1):
+            user_id_hw, course_id, lesson_num, file_id, text, submitted_at, username, first_name = row
+            student_name = username or first_name or f"User {user_id_hw}"
+            
+            result += f"{i}. {student_name} | {course_id} | Урок {lesson_num}\n"
+            if text and len(text) > 100:
+                result += f"   📝 {text[:100]}...\n"
+            elif text:
+                result += f"   📝 {text}\n"
+            if file_id:
+                result += f"   📎 Файл: {file_id[:30]}...\n"
+            result += f"   ⏰ {submitted_at}\n\n"
+
+        # Отправляем частями (если больше 4000 символов)
+        max_len = 4000
+        for i in range(0, len(result), max_len):
+            await message.answer(result[i:i + max_len], parse_mode=None)
+
+        logger.info(f"cmd_view_homework: показано {len(rows)} ДЗ")
+
+    except Exception as e:
+        logger.error(f"Ошибка при просмотре ДЗ: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка: {e}")
 
 
@@ -6904,7 +7171,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             active_courses = [c for c in all_courses if c[1] == 'active']
             completed_courses = [c for c in all_courses if c[1] == 'completed']
 
-            # Получаем общее количество уроков
+            # Получаем об��ее количество уроков
             cursor = await conn.execute("""
                 SELECT 
                     MAX(gm.lesson_num)
@@ -6980,9 +7247,11 @@ async def callback_admin_menu(callback: CallbackQuery):
         f"• /upload_lesson — загрузить уроки\n"
         f"• /list_lessons — список уроков\n"
         f"• /list_admins — список админов\n"
+        f"• /view_homework [курс] — просмотр ДЗ\n"
         f"• /set_hw_timeout <мин> — таймаут AI-проверки\n"
         f"• /export_db — экспорт базы\n"
-        f"• /import_db — импорт базы\n"
+        f"• /import_db — полный импорт (ОПАСНО!)\n"
+        f"• /import_db_safe — безопасный импорт\n"
         f"• /remind <id> <msg> — напоминание\n"
         f"• /test_mode — тест-режим ({test_mode_status})\n",
         reply_markup=admin_menu_keyboard,
@@ -8032,10 +8301,10 @@ async def process_code_after_payment(message: types.Message, state: FSMContext):
     await message.reply(escape_md(activation_message_text), parse_mode=None)
 
     if is_activated:
-        # Если успешно, выходим из состояния и показываем главное меню нового курса
+        # Если успешно, выходим из состояния и показыва��м главное меню нового курса
         await state.clear()
 
-        # Получаем данные активированного курса для отправки меню
+        # Получаем данные активированного курса для ��тправки меню
         # (Это дублирование логики из handle_homework, можно вынести в функцию)
         async with aiosqlite.connect(DB_FILE) as conn:
             cursor = await conn.execute(
@@ -8103,7 +8372,7 @@ async def get_user_course_data(user_id: int) -> tuple:
 
 # 17-04
 @dp.callback_query(F.data == "menu_progress")
-@db_exception_handler # Обработчик для команды просмотра прогресса по всем курсам
+@db_exception_handler # Обработчик для команды просмотра прогресса по всем кур��ам
 async def cmd_progress_callback(query: types.CallbackQuery):
     """Показывает прогресс пользователя по курсам."""
     user_id = query.from_user.id
@@ -9323,7 +9592,7 @@ async def handle_homework(message: types.Message):
     skip_keywords = ["*пропускаю*", "пропускаю", "пропуск", "/skip"]
     message_text_lower = (message.text or "").lower().strip()
     if any(kw in message_text_lower for kw in skip_keywords) or message_text_lower in skip_keywords:
-        await message.answer("⏭ Домашка пропущена и автоматически зачтена!", parse_mode=None)
+        await message.answer("⏭ Домашка ��ропущена и автоматически зачтена!", parse_mode=None)
         async with aiosqlite.connect(DB_FILE) as conn:
             await conn.execute(
                 "UPDATE user_courses SET hw_status = 'approved' WHERE user_id = ? AND course_id = ? AND status = 'active'",

@@ -11,6 +11,10 @@ settings_*.json
 settings.json1
 settings.json2
 
+# --- Бэкапы (сохраняются на хосте) ---
+backups/
+database_export*.json
+
 # --- Логи ---
 logs/
 *.log

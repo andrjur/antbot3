@@ -66,6 +66,7 @@ docker rm -f antbot && docker volume prune  # УДАЛЯЕТ данные!
 ## 🔄 Бэкапы
 
 ### Автоматические бэкапы:
+- При `/export_db` → `backups/database_export_YYYYMMDD_HHMMSS.json`
 - При удалении курса → ротация `settings.json → settings.json1 → settings.json2`
 - При добавлении курса → бэкап `settings_YYYY-MM-DD_HH-MM-SS.json`
 
@@ -82,6 +83,15 @@ tar -czf antbot-backup-$(date +%Y%m%d).tar.gz \
     bot.db settings.json .env docker-compose.yml
 ```
 
+### Восстановление из бэкапа:
+```bash
+# Безопасный импорт (сохраняет студентов):
+/import_db_safe  # Отправить JSON-файл из /export_db
+
+# Полный импорт (только для аварийного восстановления):
+/import_db  # ⚠️ Удаляет всех студентов и прогресс!
+```
+
 ---
 
 ## 🛠 Админ-команды бота
@@ -92,9 +102,11 @@ tar -czf antbot-backup-$(date +%Y%m%d).tar.gz \
 /upload_lesson — загрузить уроки
 /list_lessons — список уроков курса
 /list_admins — список админов
+/view_homework [курс] — просмотр выполненных ДЗ
 /set_hw_timeout <мин> — таймаут AI-проверки
-/export_db — экспорт базы данных
-/import_db — импорт базы данных
+/export_db — экспорт базы (сохраняет в backups/)
+/import_db — полный импорт базы (ОПАСНО!)
+/import_db_safe — безопасный импорт (сохраняет студентов)
 /remind <id> <msg> — напоминание пользователю
 /test_mode — тест-режим (12 часов)
 ```

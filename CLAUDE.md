@@ -262,11 +262,9 @@ docker exec -it antbot /bin/bash
 # Проверка БД
 sqlite3 bot.db "SELECT course_id, title FROM courses;"
 
-# Бэкап БД
-cp bot.db bot.db.backup.$(date +%Y%m%d_%H%M%S)
-
-# Экспорт БД в JSON (через бота)
-/export_db  # В Telegram боту
+# Бэкап БД (автоматически в backups/)
+/export_db  # Через бота (отправит файл)
+# Бэкапы сохраняются в backups/database_export_YYYYMMDD_HHMMSS.json
 
 # Экспорт БД в JSON (на сервере)
 sqlite3 bot.db ".mode json" ".output export.json" "SELECT * FROM users;" ".output stdout"
@@ -296,14 +294,17 @@ cat settings.json | python -m json.tool
 - ❌ Нужно добавить только курсы/коды
 - ❌ Бот работает в продакшене
 
-### Безопасная альтернатива:
-```bash
-# Выборочный импорт (только курсы, коды)
-sqlite3 bot.db < selective_import.sql
+### Безопасная альтернатива — `/import_db_safe`:
+- ✅ Восстанавливает курсы, уроки, тарифы, коды
+- ✅ Сохраняет студентов и их прогресс
+- ✅ Использует INSERT OR IGNORE / INSERT OR REPLACE
 
-# ИЛИ через бота (безопасно):
-/add_course      # Добавить курс
-/upload_lesson   # Загрузить уроки
+```bash
+# Через бота (безопасно):
+/import_db_safe  # Отправить JSON-файл из /export_db
+
+# Или через бота (полный импорт, ОПАСНО):
+/import_db  # Полная замена БД!
 ```
 
 **Подробности:** см. `IMPORT_SAFETY.md`
