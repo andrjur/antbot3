@@ -265,6 +265,12 @@ sqlite3 bot.db "SELECT course_id, title FROM courses;"
 # Бэкап БД
 cp bot.db bot.db.backup.$(date +%Y%m%d_%H%M%S)
 
+# Экспорт БД в JSON (через бота)
+/export_db  # В Telegram боту
+
+# Экспорт БД в JSON (на сервере)
+sqlite3 bot.db ".mode json" ".output export.json" "SELECT * FROM users;" ".output stdout"
+
 # Проверка settings.json
 cat settings.json | python -m json.tool
 ```
