@@ -202,12 +202,16 @@ docker compose logs bot | grep ERROR  # Только ошибки
 
 | Функция | Описание |
 |---------|----------|
-| `send_course_description()` | Отправка описания курса (приоритет: courses.description → lesson_num=0 → lesson_num=NULL → урок 1) |
+| `send_course_description()` | Отправка описания курса |
 | `activate_course()` | Активация курса по коду |
 | `send_lesson_to_user()` | Отправка урока пользователю |
 | `handle_homework()` | Обработка ДЗ |
 | `check_lesson_schedule()` | Проверка расписания уроков |
-| `callback_delete_course_execute()` | Удаление курса + очистка settings.json + бэкапы |
+| `export_db()` | Экспорт БД в JSON (backups/) |
+| `import_db()` | Полный импорт БД (⚠️ опасно) |
+| `import_db_safe()` | Безопасный импорт (сохраняет студентов) |
+| `cmd_view_homework()` | Просмотр выполненных ДЗ |
+| `callback_delete_course_execute()` | Удаление курса + очистка settings.json |
 | `clean_settings_json_course()` | Очистка settings.json от курса |
 | `backup_settings_file_rotate()` | Ротация бэкапов (json → json1 → json2) |
 | `process_add_course_to_db()` | Добавление курса в БД и settings.json |
