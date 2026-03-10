@@ -2507,7 +2507,17 @@ async def _send_lesson_parts(user_id: int, course_id: str, lesson_num: int, user
                 send_method_name = f"send_{content_type}"
                 if hasattr(bot, send_method_name):
                     send_method = getattr(bot, send_method_name)
-                    await send_method(user_id, file_id, caption=safe_caption, parse_mode=None)
+                    
+                    # video_note (кружочки) не поддерживают caption
+                    if content_type == "video_note":
+                        # Сначала отправляем кружок без подписи
+                        await send_method(user_id, file_id)
+                        # Затем отправляем текст отдельным сообщением, если он есть
+                        if current_piece_text.strip():
+                            await bot.send_message(user_id, current_piece_text, parse_mode=None)
+                    else:
+                        # Остальные типы (photo, video, document) поддерживают caption
+                        await send_method(user_id, file_id, caption=safe_caption, parse_mode=None)
                 else:
                     logger.warning(
                         f"Неизвестный content_type '{content_type}' с file_id для части {k} урока {lesson_num}.")
