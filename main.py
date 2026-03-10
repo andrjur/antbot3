@@ -1243,8 +1243,13 @@ async def check_pending_homework_timeout():
             await asyncio.sleep(10)  # Проверяем каждые 10 секунд (важно для коротких таймаутов)
             logger.debug(f"check_pending_homework_timeout: очередная проверка")
 
+            # Пауза 50 мс перед подключением к БД для избежания блокировок
+            await asyncio.sleep(0.05)
+            
             async with aiosqlite.connect(DB_FILE) as conn:
                 now = datetime.now(pytz.utc)
+                
+                logger.info(f"check_pending_homework_timeout: подключение к БД, время={now.strftime('%H:%M:%S')}")
 
                 # Забираем ВСЕ ожидающие ДЗ
                 cursor = await conn.execute('''
@@ -1617,7 +1622,8 @@ async def init_db():
         async with aiosqlite.connect(DB_FILE) as conn:
             # Создаем таблицу users
             await conn.execute("PRAGMA journal_mode = WAL")
-            await conn.execute("PRAGMA busy_timeout = 5000")  #
+            await conn.execute("PRAGMA busy_timeout = 30000")  # 30 секунд таймаут при блокировке
+            await conn.execute("PRAGMA synchronous = NORMAL")  # Баланс между скоростью и надёжностью
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -2327,7 +2333,7 @@ async def log_action(user_id: int, action_type: str, course_id: str = None, less
     except Exception as e1120:
         logger.error(f"Ошибка логирования действия {action_type} для user_id={user_id}: {e1120}")
 
-# Пример использования в новой activate_course:
+# Пример испол����зования в новой activate_course:
 # await log_action(user_id, "TARIFF_CHANGE", new_course_id,
 #                  old_value=current_active_version_id, new_value=new_version_id,
 #                  details="Прогресс сброшен")
@@ -3436,10 +3442,10 @@ async def send_startup_message(bot: Bot, admin_group_id: int):
 
     logger.warning("перед отправкой сообщения админам")
     
-    # Проверяем, был ли только что создан settings.json
+    # Проверяем, был ли только что созд��н settings.json
     settings_status = ""
     if not os.path.exists(SETTINGS_FILE):
-        settings_status = "\n⚠️ Файл settings.json не найден и будет создан пр������������ первом добавлении курса\n"
+        settings_status = "\n⚠️ Файл settings.json не найден и будет создан пр�������������� первом добавлении курса\n"
     elif len(settings.get("groups", {})) == 0:
         settings_status = "\n💡 Settings.json загружен, но курсы ещё не добавлены\n"
     
@@ -4468,7 +4474,7 @@ async def process_lesson_num(message: types.Message, state: FSMContext):
     )
     await state.set_state(UploadLesson.waiting_content)
 
-@dp.message(UploadLesson.waiting_content, F.content_type.in_({'text', 'photo', 'video', 'document'}))
+@dp.message(UploadLesson.waiting_content, F.content_type.in_({'text', 'photo', 'video', 'video_note', 'document'}))
 async def process_content(message: types.Message, state: FSMContext):
     """Обработка контента урока"""
     import re
@@ -4477,12 +4483,24 @@ async def process_content(message: types.Message, state: FSMContext):
     course_id = data['course_id']
     lesson_num = data['lesson_num']
 
-    # Логи для отладки загрузки урока 0
+    # Логи для отладки загрузки урока
     logger.info(f"process_content: ЗАГРУЗКА УРОКА lesson_num={lesson_num}, course_id={course_id}, content_type={message.content_type}")
     if message.text:
         logger.info(f"process_content: текст сообщения ({len(message.text)} симв.): {message.text[:200]}...")
+    elif message.caption:
+        logger.info(f"process_content: caption ({len(message.caption)} симв.): {message.caption[:200]}...")
     else:
-        logger.info(f"process_content: текст сообщения = NULL (caption={message.caption})")
+        logger.info(f"process_content: текст/caption = NULL")
+    
+    # Логи для file_id
+    if message.content_type == 'photo':
+        logger.info(f"process_content: photo file_id={message.photo[-1].file_id if message.photo else None}")
+    elif message.content_type == 'video':
+        logger.info(f"process_content: video file_id={message.video.file_id if message.video else None}")
+    elif message.content_type == 'video_note':
+        logger.info(f"process_content: video_note (кружок) file_id={message.video_note.file_id if message.video_note else None}")
+    elif message.content_type == 'document':
+        logger.info(f"process_content: document file_id={message.document.file_id if message.document else None}")
 
     content_type = message.content_type
     text = message.caption or message.text or ""
@@ -4522,6 +4540,8 @@ async def process_content(message: types.Message, state: FSMContext):
         file_id = message.photo[-1].file_id
     elif content_type == 'video':
         file_id = message.video.file_id
+    elif content_type == 'video_note':
+        file_id = message.video_note.file_id
     elif content_type == 'document':
         file_id = message.document.file_id
 
@@ -4732,7 +4752,7 @@ async def cmd_show_codes(message: types.Message):
     logger.info(f"cmd_show_codes START: user_id={message.from_user.id}")
     
     if message.from_user.id not in ADMIN_IDS_CONF:
-        await message.answer("❌ Только для администраторов.")
+        await message.answer("❌ Только для администраторо��.")
         return
     
     try:
@@ -6067,7 +6087,7 @@ async def process_manage_homework(message: types.Message, state: FSMContext):
     
     try:
         async with aiosqlite.connect(DB_FILE) as conn:
-            # Удаляем старую домашку если есть
+            # Уд��ляем старую домашку если есть
             await conn.execute('''
                 DELETE FROM group_messages 
                 WHERE course_id = ? AND lesson_num = ? AND is_homework = 1
@@ -7152,7 +7172,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
                 return
 
-            # Распаковываем данные активного курса
+            # Распаковываем данные активн��го курса
             course_id, lesson_num, version_id, course_name, version_name, status, hw_status = current_course
             course_numeric_id = await get_course_id_int(course_id) if course_id else None
             logger.info(
@@ -8277,7 +8297,7 @@ async def cb_buy_course_prompt(query: types.CallbackQuery, callback_data: BuyCou
     """ То есть, в конце cb_buy_course_prompt не должно быть await state.set_state(...).
     И обработчики для AwaitingPaymentConfirmation и AwaitingPaymentProof становятся ненужными в этом простом сценарии.
     Пользователь увидит:
-    "После оплаты с вами свяжутся... Полученный код нужно будет отправить в этот чат..."
+    "После оплаты с вами свяжутся... Пол��ченный код нужно будет отправить в этот чат..."
     И когда он отправит код, сработает handle_homework (в той его части, где if not user_course_data), который вызовет activate_course. """
 
     #await state.set_state(AwaitingPaymentConfirmation.waiting_for_activation_code_after_payment)
@@ -10489,7 +10509,7 @@ async def on_startup():
             await conn.commit()
             logger.info("Миграция: колонка homework_file_id добавлена в pending_admin_homework")
     except Exception:
-        pass  # Колонка уже существует — игнорируем
+        pass  # Колонка уже существует — иг��орируем
 
     logger.info("Запуск фоновых задач для пользователей (таймеры)...")
 
