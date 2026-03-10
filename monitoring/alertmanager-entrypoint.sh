@@ -7,19 +7,23 @@ global:
 
 route:
   group_by: ['alertname', 'severity']
-  group_wait: 10s
-  group_interval: 10s
-  repeat_interval: 1h
+  group_wait: 30s          # Ждём 30 сек перед первой отправкой
+  group_interval: 1h       # Между уведомлениями 1 час (было 10s)
+  repeat_interval: 2h      # Повтор алерта через 2 часа
   receiver: 'telegram'
   routes:
     - match:
         severity: critical
       receiver: 'telegram-critical'
       continue: true
+      group_wait: 30s
+      group_interval: 1h
+      repeat_interval: 2h
     - match:
         severity: warning
       receiver: 'telegram-warning'
-      repeat_interval: 3h
+      repeat_interval: 6h
+      group_interval: 2h
 
 receivers:
   - name: 'telegram'

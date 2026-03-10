@@ -27,6 +27,13 @@ services:
       retries: 3
       start_period: 40s
 
+    # Ротация логов
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"    # Максимум 10MB на файл
+        max-file: "3"      # Хранить 3 файла (итого 30MB)
+
   # Prometheus для сбора метрик
   prometheus:
     image: prom/prometheus:latest
@@ -49,6 +56,11 @@ services:
       - antbot-network
     depends_on:
       - bot
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Grafana для визуализации
   grafana:
@@ -70,8 +82,12 @@ services:
       - antbot-network
     depends_on:
       - prometheus
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # Alertmanager для отправки уведомлений
   # n8n для AI проверки домашних заданий
   n8n:
     image: n8nio/n8n:latest
@@ -101,6 +117,11 @@ services:
       - antbot-network
     depends_on:
       - bot
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   alertmanager:
     image: prom/alertmanager:latest
@@ -117,6 +138,11 @@ services:
     environment:
       - ALERT_BOT_TOKEN=${ALERT_BOT_TOKEN}
       - ADMIN_CHAT_ID=${ALERT_CHAT_ID}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
 volumes:
   prometheus-data:

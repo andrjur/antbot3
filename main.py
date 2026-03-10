@@ -4514,38 +4514,40 @@ async def process_content(message: types.Message, state: FSMContext):
         # Удаляем тег из текста перед сохранением
         text = re.sub(r"[*#]LEVEL\s*\d+", "", text, flags=re.IGNORECASE).strip()
 
-    # Парсим маркер домашнего задания (#hw или *hw) — СНАЧАЛА проверяем есть ли ДЗ
-    is_homework = re.search(r"[*#]hw\b", text, re.IGNORECASE) is not None
+    # ============================================
+    # УНИВЕРСАЛЬНЫЙ ПАРСИНГ ДЗ (порядок тегов не важен)
+    # ============================================
+    # 1. Сначала ищем все теги в любом порядке
+    is_homework = bool(re.search(r"[*#]hw\b", text, re.IGNORECASE))
+    
+    # 2. Ищем HW_TYPE (может быть ДО или ПОСЛЕ #hw)
+    hw_type_match = re.search(r"[*#]HW_TYPE\s*(\w+)", text, re.IGNORECASE)
+    hw_type = hw_type_match.group(1).lower() if hw_type_match else None
+    
+    # 3. Если не нашли HW_TYPE, ищем type_ (старый формат)
+    if not hw_type:
+        type_match = re.search(r"[*#]type_(\w+)", text, re.IGNORECASE)
+        hw_type = type_match.group(1).lower() if type_match else None
+    
+    # 4. Если ДЗ есть, но тип не указан — ставим 'text'
+    if is_homework and not hw_type:
+        hw_type = 'text'
+    
+    # 5. Если ДЗ нет — тип не важен
+    if not is_homework:
+        hw_type = None
 
-    # Парсим тип домашнего задания (*HW_TYPE или #HW_TYPE) — только если есть ДЗ
-    hw_type = None
-    if is_homework:
-        # Сначала ищем явный HW_TYPE
-        hw_type_match = re.search(r"[*#]HW_TYPE\s*(\w+)", text, re.IGNORECASE)
-        if hw_type_match:
-            hw_type = hw_type_match.group(1).lower()
-            logger.info(f"process_content: найден HW_TYPE={hw_type}")
-        
-        # Если не нашли HW_TYPE, ищем type_
-        if not hw_type:
-            type_match = re.search(r"[*#]type_(\w+)", text, re.IGNORECASE)
-            if type_match:
-                hw_type = type_match.group(1).lower()
-                logger.info(f"process_content: найден type_={hw_type}")
-        
-        # Если всё ещё нет, ставим по умолчанию
-        if not hw_type:
-            hw_type = 'text'
-            logger.info(f"process_content: HW_TYPE не найден, установлен по умолчанию: text")
-
-    # Логируем результат парсинга
+    # Логируем результат
     logger.info(f"process_content: is_homework={is_homework}, hw_type={hw_type}")
+    if hw_type:
+        logger.info(f"process_content: тип ДЗ определён как '{hw_type}'")
 
-    # Удаляем все теги ДЗ из текста после парсинга
-    if is_homework:
-        text = re.sub(r"[*#]hw\b", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"[*#]HW_TYPE\s*\w+", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"[*#]type_\w+", "", text, flags=re.IGNORECASE).strip()
+    # 6. Удаляем ВСЕ теги из текста (в любом порядке)
+    text = re.sub(r"[*#]hw\b", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"[*#]HW_TYPE\s*\w+", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"[*#]type_\w+", "", text, flags=re.IGNORECASE).strip()
+    
+    logger.info(f"process_content: текст после очистки ({len(text)} симв.): {text[:150]}...")
     
     if content_type == 'photo':
         file_id = message.photo[-1].file_id
@@ -9356,7 +9358,7 @@ async def admin_response_handler(message: types.Message, state: FSMContext):
             logger.info(f"Ответ от админа для {user_id=} успешно переслан.")
         else:
             logger.warning("Не найден user_id в FSM.")
-            await message.answer("Не могу определить, какому пользователю отправить это сообщение.  Убедитесь, что вы ответили на запрос поддержки, инициированный кнопкой.", parse_mode=None)
+            await message.answer("Не могу определить, какому пользователю о��править это сообщение.  Убедитесь, что вы ответили на запрос поддержки, инициированный кнопкой.", parse_mode=None)
 
     except Exception as e4386:
         logger.error(f"Ошибка при обработке ответа админа: {e4386}")
