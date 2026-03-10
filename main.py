@@ -1331,14 +1331,27 @@ async def check_pending_homework_timeout():
 
                         # Получаем текст задания
                         async with aiosqlite.connect(DB_FILE) as conn2:
+                            # Ищем ВСЕ текстовые части урока (не только is_homework=0)
                             cursor_lesson = await conn2.execute(
-                                """SELECT text FROM group_messages
-                                   WHERE course_id = ? AND lesson_num = ? AND is_homework = 0 AND content_type = 'text'
+                                """SELECT text, content_type, is_homework FROM group_messages
+                                   WHERE course_id = ? AND lesson_num = ? 
+                                   AND content_type = 'text'
+                                   AND text IS NOT NULL AND TRIM(text) != ''
                                    ORDER BY id ASC""",
                                 (course_id_str, lesson_num)
                             )
                             lesson_parts = await cursor_lesson.fetchall()
-                            lesson_description = "\n".join([r[0] for r in lesson_parts if r[0]])
+                            logger.info(f"📖 Найдено {len(lesson_parts)} текстовых частей для урока {lesson_num} курса {course_id_str}")
+                            
+                            # Собираем текст, исключая ДЗ (is_homework=1)
+                            lesson_description = "\n".join([r[0] for r in lesson_parts if r[0] and r[2] == 0])
+                            
+                            # Если не нашли без ДЗ — берём всё
+                            if not lesson_description.strip():
+                                lesson_description = "\n".join([r[0] for r in lesson_parts if r[0]])
+                                logger.warning(f"⚠️ Урок {lesson_num} не имеет текста без ДЗ, используем весь текст")
+                            
+                            logger.info(f"📖 lesson_description ({len(lesson_description)} симв.): {lesson_description[:200]}...")
 
                             cursor_hw_type = await conn2.execute(
                                 """SELECT hw_type FROM group_messages
@@ -8274,7 +8287,7 @@ async def cb_buy_course_prompt(query: types.CallbackQuery, callback_data: BuyCou
         course_info = await cursor_course_info.fetchone()
 
     if not course_info:
-        logger.error(f"Ошибка: не удалось найти информацию о курсе для покупки с ID {course_id_to_buy_str}")
+        logger.error(f"Ошибка: не удалось найти информаци�� о курсе для покупки с ID {course_id_to_buy_str}")
         await query.answer("Информация о курсе для покупки не найдена", show_alert=True)
         return
 
