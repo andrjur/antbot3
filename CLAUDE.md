@@ -1,5 +1,8 @@
 # CLAUDE.md — Документация проекта AntBot для ИИ-ассистентов
 
+**Версия:** 4.0 (март 2026)  
+**Статус:** Готов к релизу 🚀
+
 ## 📌 О проекте
 
 **AntBot** — Telegram-бот для управления онлайн-курсами с автоматической выдачей уроков, AI-проверкой ДЗ и мониторингом.
@@ -9,7 +12,7 @@
 - SQLite (aiosqlite)
 - Docker + Docker Compose
 - Prometheus + Grafana (мониторинг)
-- n8n (AI-проверка ДЗ)
+- n8n (AI-проверка ДЗ через OpenRouter/Gemini)
 
 ---
 
@@ -32,10 +35,12 @@ Dockerfile          # Сборка образа (COPY . . с учётом .docke
 .dockerignore       # Исключает файлы из сборки (защита данных)
 ```
 
-### 📜 Скрипты БД
+### 📜 Скрипты БД и workflow
 ```
-merge_spring31_to_spring3.sql   # Слияние курсов
-sync_db_with_settings.sql       # Синхронизация БД с settings.json
+merge_spring31_to_spring3.sql       # Слияние курсов
+sync_db_with_settings.sql           # Синхронизация БД с settings.json
+n8n_flow (5) итоговый.json          # Актуальный workflow для n8n (AI-проверка ДЗ)
+n8n-text-flow.json                  # Устаревший workflow (только текст)
 ```
 
 ---
